@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meeting Notes</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e5e5e5; }
+    .container { max-width: 800px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 24px; }
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #ccc; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .badge { font-size: 12px; padding: 2px 8px; border-radius: 12px; font-weight: 500; }
+    .badge-created { background: #1e3a5f; color: #7db4e6; }
+    .badge-recording { background: #3f1e1e; color: #e67d7d; animation: pulse 1.5s infinite; }
+    .badge-stopped { background: #1e3f1e; color: #7de67d; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .meta { font-size: 13px; color: #888; line-height: 1.6; }
+    .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; color: #888; margin-top: 8px; }
+    .meta-grid .label { color: #666; }
+    .meta-grid .value { color: #aaa; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    button { padding: 8px 16px; border-radius: 6px; border: 1px solid #333; background: #222; color: #e5e5e5; cursor: pointer; font-size: 13px; transition: background 0.15s; }
+    button:hover { background: #333; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #2563eb; border-color: #2563eb; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-danger { background: #dc2626; border-color: #dc2626; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-stop { background: #d97706; border-color: #d97706; }
+    .btn-stop:hover { background: #b45309; }
+    .new-session { margin-bottom: 24px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group.full { grid-column: 1 / -1; }
+    .form-group label { font-size: 12px; color: #888; }
+    input, select, textarea { padding: 8px 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #e5e5e5; font-size: 13px; font-family: inherit; }
+    textarea { resize: vertical; min-height: 60px; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #2563eb; }
+    .mp3-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; padding: 8px; background: #111; border-radius: 4px; }
+    .files { margin-top: 8px; }
+    .file-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .file-item span { font-size: 12px; color: #888; background: #111; padding: 2px 6px; border-radius: 4px; }
+    .audio-player { width: 100%; margin-top: 4px; }
+    .audio-player audio { width: 100%; height: 32px; }
+    .empty { text-align: center; padding: 48px; color: #555; }
+    .error { color: #e67d7d; font-size: 13px; margin-top: 8px; }
+    .devices { font-size: 13px; color: #888; margin-bottom: 16px; }
+    .collapsible { cursor: pointer; user-select: none; }
+    .collapsible::before { content: '\25B6'; display: inline-block; margin-right: 6px; font-size: 10px; transition: transform 0.15s; }
+    .collapsible.open::before { transform: rotate(90deg); }
+    .pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 16px; padding: 12px; }
+    .pagination button { padding: 6px 14px; }
+    .pagination .page-info { font-size: 13px; color: #888; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@19?dev",
+        "react-dom/client": "https://esm.sh/react-dom@19/client?dev",
+        "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime?dev"
+      }
+    }
+  </script>
+  <script type="module">
+    import { useState, useEffect, useCallback, useRef } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { jsx, jsxs, Fragment } from 'react/jsx-runtime';
+
+    const API = window.location.origin;
+    const PAGE_SIZE = 20;
+
+    async function api(path, opts = {}) {
+      const res = await fetch(`${API}${path}`, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts,
+      });
+      if (!res.ok && res.status !== 204) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    function AudioPlayer({ sessionId, filename }) {
+      const src = `${API}/sessions/${sessionId}/files/${encodeURIComponent(filename)}`;
+      const label = filename.includes('_mic.') ? 'Mic' :
+                    filename.includes('_system.') ? 'System' :
+                    filename.replace(/^.*_/, '').replace(/\.[^.]+$/, '');
+
+      return jsx('div', { className: 'audio-player', children: jsxs(Fragment, { children: [
+        jsx('div', { style: { fontSize: '12px', color: '#888', marginBottom: '2px' }, children: label }),
+        jsx('audio', {
+          controls: true,
+          preload: 'none',
+          src,
+          style: { width: '100%', height: '32px' },
+        }),
+      ]})});
+    }
+
+    function SessionCard({ session, onRefresh }) {
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+      const [showDetails, setShowDetails] = useState(false);
+
+      async function action(fn) {
+        setLoading(true);
+        setError(null);
+        try { await fn(); await onRefresh(); }
+        catch (e) { setError(e.message); }
+        finally { setLoading(false); }
+      }
+
+      const s = session;
+      const badgeClass = `badge badge-${s.state}`;
+      const hasAudioFiles = s.state === 'stopped' && s.files.length > 0;
+
+      return jsx('div', { className: 'card', children: jsxs(Fragment, { children: [
+        jsxs('div', { className: 'card-header', children: [
+          jsx('code', { children: s.id.slice(0, 8) }),
+          jsx('span', { className: badgeClass, children: s.state }),
+        ]}),
+        jsxs('div', { className: 'meta', children: [
+          `Created: ${new Date(s.created_at).toLocaleString()}`,
+          s.updated_at !== s.created_at ? ` \u00b7 Updated: ${new Date(s.updated_at).toLocaleString()}` : '',
+        ]}),
+        jsx('div', {
+          className: `meta collapsible ${showDetails ? 'open' : ''}`,
+          onClick: () => setShowDetails(!showDetails),
+          children: 'Settings',
+        }),
+        showDetails && jsx('div', { className: 'meta-grid', children: [
+          jsx('span', { className: 'label', children: 'Language' }),
+          jsx('span', { className: 'value', children: s.language }),
+          jsx('span', { className: 'label', children: 'Format' }),
+          jsx('span', { className: 'value', children: s.format }),
+          jsx('span', { className: 'label', children: 'Sample Rate' }),
+          jsx('span', { className: 'value', children: `${s.sample_rate} Hz` }),
+          s.format === 'mp3' && jsx(Fragment, { children: [
+            jsx('span', { className: 'label', children: 'MP3 Bitrate' }),
+            jsx('span', { className: 'value', children: `${s.mp3.bitrate_kbps} kbps` }),
+            jsx('span', { className: 'label', children: 'MP3 Sample Rate' }),
+            jsx('span', { className: 'value', children: `${s.mp3.sample_rate} Hz` }),
+          ]}),
+          s.mic_device && jsx(Fragment, { children: [
+            jsx('span', { className: 'label', children: 'Mic Device' }),
+            jsx('span', { className: 'value', children: s.mic_device }),
+          ]}),
+          s.summarization_instruction && jsx(Fragment, { children: [
+            jsx('span', { className: 'label', children: 'Summarization' }),
+            jsx('span', { className: 'value', children: s.summarization_instruction }),
+          ]}),
+        ]}),
+        s.files.length > 0 && !hasAudioFiles && jsx('div', { className: 'files', children:
+          s.files.map(f => jsx('span', { key: f, children: f }))
+        }),
+        hasAudioFiles && jsx('div', { className: 'files', style: { marginTop: '12px' }, children:
+          s.files.map(f => jsx(AudioPlayer, { key: f, sessionId: s.id, filename: f }))
+        }),
+        jsxs('div', { className: 'actions', children: [
+          s.state === 'created' && jsx('button', {
+            className: 'btn-primary', disabled: loading,
+            onClick: () => action(() => api(`/sessions/${s.id}/recording/start`, { method: 'POST' })),
+            children: 'Start Recording',
+          }),
+          s.state === 'recording' && jsx('button', {
+            className: 'btn-stop', disabled: loading,
+            onClick: () => action(() => api(`/sessions/${s.id}/recording/stop`, { method: 'POST' })),
+            children: 'Stop Recording',
+          }),
+          jsx('button', {
+            className: 'btn-danger', disabled: loading,
+            onClick: () => action(() => api(`/sessions/${s.id}`, { method: 'DELETE' })),
+            children: 'Delete',
+          }),
+        ]}),
+        error && jsx('div', { className: 'error', children: error }),
+      ]})});
+    }
+
+    function NewSessionForm({ devices, onCreated }) {
+      const [language, setLanguage] = useState('en');
+      const [format, setFormat] = useState('wav');
+      const [sampleRate, setSampleRate] = useState(48000);
+      const [mp3Bitrate, setMp3Bitrate] = useState(64);
+      const [mp3SampleRate, setMp3SampleRate] = useState(16000);
+      const [micDevice, setMicDevice] = useState('');
+      const [summarization, setSummarization] = useState('');
+      const [showAdvanced, setShowAdvanced] = useState(false);
+      const [error, setError] = useState(null);
+
+      async function create() {
+        setError(null);
+        const body = { language, format, sample_rate: sampleRate };
+        if (format === 'mp3') {
+          body.mp3 = { bitrate_kbps: mp3Bitrate, sample_rate: mp3SampleRate };
+        }
+        if (micDevice) body.mic_device = micDevice;
+        if (summarization.trim()) body.summarization_instruction = summarization.trim();
+        try {
+          await api('/sessions', { method: 'POST', body: JSON.stringify(body) });
+          await onCreated();
+        } catch (e) { setError(e.message); }
+      }
+
+      return jsx('div', { className: 'new-session card', children: jsxs(Fragment, { children: [
+        jsx('h2', { children: 'New Session' }),
+        jsxs('div', { className: 'form-grid', children: [
+          jsxs('div', { className: 'form-group', children: [
+            jsx('label', { children: 'Language' }),
+            jsx('input', { value: language, onChange: e => setLanguage(e.target.value), placeholder: 'en, zh, ja...' }),
+          ]}),
+          jsxs('div', { className: 'form-group', children: [
+            jsx('label', { children: 'Format' }),
+            jsxs('select', { value: format, onChange: e => setFormat(e.target.value), children: [
+              jsx('option', { value: 'wav', children: 'WAV' }),
+              jsx('option', { value: 'mp3', children: 'MP3' }),
+            ]}),
+          ]}),
+          format === 'mp3' && jsxs(Fragment, { children: [
+            jsxs('div', { className: 'form-group', children: [
+              jsx('label', { children: 'MP3 Bitrate (kbps)' }),
+              jsxs('select', { value: mp3Bitrate, onChange: e => setMp3Bitrate(Number(e.target.value)), children: [
+                jsx('option', { value: 32, children: '32' }),
+                jsx('option', { value: 48, children: '48' }),
+                jsx('option', { value: 64, children: '64' }),
+                jsx('option', { value: 96, children: '96' }),
+                jsx('option', { value: 128, children: '128' }),
+                jsx('option', { value: 192, children: '192' }),
+                jsx('option', { value: 256, children: '256' }),
+                jsx('option', { value: 320, children: '320' }),
+              ]}),
+            ]}),
+            jsxs('div', { className: 'form-group', children: [
+              jsx('label', { children: 'MP3 Sample Rate (Hz)' }),
+              jsxs('select', { value: mp3SampleRate, onChange: e => setMp3SampleRate(Number(e.target.value)), children: [
+                jsx('option', { value: 8000, children: '8000' }),
+                jsx('option', { value: 16000, children: '16000' }),
+                jsx('option', { value: 22050, children: '22050' }),
+                jsx('option', { value: 44100, children: '44100' }),
+                jsx('option', { value: 48000, children: '48000' }),
+              ]}),
+            ]}),
+          ]}),
+        ]}),
+        jsx('div', {
+          className: `meta collapsible ${showAdvanced ? 'open' : ''}`,
+          onClick: () => setShowAdvanced(!showAdvanced),
+          style: { marginBottom: showAdvanced ? '8px' : '12px' },
+          children: 'Advanced',
+        }),
+        showAdvanced && jsxs('div', { className: 'form-grid', style: { marginBottom: '12px' }, children: [
+          jsxs('div', { className: 'form-group', children: [
+            jsx('label', { children: 'Sample Rate (Hz)' }),
+            jsxs('select', { value: sampleRate, onChange: e => setSampleRate(Number(e.target.value)), children: [
+              jsx('option', { value: 16000, children: '16000' }),
+              jsx('option', { value: 22050, children: '22050' }),
+              jsx('option', { value: 44100, children: '44100' }),
+              jsx('option', { value: 48000, children: '48000' }),
+            ]}),
+          ]}),
+          jsxs('div', { className: 'form-group', children: [
+            jsx('label', { children: 'Mic Device' }),
+            jsxs('select', { value: micDevice, onChange: e => setMicDevice(e.target.value), children: [
+              jsx('option', { value: '', children: 'Default' }),
+              ...devices.map(d => jsx('option', { key: d, value: d, children: d })),
+            ]}),
+          ]}),
+          jsxs('div', { className: 'form-group full', children: [
+            jsx('label', { children: 'Summarization Instruction' }),
+            jsx('textarea', { value: summarization, onChange: e => setSummarization(e.target.value), placeholder: 'Custom prompt for LLM summarization and todo extraction...' }),
+          ]}),
+        ]}),
+        jsx('button', { className: 'btn-primary', onClick: create, children: 'Create Session' }),
+        error && jsx('div', { className: 'error', children: error }),
+      ]})});
+    }
+
+    function Pagination({ total, limit, offset, onChange }) {
+      if (total <= limit) return null;
+
+      const currentPage = Math.floor(offset / limit) + 1;
+      const totalPages = Math.ceil(total / limit);
+
+      return jsxs('div', { className: 'pagination', children: [
+        jsx('button', {
+          disabled: offset === 0,
+          onClick: () => onChange(Math.max(0, offset - limit)),
+          children: 'Previous',
+        }),
+        jsx('span', { className: 'page-info', children: `Page ${currentPage} of ${totalPages} (${total} sessions)` }),
+        jsx('button', {
+          disabled: offset + limit >= total,
+          onClick: () => onChange(offset + limit),
+          children: 'Next',
+        }),
+      ]});
+    }
+
+    function App() {
+      const [sessions, setSessions] = useState([]);
+      const [total, setTotal] = useState(0);
+      const [offset, setOffset] = useState(0);
+      const [devices, setDevices] = useState([]);
+      const [error, setError] = useState(null);
+
+      const refresh = useCallback(async (currentOffset) => {
+        try {
+          const data = await api(`/sessions?limit=${PAGE_SIZE}&offset=${currentOffset ?? offset}`);
+          setSessions(data.sessions);
+          setTotal(data.total);
+        } catch (e) { setError(e.message); }
+      }, [offset]);
+
+      useEffect(() => {
+        refresh();
+        api('/devices').then(d => setDevices(d.devices || [])).catch(() => {});
+        const interval = setInterval(() => refresh(), 2000);
+        return () => clearInterval(interval);
+      }, [refresh]);
+
+      function handlePageChange(newOffset) {
+        setOffset(newOffset);
+        refresh(newOffset);
+      }
+
+      async function handleCreated() {
+        setOffset(0);
+        await refresh(0);
+      }
+
+      return jsx('div', { className: 'container', children: jsxs(Fragment, { children: [
+        jsx('h1', { children: 'Meeting Notes' }),
+        jsx(NewSessionForm, { devices, onCreated: handleCreated }),
+        error && jsx('div', { className: 'error', children: error }),
+        sessions.length === 0
+          ? jsx('div', { className: 'empty', children: 'No sessions yet. Create one to start recording.' })
+          : sessions.map(s => jsx(SessionCard, { key: s.id, session: s, onRefresh: refresh })),
+        jsx(Pagination, { total, limit: PAGE_SIZE, offset, onChange: handlePageChange }),
+      ]})});
+    }
+
+    createRoot(document.getElementById('root')).render(jsx(App, {}));
+  </script>
+</body>
+</html>
