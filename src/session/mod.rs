@@ -9,7 +9,7 @@ use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::Serialize;
 use tokio::sync::{RwLock, broadcast};
-use uuid::Uuid;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::{info, warn};
 
@@ -166,7 +166,11 @@ impl SessionManager {
     }
 
     pub async fn create_session(&self, mut config: SessionConfig) -> SessionInfo {
-        let id = Uuid::new_v4().to_string();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let id = format_base36(nanos);
         let session_dir = self.session_dir(&id);
         config.output_dir = session_dir;
         let session = Session::new(id.clone(), config);
@@ -378,4 +382,15 @@ fn resolve_source(
     } else {
         Err(format!("unknown source: {}", source_id))
     }
+}
+
+fn format_base36(mut n: u64) -> String {
+    const CHARS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut buf = Vec::with_capacity(12);
+    while n > 0 {
+        buf.push(CHARS[(n % 36) as usize]);
+        n /= 36;
+    }
+    buf.reverse();
+    String::from_utf8(buf).unwrap()
 }
