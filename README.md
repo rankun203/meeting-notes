@@ -1,6 +1,6 @@
 # meeting-notes
 
-**meeting-notes** is a local-first meeting recorder daemon. It captures microphone and system audio as separate tracks, manages recording sessions via a REST API, and serves a built-in web UI as one of its clients.
+**meeting-notes** is a local-first meeting recorder and transcription tool. It captures microphone and system audio as separate tracks, transcribes and summarizes meetings, and exposes everything via a REST API with a built-in web UI.
 
 ![demo](demo.png)
 
