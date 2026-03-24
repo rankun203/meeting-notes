@@ -35,44 +35,42 @@ Open `http://127.0.0.1:33487` in your browser.
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        meeting-notes daemon                      │
-│                                                                  │
-│  ┌───────────────────────┐    ┌───────────────────────────────┐  │
-│  │   Audio Capture       │    │   REST API + WebSocket        │  │
-│  │                       │    │                               │  │
-│  │  macOS:               │    │  POST /sessions               │  │
-│  │   Mic ── cpal         │    │  POST /sessions/:id/start     │  │
-│  │   System ── ProcessTap│    │  POST /sessions/:id/stop      │  │
-│  │                       │    │  GET  /sessions/:id/files/:f  │  │
-│  │  Linux: (TBD)         │    │  WS   /ws (live updates)      │  │
-│  │   Mic ── cpal         │    │                               │  │
-│  │   System ── PipeWire  │    └──────────┬────────────────────┘  │
-│  │                       │               │                       │
-│  │  Windows: (TBD)       │               │                       │
-│  │   Mic ── cpal         │    ┌──────────▼────────────────────┐  │
-│  │   System ── WASAPI    │    │   Clients                     │  │
-│  │                       │    │                               │  │
-│  └──────────┬────────────┘    │   Web UI (built-in)           │  │
-│             │                 │   Logseq Plugin (planned)     │  │
-│             ▼                 │   Obsidian Plugin (planned)   │  │
-│  ┌───────────────────────┐    │   CLI / custom clients        │  │
-│  │  Writers              │    └───────────────────────────────┘  │
-│  │  WAV (hound)          │                                       │
-│  │  MP3 (LAME)           │                                       │
-│  └──────────┬────────────┘                                       │
-│             │                                                    │
-│             ▼                                                    │
-│  ┌───────────────────────┐    ┌───────────────────────────────┐  │
-│  │  Session Storage      │    │   Transcription (planned)     │  │
-│  │                       │    │                               │  │
-│  │  recordings/          │───▶│   Cloud or local deployment   │  │
-│  │    {id}/              │    │   Speech-to-text API          │  │
-│  │      metadata.json    │    │          │                    │  │
-│  │      mic.mp3          │    │          ▼                    │  │
-│  │      system.mp3       │    │   Meeting summary + TODOs     │  │
-│  └───────────────────────┘    └───────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                meeting-notes daemon               │
+│                                                   │
+│  ┌────────────────────┐  ┌─────────────────────┐  │
+│  │  Audio Capture     │  │  REST API +         │  │  ┌─────────────────────┐
+│  │                    │  │  WebSocket          │──┼─▶│  Web UI (built-in)  │
+│  │  macOS:            │  │                     │  │  └─────────────────────┘
+│  │   Mic ── cpal      │  │  POST /sessions     │  │  ┌─────────────────────┐
+│  │   Sys ── ProcessTap│  │  POST ../start      │──┼─▶│  Logseq (planned)   │
+│  │                    │  │  POST ../stop       │  │  └─────────────────────┘
+│  │  Linux: (TBD)      │  │  GET  ../files/:f   │  │  ┌─────────────────────┐
+│  │   Mic ── cpal      │  │  WS   /ws           │──┼─▶│  Obsidian (planned) │
+│  │   Sys ── PipeWire  │  │                     │  │  └─────────────────────┘
+│  │                    │  └─────────────────────┘  │  ┌─────────────────────┐
+│  │  Windows: (TBD)    │                           │  │  CLI / custom       │
+│  │   Mic ── cpal      │                           │  └─────────────────────┘
+│  │   Sys ── WASAPI    │                           │
+│  └──────────┬─────────┘                           │
+│             │                                     │
+│             ▼                                     │
+│  ┌────────────────────┐  ┌─────────────────────┐  │
+│  │  Writers           │  │  Transcription      │  │
+│  │  WAV (hound)       │  │  (planned)          │  │
+│  │  MP3 (LAME)        │  │                     │  │
+│  └──────────┬─────────┘  │  Speech-to-text     │  │
+│             │            │  Summary + TODOs    │  │
+│             ▼            └─────────────────────┘  │
+│  ┌────────────────────┐           ▲               │
+│  │  Session Storage   │           │               │
+│  │  recordings/       │───────────┘               │
+│  │    {id}/           │                           │
+│  │      metadata.json │                           │
+│  │      mic.mp3       │                           │
+│  │      system.mp3    │                           │
+│  └────────────────────┘                           │
+└───────────────────────────────────────────────────┘
 ```
 
 ## API
