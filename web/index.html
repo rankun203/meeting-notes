@@ -345,7 +345,7 @@
             value: vals[key],
             onChange: e => setVal(key, typeof f.default === 'number' ? Number(e.target.value) : e.target.value),
             className: INPUT_CLS, title: f.description,
-            children: (f.options || []).map(o => jsx('option', { key: o.value, value: o.value, children: o.label })),
+            children: (f.options || []).map(o => jsx('option', { key: o.value, value: o.value, title: o.title || '', children: o.label })),
           });
         } else if (f.type === 'textarea') {
           input = jsx('textarea', {
@@ -634,7 +634,7 @@
       }
 
       const s = session;
-      const audioFiles = s.files.filter(f => f.endsWith('.wav') || f.endsWith('.mp3'));
+      const audioFiles = s.files.filter(f => f.endsWith('.wav') || f.endsWith('.mp3') || f.endsWith('.opus'));
       const hasAudio = s.state === 'stopped' && audioFiles.length > 0;
 
       return jsx('div', {
@@ -723,7 +723,9 @@
                       jsx('p', { className: 'text-sm font-medium', children:
                         s.mp3
                           ? `MP3 / ${s.mp3.bitrate_kbps} kbps CBR @ ${s.mp3.sample_rate >= 1000 ? (s.mp3.sample_rate / 1000) + ' kHz' : s.mp3.sample_rate + ' Hz'}`
-                          : `WAV / ${s.raw_sample_rate >= 1000 ? (s.raw_sample_rate / 1000) + ' kHz' : s.raw_sample_rate + ' Hz'}`
+                          : s.opus
+                            ? `Opus / ${s.opus.bitrate_kbps} kbps VBR / complexity ${s.opus.complexity}`
+                            : `WAV / ${s.raw_sample_rate >= 1000 ? (s.raw_sample_rate / 1000) + ' kHz' : s.raw_sample_rate + ' Hz'}`
                       }),
                     ]}),
                     jsxs('div', { children: [

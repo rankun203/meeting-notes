@@ -9,9 +9,9 @@
 - **REST API** — full resource-based API for session and recording management
 - **Recordings management** — create, name, start/stop, delete sessions with persistent metadata
 - **Multi-source recording** — capture microphone and system audio as separate tracks
-- **Multi-format** — WAV (lossless) and MP3 (CBR) output
+- **Multi-format** — WAV (lossless), MP3 (CBR), and Opus (VBR) output
 - **Web UI** — built-in single-page client with real-time updates via WebSocket
-- **Low resource usage** — built with Rust; ~3% single-core for WAV, ~25% for MP3 recording
+- **Low resource usage** — built with Rust; ~2% CPU for WAV, ~4% for Opus, ~6% for MP3
 
 ## Installation
 

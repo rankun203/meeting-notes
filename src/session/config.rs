@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::audio::writer::{AudioFormat, Mp3Config};
+use crate::audio::writer::{AudioFormat, Mp3Config, OpusConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
@@ -19,6 +19,9 @@ pub struct SessionConfig {
 
     #[serde(default)]
     pub mp3: Mp3Config,
+
+    #[serde(default)]
+    pub opus: OpusConfig,
 
     /// Selected source IDs. If None or empty, defaults to default mic + system_mix.
     #[serde(default)]
@@ -40,6 +43,7 @@ impl Default for SessionConfig {
             raw_sample_rate: default_sample_rate(),
             format: AudioFormat::default(),
             mp3: Mp3Config::default(),
+            opus: OpusConfig::default(),
             sources: None,
             output_dir: PathBuf::from("./recordings"),
         }

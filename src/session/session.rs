@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::recorder::Recorder;
 use crate::audio::source::SourceType;
-use crate::audio::writer::{AudioFormat, Mp3Config};
+use crate::audio::writer::{AudioFormat, Mp3Config, OpusConfig};
 
 use super::config::SessionConfig;
 
@@ -46,6 +46,8 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mp3: Option<Mp3Config>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub opus: Option<OpusConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<String>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -69,6 +71,8 @@ pub struct SessionMetadata {
     pub raw_sample_rate: u32,
     #[serde(default)]
     pub mp3: Mp3Config,
+    #[serde(default)]
+    pub opus: OpusConfig,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
@@ -131,6 +135,7 @@ impl Session {
             raw_sample_rate: meta.raw_sample_rate,
             format: meta.format,
             mp3: meta.mp3,
+            opus: meta.opus,
             sources: None,
             output_dir: recordings_dir.join(&meta.session_id),
         };
@@ -162,6 +167,7 @@ impl Session {
             format: self.config.format,
             raw_sample_rate: self.config.raw_sample_rate,
             mp3: self.config.mp3,
+            opus: self.config.opus,
             created_at: self.created_at,
             updated_at: self.updated_at,
             started_at: self.started_at,
@@ -208,6 +214,7 @@ impl Session {
             raw_sample_rate: self.config.raw_sample_rate,
             format: self.config.format,
             mp3: if self.config.format == AudioFormat::Mp3 { Some(self.config.mp3) } else { None },
+            opus: if self.config.format == AudioFormat::Opus { Some(self.config.opus) } else { None },
             sources: self.config.sources.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -219,7 +226,8 @@ impl Session {
 
     /// Compute duration from audio files (max across all tracks).
     /// WAV: reads 44-byte header only (fast). MP3: estimates from file size and bitrate.
-    fn compute_duration(dir: &std::path::Path, files: &[String], bitrate_kbps: u32) -> Option<f64> {
+    /// Opus: reads last Ogg page granule position for exact duration.
+    fn compute_duration(dir: &std::path::Path, files: &[String], mp3_bitrate_kbps: u32) -> Option<f64> {
         let mut max_dur: Option<f64> = None;
         for f in files {
             let path = dir.join(f);
@@ -236,8 +244,12 @@ impl Session {
                 // CBR MP3: duration ≈ file_size_bytes * 8 / bitrate_bps.
                 // Only accurate for CBR (which we use via set_brate). If VBR is ever
                 // added, this must be replaced with MP3 frame parsing or a Xing header read.
-                let bps = if bitrate_kbps > 0 { bitrate_kbps as u64 * 1000 } else { 64000 };
+                let bps = if mp3_bitrate_kbps > 0 { mp3_bitrate_kbps as u64 * 1000 } else { 64000 };
                 std::fs::metadata(&path).ok().map(|m| (m.len() * 8) as f64 / bps as f64)
+            } else if f.ends_with(".opus") {
+                // Read exact duration from the last Ogg page's granule position.
+                // Ogg Opus granule = sample count at 48kHz, so duration = granule / 48000.
+                ogg_opus_duration(&path)
             } else {
                 None
             };
@@ -247,4 +259,57 @@ impl Session {
         }
         max_dur
     }
+}
+
+/// Read the exact duration of an Ogg Opus file by finding the last Ogg page's
+/// granule position. Ogg Opus granule = cumulative sample count at 48kHz.
+/// Reads only the tail of the file (up to 65536 bytes) and scans backward for "OggS".
+fn ogg_opus_duration(path: &std::path::Path) -> Option<f64> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    if file_len < 27 {
+        return None; // too small to contain an Ogg page
+    }
+
+    // Read the last 65KB (or entire file if smaller)
+    let tail_size = file_len.min(65536) as usize;
+    file.seek(SeekFrom::End(-(tail_size as i64))).ok()?;
+    let mut buf = vec![0u8; tail_size];
+    file.read_exact(&mut buf).ok()?;
+
+    // Scan backward for the last "OggS" magic
+    let mut granule_pos: Option<u64> = None;
+    for i in (0..buf.len().saturating_sub(26)).rev() {
+        if &buf[i..i + 4] == b"OggS" {
+            // Granule position is at offset 6 from page start, 8 bytes LE
+            let gp = u64::from_le_bytes(buf[i + 6..i + 14].try_into().ok()?);
+            granule_pos = Some(gp);
+            break;
+        }
+    }
+
+    // Also read the pre-skip from the OpusHead header (first 19 bytes of stream).
+    // Pre-skip is at byte offset 10 of OpusHead, 2 bytes LE.
+    let pre_skip = if file_len > 100 {
+        file.seek(SeekFrom::Start(0)).ok()?;
+        let mut head = [0u8; 100];
+        file.read_exact(&mut head).ok()?;
+        // Find "OpusHead" in the first page
+        head.windows(8)
+            .position(|w| w == b"OpusHead")
+            .and_then(|pos| {
+                if pos + 12 <= head.len() {
+                    Some(u16::from_le_bytes([head[pos + 10], head[pos + 11]]) as u64)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    granule_pos.map(|gp| (gp.saturating_sub(pre_skip)) as f64 / 48000.0)
 }

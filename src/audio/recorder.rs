@@ -4,7 +4,7 @@ use crossbeam_channel::{self, Sender};
 use tracing::info;
 
 use super::source::{AudioChunk, AudioError, AudioSource, SourceDescriptor, sanitize_label};
-use super::writer::{AudioFormat, AudioWriterHandle, Mp3Config};
+use super::writer::{AudioFormat, AudioWriterHandle, Mp3Config, OpusConfig};
 
 struct ActiveSource {
     descriptor: SourceDescriptor,
@@ -20,6 +20,7 @@ pub struct Recorder {
     sample_rate: u32,
     format: AudioFormat,
     mp3_config: Mp3Config,
+    opus_config: OpusConfig,
     sources: Vec<ActiveSource>,
 }
 
@@ -30,6 +31,7 @@ impl Recorder {
         sample_rate: u32,
         format: AudioFormat,
         mp3_config: Mp3Config,
+        opus_config: OpusConfig,
         sources: Vec<(SourceDescriptor, Box<dyn AudioSource>)>,
     ) -> Self {
         let sources = sources
@@ -48,6 +50,7 @@ impl Recorder {
             sample_rate,
             format,
             mp3_config,
+            opus_config,
             sources,
         }
     }
@@ -74,6 +77,7 @@ impl Recorder {
                 path.clone(),
                 self.sample_rate,
                 self.mp3_config,
+                self.opus_config,
                 receiver,
             )?;
             active.source.as_mut().unwrap().start(sender.clone())?;

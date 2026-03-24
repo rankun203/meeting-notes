@@ -270,6 +270,7 @@ impl SessionManager {
             session.config.raw_sample_rate,
             session.config.format,
             session.config.mp3,
+            session.config.opus,
             sources,
         );
 
