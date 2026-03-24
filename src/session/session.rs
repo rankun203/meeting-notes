@@ -19,6 +19,7 @@ pub enum SessionState {
 
 pub struct Session {
     pub id: String,
+    pub name: Option<String>,
     pub config: SessionConfig,
     pub state: SessionState,
     pub created_at: DateTime<Utc>,
@@ -34,11 +35,13 @@ pub struct Session {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionInfo {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub state: SessionState,
     pub language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summarization_instruction: Option<String>,
-    pub sample_rate: u32,
+    pub raw_sample_rate: u32,
     pub format: AudioFormat,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mp3: Option<Mp3Config>,
@@ -56,12 +59,14 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
     pub session_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default = "default_stopped_state")]
     pub state: SessionState,
     pub language: String,
     pub format: AudioFormat,
-    #[serde(default = "default_sample_rate")]
-    pub sample_rate: u32,
+    #[serde(default = "default_sample_rate", alias = "sample_rate")]
+    pub raw_sample_rate: u32,
     #[serde(default)]
     pub mp3: Mp3Config,
     pub created_at: DateTime<Utc>,
@@ -88,7 +93,8 @@ pub struct SourceMetadata {
     pub source_type: SourceType,
     pub source_label: String,
     pub channels: u16,
-    pub sample_rate: u32,
+    #[serde(alias = "sample_rate")]
+    pub raw_sample_rate: u32,
 }
 
 impl Session {
@@ -96,6 +102,7 @@ impl Session {
         let now = Utc::now();
         Self {
             id,
+            name: None,
             config,
             state: SessionState::Created,
             created_at: now,
@@ -121,7 +128,7 @@ impl Session {
         let config = SessionConfig {
             language: meta.language.clone(),
             summarization_instruction: None,
-            sample_rate: meta.sample_rate,
+            raw_sample_rate: meta.raw_sample_rate,
             format: meta.format,
             mp3: meta.mp3,
             sources: None,
@@ -129,6 +136,7 @@ impl Session {
         };
         Self {
             id: meta.session_id.clone(),
+            name: meta.name.clone(),
             config,
             state,
             created_at: meta.created_at,
@@ -145,16 +153,14 @@ impl Session {
     }
 
     pub fn to_metadata(&self) -> SessionMetadata {
-        let duration_secs = self.started_at.map(|start| {
-            let end = self.updated_at;
-            (end - start).num_milliseconds() as f64 / 1000.0
-        });
+        let duration_secs = Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps);
         SessionMetadata {
             session_id: self.id.clone(),
+            name: self.name.clone(),
             state: self.state,
             language: self.config.language.clone(),
             format: self.config.format,
-            sample_rate: self.config.sample_rate,
+            raw_sample_rate: self.config.raw_sample_rate,
             mp3: self.config.mp3,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -177,7 +183,7 @@ impl Session {
                     source_type: desc.source_type,
                     source_label: desc.label.clone(),
                     channels: 0,
-                    sample_rate: self.config.sample_rate,
+                    raw_sample_rate: self.config.raw_sample_rate,
                 })
                 .collect();
         }
@@ -192,16 +198,14 @@ impl Session {
                 std::fs::metadata(&path).ok().map(|m| (f.clone(), m.len()))
             })
             .collect();
-        let duration_secs = self.started_at.map(|start| {
-            let end = self.updated_at;
-            (end - start).num_milliseconds() as f64 / 1000.0
-        });
+        let duration_secs = Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps);
         SessionInfo {
             id: self.id.clone(),
+            name: self.name.clone(),
             state: self.state,
             language: self.config.language.clone(),
             summarization_instruction: self.config.summarization_instruction.clone(),
-            sample_rate: self.config.sample_rate,
+            raw_sample_rate: self.config.raw_sample_rate,
             format: self.config.format,
             mp3: if self.config.format == AudioFormat::Mp3 { Some(self.config.mp3) } else { None },
             sources: self.config.sources.clone(),
@@ -211,5 +215,36 @@ impl Session {
             files: self.files.clone(),
             file_sizes,
         }
+    }
+
+    /// Compute duration from audio files (max across all tracks).
+    /// WAV: reads 44-byte header only (fast). MP3: estimates from file size and bitrate.
+    fn compute_duration(dir: &std::path::Path, files: &[String], bitrate_kbps: u32) -> Option<f64> {
+        let mut max_dur: Option<f64> = None;
+        for f in files {
+            let path = dir.join(f);
+            let secs = if f.ends_with(".wav") {
+                hound::WavReader::open(&path).ok().and_then(|r| {
+                    let spec = r.spec();
+                    if spec.sample_rate > 0 {
+                        Some(r.duration() as f64 / spec.sample_rate as f64)
+                    } else {
+                        None
+                    }
+                })
+            } else if f.ends_with(".mp3") {
+                // CBR MP3: duration ≈ file_size_bytes * 8 / bitrate_bps.
+                // Only accurate for CBR (which we use via set_brate). If VBR is ever
+                // added, this must be replaced with MP3 frame parsing or a Xing header read.
+                let bps = if bitrate_kbps > 0 { bitrate_kbps as u64 * 1000 } else { 64000 };
+                std::fs::metadata(&path).ok().map(|m| (m.len() * 8) as f64 / bps as f64)
+            } else {
+                None
+            };
+            if let Some(s) = secs {
+                max_dur = Some(max_dur.map_or(s, |d: f64| d.max(s)));
+            }
+        }
+        max_dur
     }
 }

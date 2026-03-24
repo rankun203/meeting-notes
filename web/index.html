@@ -239,10 +239,15 @@
         children: jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
           jsxs('div', { className: 'min-w-0 flex-1', children: [
             jsxs('div', { className: 'flex items-center gap-2', children: [
-              jsx('code', {
-                className: `text-xs font-mono ${selected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'}`,
-                children: s.id,
-              }),
+              s.name
+                ? jsx('span', {
+                    className: `text-xs font-medium truncate ${selected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'}`,
+                    children: s.name,
+                  })
+                : jsx('code', {
+                    className: `text-xs font-mono ${selected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'}`,
+                    children: s.id,
+                  }),
               jsx(StateBadge, { state: s.state, small: true }),
             ]}),
             jsx('p', {
@@ -589,6 +594,9 @@
     function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile }) {
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
+      const [renaming, setRenaming] = useState(false);
+      const [renameValue, setRenameValue] = useState('');
+      const renameRef = useRef(null);
 
       if (!session) {
         return jsx('div', {
@@ -606,6 +614,23 @@
         try { await fn(); await onRefresh(); }
         catch (e) { setError(e.message); }
         finally { setLoading(false); }
+      }
+
+      function startRename() {
+        setRenameValue(session.name || '');
+        setRenaming(true);
+        setTimeout(() => renameRef.current?.focus(), 0);
+      }
+
+      async function submitRename() {
+        setRenaming(false);
+        const trimmed = renameValue.trim();
+        if (trimmed === (session.name || '')) return;
+        await api(`/sessions/${session.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: trimmed }),
+        });
       }
 
       const s = session;
@@ -628,7 +653,22 @@
                     children: jsx(BackIcon, {}),
                   }),
                   jsx('h2', { className: 'text-base md:text-lg font-semibold tracking-tight flex-shrink-0', children: 'Session' }),
-                  jsx('code', { className: 'text-xs md:text-sm font-mono text-gray-500 dark:text-gray-400 truncate', children: s.id }),
+                  renaming
+                    ? jsx('input', {
+                        ref: renameRef,
+                        value: renameValue,
+                        onChange: e => setRenameValue(e.target.value),
+                        onBlur: submitRename,
+                        onKeyDown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setRenaming(false); } },
+                        className: 'text-xs md:text-sm font-mono px-1.5 py-0.5 border border-blue-400 rounded outline-none bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 min-w-0',
+                        placeholder: 'Session name...',
+                      })
+                    : jsx('span', {
+                        onDoubleClick: startRename,
+                        className: 'text-xs md:text-sm font-mono text-gray-500 dark:text-gray-400 truncate cursor-default select-none',
+                        title: 'Double-click to rename',
+                        children: s.name ? `${s.name} (${s.id})` : s.id,
+                      }),
                   jsx(StateBadge, { state: s.state }),
                 ]}),
                 // Action buttons
@@ -680,11 +720,11 @@
                     ]}),
                     jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Format' }),
-                      jsx('p', { className: 'text-sm font-medium', children: `${s.format.toUpperCase()} / ${s.sample_rate} Hz` }),
-                    ]}),
-                    s.mp3 && jsxs('div', { children: [
-                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'MP3' }),
-                      jsx('p', { className: 'text-sm font-medium', children: `${s.mp3.bitrate_kbps} kbps @ ${s.mp3.sample_rate} Hz` }),
+                      jsx('p', { className: 'text-sm font-medium', children:
+                        s.mp3
+                          ? `MP3 / ${s.mp3.bitrate_kbps} kbps CBR @ ${s.mp3.sample_rate >= 1000 ? (s.mp3.sample_rate / 1000) + ' kHz' : s.mp3.sample_rate + ' Hz'}`
+                          : `WAV / ${s.raw_sample_rate >= 1000 ? (s.raw_sample_rate / 1000) + ' kHz' : s.raw_sample_rate + ' Hz'}`
+                      }),
                     ]}),
                     jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Created' }),

@@ -130,19 +130,12 @@ impl SessionManager {
                 }
             };
 
-            // Collect filenames from the folder (excluding metadata.json)
+            // Collect all filenames from the folder
             let files: Vec<String> = std::fs::read_dir(&path)
                 .into_iter()
                 .flatten()
                 .flatten()
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    if name == "metadata.json" {
-                        None
-                    } else {
-                        Some(name)
-                    }
-                })
+                .map(|e| e.file_name().to_string_lossy().to_string())
                 .collect();
 
             let session = Session::from_metadata(&metadata, &self.output_dir, files);
@@ -196,6 +189,19 @@ impl SessionManager {
         (page, total)
     }
 
+    pub async fn rename_session(&self, id: &str, name: String) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        session.name = if name.trim().is_empty() { None } else { Some(name.trim().to_string()) };
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata on rename: {}", e);
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionUpdated(info.clone()));
+        Ok(info)
+    }
+
     pub async fn delete_session(&self, id: &str) -> Result<(), String> {
         // Extract recorder under lock, then stop outside lock
         let mut recorder_to_stop = None;
@@ -243,7 +249,7 @@ impl SessionManager {
         let mut sources: Vec<(SourceDescriptor, Box<dyn AudioSource>)> = Vec::new();
 
         for source_id in &source_ids {
-            match resolve_source(source_id, session.config.sample_rate) {
+            match resolve_source(source_id, session.config.raw_sample_rate) {
                 Ok(pair) => {
                     info!("Source '{}' created for session {}", source_id, session.id);
                     sources.push(pair);
@@ -261,7 +267,7 @@ impl SessionManager {
         let mut recorder = Recorder::new(
             session.id.clone(),
             session.config.output_dir.clone(),
-            session.config.sample_rate,
+            session.config.raw_sample_rate,
             session.config.format,
             session.config.mp3,
             sources,

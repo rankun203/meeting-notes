@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -17,14 +17,13 @@ pub fn session_routes() -> Router<SessionManager> {
         .route("/sessions", post(create_session))
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}", get(get_session))
+        .route("/sessions/{id}", patch(rename_session))
         .route("/sessions/{id}", delete(delete_session))
         .route("/sessions/{id}/recording/start", post(start_recording))
         .route("/sessions/{id}/recording/stop", post(stop_recording))
         .route("/sessions/{id}/files", get(get_files))
         .route("/sessions/{id}/files/{filename}", get(serve_file))
         .route("/config", get(get_config))
-        .route("/sources", get(list_sources))
-        .route("/devices", get(list_devices))
 }
 
 async fn create_session(
@@ -65,6 +64,22 @@ async fn get_session(
         .await
         .map(Json)
         .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))
+}
+
+async fn rename_session(
+    State(manager): State<SessionManager>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
+    let name = body.get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    manager
+        .rename_session(&id, name)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
 }
 
 async fn delete_session(
@@ -147,14 +162,26 @@ async fn get_config() -> Json<Value> {
         "sources": sources,
         "fields": {
             "language": {
-                "type": "text",
+                "type": "select",
                 "default": "en",
                 "label": "Language",
-                "description": "Language code for transcription (e.g. en, zh, ja)",
+                "description": "Language for transcription",
+                "options": [
+                    { "value": "en", "label": "English" },
+                    { "value": "zh", "label": "Chinese" },
+                    { "value": "ja", "label": "Japanese" },
+                    { "value": "ko", "label": "Korean" },
+                    { "value": "es", "label": "Spanish" },
+                    { "value": "fr", "label": "French" },
+                    { "value": "de", "label": "German" },
+                    { "value": "pt", "label": "Portuguese" },
+                    { "value": "ru", "label": "Russian" },
+                    { "value": "ar", "label": "Arabic" },
+                ],
             },
             "format": {
                 "type": "select",
-                "default": "wav",
+                "default": "mp3",
                 "label": "Format",
                 "description": "Audio file format",
                 "options": [
@@ -162,10 +189,10 @@ async fn get_config() -> Json<Value> {
                     { "value": "mp3", "label": "MP3" },
                 ],
             },
-            "sample_rate": {
+            "raw_sample_rate": {
                 "type": "select",
                 "default": 48000,
-                "label": "Sample Rate",
+                "label": "Raw Sample Rate",
                 "description": "Recording sample rate — higher means better quality but larger files",
                 "advanced": true,
                 "options": [
@@ -222,23 +249,3 @@ async fn get_config() -> Json<Value> {
     }))
 }
 
-async fn list_sources() -> Json<Value> {
-    let sources = crate::audio::discover_sources();
-    Json(json!({ "sources": sources }))
-}
-
-async fn list_devices() -> Json<Value> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-
-    let host = cpal::default_host();
-    let devices: Vec<String> = host
-        .input_devices()
-        .map(|devices| {
-            devices
-                .filter_map(|d| d.name().ok())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Json(json!({"devices": devices}))
-}

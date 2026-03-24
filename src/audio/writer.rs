@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::Receiver;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use mp3lame_encoder::{Builder as LameBuilder, Bitrate, Quality, InterleavedPcm, MonoPcm, FlushNoGap};
+use mp3lame_encoder::{Builder as LameBuilder, Bitrate, Quality, InterleavedPcm, MonoPcm, FlushGap};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
@@ -139,13 +139,14 @@ fn bitrate_from_kbps(kbps: u32) -> Result<Bitrate, AudioError> {
 }
 
 impl Mp3AudioWriter {
-    pub fn new(path: &PathBuf, channels: u16, mp3_config: &Mp3Config) -> Result<Self, AudioError> {
+    pub fn new(path: &PathBuf, channels: u16, input_sample_rate: u32, mp3_config: &Mp3Config) -> Result<Self, AudioError> {
         let mut builder = LameBuilder::new()
             .ok_or_else(|| AudioError::DeviceError("failed to create MP3 encoder".into()))?;
 
         builder.set_num_channels(channels as u8)
             .map_err(|e| AudioError::DeviceError(format!("set channels: {:?}", e)))?;
-        builder.set_sample_rate(mp3_config.sample_rate)
+        // Input sample rate must match the actual audio data
+        builder.set_sample_rate(input_sample_rate)
             .map_err(|e| AudioError::DeviceError(format!("set sample rate: {:?}", e)))?;
         builder.set_brate(bitrate_from_kbps(mp3_config.bitrate_kbps)?)
             .map_err(|e| AudioError::DeviceError(format!("set bitrate: {:?}", e)))?;
@@ -196,8 +197,9 @@ impl AudioWriter for Mp3AudioWriter {
     fn finalize(mut self: Box<Self>) -> Result<(), AudioError> {
         use std::io::Write;
 
-        let mut mp3_out = Vec::new();
-        self.encoder.flush_to_vec::<FlushNoGap>(&mut mp3_out)
+        // LAME flush needs at least 7200 bytes of output buffer capacity
+        let mut mp3_out = Vec::with_capacity(7200);
+        self.encoder.flush_to_vec::<FlushGap>(&mut mp3_out)
             .map_err(|e| AudioError::StreamError(format!("MP3 flush error: {:?}", e)))?;
         self.file.write_all(&mp3_out)
             .map_err(|e| AudioError::StreamError(format!("MP3 write error: {}", e)))?;
@@ -218,7 +220,7 @@ pub fn create_writer(
 ) -> Result<Box<dyn AudioWriter>, AudioError> {
     match format {
         AudioFormat::Wav => Ok(Box::new(WavAudioWriter::new(path, channels, sample_rate)?)),
-        AudioFormat::Mp3 => Ok(Box::new(Mp3AudioWriter::new(path, channels, mp3_config)?)),
+        AudioFormat::Mp3 => Ok(Box::new(Mp3AudioWriter::new(path, channels, sample_rate, mp3_config)?)),
     }
 }
 

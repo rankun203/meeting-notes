@@ -12,7 +12,7 @@ pub struct SessionConfig {
     pub summarization_instruction: Option<String>,
 
     #[serde(default = "default_sample_rate")]
-    pub sample_rate: u32,
+    pub raw_sample_rate: u32,
 
     #[serde(default)]
     pub format: AudioFormat,
@@ -37,7 +37,7 @@ impl Default for SessionConfig {
         Self {
             language: "en".to_string(),
             summarization_instruction: None,
-            sample_rate: default_sample_rate(),
+            raw_sample_rate: default_sample_rate(),
             format: AudioFormat::default(),
             mp3: Mp3Config::default(),
             sources: None,
