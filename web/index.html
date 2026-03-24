@@ -34,26 +34,31 @@
     }
   </script>
   <script type="module">
-    import { useState, useEffect, useCallback, useMemo } from 'react';
+    import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
     import { createRoot } from 'react-dom/client';
-    import { jsx, jsxs as _jsxs, Fragment } from 'react/jsx-runtime';
-    // Wrapper: filter false/null/undefined from children arrays (jsx-runtime doesn't do this)
-    // Also extracts 'key' to avoid React 19 warning about key in spread
+    import { jsx as _jsx, jsxs as _jsxs, Fragment } from 'react/jsx-runtime';
+
+    // Wrappers that extract 'key' from props to avoid React 19 warning,
+    // and filter falsy children (jsx-runtime doesn't do this unlike JSX transpilation).
+    function jsx(type, props, key) {
+      const { key: k, ...rest } = props;
+      return _jsx(type, rest, key ?? k);
+    }
     function jsxs(type, props, key) {
-      if (props.children && Array.isArray(props.children)) {
-        const { key: k, ...rest } = props;
-        const finalKey = key ?? k;
+      const { key: k, ...rest } = props;
+      const finalKey = key ?? k;
+      if (rest.children && Array.isArray(rest.children)) {
         const filtered = rest.children.filter(c => c != null && c !== false);
         if (filtered.length === 0) {
           const { children, ...noChildren } = rest;
-          return jsx(type, noChildren, finalKey);
+          return _jsx(type, noChildren, finalKey);
         }
         if (filtered.length === 1) {
-          return jsx(type, { ...rest, children: filtered[0] }, finalKey);
+          return _jsx(type, { ...rest, children: filtered[0] }, finalKey);
         }
         return _jsxs(type, { ...rest, children: filtered }, finalKey);
       }
-      return _jsxs(type, props, key);
+      return _jsxs(type, rest, finalKey);
     }
 
     const API = window.location.origin;
@@ -81,6 +86,50 @@
         return () => mq.removeEventListener('change', handler);
       }, []);
       return mobile;
+    }
+
+    function useWebSocket(onEvent) {
+      const wsRef = useRef(null);
+      const reconnectRef = useRef(null);
+      const onEventRef = useRef(onEvent);
+      onEventRef.current = onEvent;
+
+      useEffect(() => {
+        function connect() {
+          const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+          wsRef.current = ws;
+          ws.onmessage = (e) => {
+            try { onEventRef.current(JSON.parse(e.data)); } catch {}
+          };
+          ws.onclose = () => {
+            reconnectRef.current = setTimeout(connect, 2000);
+          };
+          ws.onerror = () => ws.close();
+        }
+        connect();
+        return () => {
+          if (wsRef.current) wsRef.current.close();
+          if (reconnectRef.current) clearTimeout(reconnectRef.current);
+        };
+      }, []);
+    }
+
+    function formatFileSize(bytes) {
+      if (bytes == null) return '';
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function formatDuration(secs) {
+      if (secs == null || secs < 0) return '';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = Math.floor(secs % 60);
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
     }
 
     // ── Icons ──
@@ -198,7 +247,9 @@
             ]}),
             jsx('p', {
               className: 'text-[11px] text-gray-400 dark:text-gray-500 mt-0.5',
-              children: formatTime(s.updated_at || s.created_at),
+              children: s.duration_secs != null
+                ? `${formatDuration(s.duration_secs)} · ${formatTime(s.updated_at || s.created_at)}`
+                : formatTime(s.updated_at || s.created_at),
             }),
           ]}),
           s.state === 'recording' && jsx('span', {
@@ -355,6 +406,185 @@
       ]});
     }
 
+    // ── Synced Audio Player ──
+
+    function SyncedPlayer({ files, sessionId }) {
+      const audioRefs = useRef([]);
+      const seekRef = useRef(null);
+      const [playing, setPlaying] = useState(false);
+      const [currentTime, setCurrentTime] = useState(0);
+      const [duration, setDuration] = useState(0);
+      const [mutedTracks, setMutedTracks] = useState({});
+      const rafRef = useRef(null);
+      const playingRef = useRef(false);
+
+      // Keep refs array sized to files
+      useEffect(() => {
+        audioRefs.current = audioRefs.current.slice(0, files.length);
+        setPlaying(false);
+        playingRef.current = false;
+        setCurrentTime(0);
+        setDuration(0);
+      }, [files.length, sessionId]);
+
+      function getAudios() {
+        return audioRefs.current.filter(Boolean);
+      }
+
+      function onLoadedMetadata() {
+        const maxDur = Math.max(...getAudios().map(a => a.duration || 0));
+        if (maxDur > 0) setDuration(maxDur);
+      }
+
+      function updateTime() {
+        const audios = getAudios();
+        if (audios.length > 0) {
+          setCurrentTime(audios[0].currentTime || 0);
+        }
+        if (playingRef.current) rafRef.current = requestAnimationFrame(updateTime);
+      }
+
+      function togglePlay() {
+        const audios = getAudios();
+        if (playing) {
+          audios.forEach(a => a.pause());
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+          setPlaying(false);
+          playingRef.current = false;
+        } else {
+          // Sync all to the same time before playing
+          const t = audios[0]?.currentTime || 0;
+          audios.forEach(a => { a.currentTime = t; a.play(); });
+          setPlaying(true);
+          playingRef.current = true;
+          rafRef.current = requestAnimationFrame(updateTime);
+        }
+      }
+
+      function onSeekInput(e) {
+        const t = parseFloat(e.target.value);
+        setCurrentTime(t);
+        getAudios().forEach(a => { a.currentTime = t; });
+      }
+
+      function stopAll() {
+        const audios = getAudios();
+        audios.forEach(a => { a.pause(); a.currentTime = 0; });
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        setPlaying(false);
+        playingRef.current = false;
+        setCurrentTime(0);
+      }
+
+      function toggleMute(idx) {
+        setMutedTracks(prev => {
+          const next = { ...prev, [idx]: !prev[idx] };
+          if (audioRefs.current[idx]) audioRefs.current[idx].muted = next[idx];
+          return next;
+        });
+      }
+
+      // Handle audio ending
+      function onEnded() {
+        const audios = getAudios();
+        if (audios.every(a => a.ended || a.currentTime >= a.duration - 0.1)) {
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+          audios.forEach(a => { a.currentTime = 0; });
+          setPlaying(false);
+          playingRef.current = false;
+          setCurrentTime(0);
+        }
+      }
+
+      // Cleanup on unmount
+      useEffect(() => {
+        return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+      }, []);
+
+      function fmtTime(s) {
+        if (!s || !isFinite(s)) return '0:00';
+        const m = Math.floor(s / 60);
+        const sec = Math.floor(s % 60);
+        return `${m}:${sec.toString().padStart(2, '0')}`;
+      }
+
+      return jsxs('div', { className: 'space-y-3', children: [
+        // Hidden audio elements
+        ...files.map((f, i) => {
+          const src = `${API}/sessions/${sessionId}/files/${encodeURIComponent(f.name)}`;
+          return jsx('audio', {
+            key: f.name,
+            ref: el => { audioRefs.current[i] = el; },
+            src,
+            preload: 'metadata',
+            muted: !!mutedTracks[i],
+            onLoadedMetadata,
+            onEnded,
+            className: 'hidden',
+          });
+        }),
+
+        // Controls bar
+        jsxs('div', { className: 'flex items-center gap-3', children: [
+          // Play/Pause button
+          jsx('button', {
+            onClick: togglePlay,
+            className: 'w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-colors flex-shrink-0',
+            title: playing ? 'Pause all' : 'Play all',
+            children: playing
+              ? jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+                  children: jsx('path', { d: 'M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z' }),
+                })
+              : jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4 ml-0.5',
+                  children: jsx('path', { d: 'M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z' }),
+                }),
+          }),
+          // Stop button
+          jsx('button', {
+            onClick: stopAll,
+            className: 'w-7 h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0',
+            title: 'Stop and reset',
+            children: jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-3.5 h-3.5',
+              children: jsx('rect', { x: '4', y: '4', width: '12', height: '12', rx: '1' }),
+            }),
+          }),
+          // Time
+          jsx('span', { className: 'text-xs font-mono text-gray-500 dark:text-gray-400 w-10 text-right flex-shrink-0', children: fmtTime(currentTime) }),
+          // Seek bar
+          jsx('input', {
+            ref: seekRef,
+            type: 'range', min: 0, max: duration || 1, step: 0.1, value: currentTime,
+            onInput: onSeekInput,
+            className: 'flex-1 h-1.5 rounded-full appearance-none bg-gray-200 dark:bg-gray-700 cursor-pointer accent-blue-600',
+          }),
+          jsx('span', { className: 'text-xs font-mono text-gray-500 dark:text-gray-400 w-10 flex-shrink-0', children: fmtTime(duration) }),
+        ]}),
+
+        // Track list with mute toggles
+        jsx('div', { className: 'space-y-1', children:
+          files.map((f, i) => jsx('div', {
+            key: f.name,
+            className: 'flex items-center gap-2 px-1 py-0.5',
+            children: jsxs(Fragment, { children: [
+              jsx('button', {
+                onClick: () => toggleMute(i),
+                className: `w-6 h-6 flex items-center justify-center rounded transition-colors ${mutedTracks[i] ? 'text-red-400 hover:text-red-500' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
+                title: mutedTracks[i] ? `Unmute ${f.label}` : `Mute ${f.label}`,
+                children: mutedTracks[i]
+                  ? jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+                      children: jsx('path', { d: 'M9.547 3.062A.75.75 0 0110.75 3.75v12.5a.75.75 0 01-1.203.596L5.203 13.5H3.75A.75.75 0 013 12.75v-5.5a.75.75 0 01.75-.75h1.453L9.547 3.062zM13.78 7.22a.75.75 0 10-1.06 1.06L14.44 10l-1.72 1.72a.75.75 0 001.06 1.06L15.5 11.06l1.72 1.72a.75.75 0 101.06-1.06L16.56 10l1.72-1.72a.75.75 0 00-1.06-1.06L15.5 8.94l-1.72-1.72z' }),
+                    })
+                  : jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+                      children: jsx('path', { d: 'M10.5 3.75a.75.75 0 00-1.264-.546L5.203 6.5H3.75A.75.75 0 003 7.25v5.5c0 .414.336.75.75.75h1.453l4.033 3.296A.75.75 0 0010.5 16.25V3.75zM14.329 7.172a.75.75 0 011.06 0A4.476 4.476 0 0116.75 10a4.476 4.476 0 01-1.361 2.828.75.75 0 11-1.06-1.06A2.976 2.976 0 0015.25 10a2.976 2.976 0 00-.921-1.768.75.75 0 010-1.06z' }),
+                    }),
+              }),
+              jsx('span', { className: `text-xs capitalize flex-1 ${mutedTracks[i] ? 'text-gray-300 dark:text-gray-600 line-through' : 'text-gray-600 dark:text-gray-400'}`, children: f.label }),
+            ]}),
+          })),
+        }),
+      ]});
+    }
+
     // ── Session Detail (main panel) ──
 
     function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile }) {
@@ -418,10 +648,13 @@
                   }),
                   jsx('button', {
                     disabled: loading,
-                    onClick: () => action(async () => {
-                      await api(`/sessions/${s.id}`, { method: 'DELETE' });
-                      onDeleted();
-                    }),
+                    onClick: () => {
+                      if (!confirm('Delete this session and all its files? This cannot be undone.')) return;
+                      action(async () => {
+                        await api(`/sessions/${s.id}`, { method: 'DELETE' });
+                        onDeleted();
+                      });
+                    },
                     className: 'inline-flex items-center px-2.5 md:px-3 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-40 transition-colors',
                     children: 'Delete',
                   }),
@@ -450,7 +683,7 @@
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Format' }),
                       jsx('p', { className: 'text-sm font-medium', children: `${s.format.toUpperCase()} / ${s.sample_rate} Hz` }),
                     ]}),
-                    s.format === 'mp3' && jsxs('div', { children: [
+                    s.mp3 && jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'MP3' }),
                       jsx('p', { className: 'text-sm font-medium', children: `${s.mp3.bitrate_kbps} kbps @ ${s.mp3.sample_rate} Hz` }),
                     ]}),
@@ -461,6 +694,10 @@
                     s.updated_at !== s.created_at && jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Updated' }),
                       jsx('p', { className: 'text-sm font-medium', children: new Date(s.updated_at).toLocaleString() }),
+                    ]}),
+                    s.duration_secs != null && jsxs('div', { children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Duration' }),
+                      jsx('p', { className: 'text-sm font-medium', children: formatDuration(s.duration_secs) }),
                     ]}),
                     s.sources && s.sources.length > 0 && jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1', children: 'Sources' }),
@@ -491,27 +728,29 @@
                   s.files.length > 0 && jsx('div', { className: 'flex flex-wrap gap-1.5', children:
                     s.files.map(f => jsx('span', {
                       key: f,
-                      className: 'inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 font-mono',
-                      children: f,
+                      className: 'inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 font-mono',
+                      children: jsxs(Fragment, { children: [
+                        f,
+                        s.file_sizes && s.file_sizes[f] != null && jsx('span', {
+                          className: 'text-red-400 dark:text-red-500',
+                          children: formatFileSize(s.file_sizes[f]),
+                        }),
+                      ]}),
                     })),
                   }),
                 ]}),
               }),
 
-              // Audio files
+              // Audio files — synced player
               hasAudio && jsx('div', {
                 className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
                 children: jsxs(Fragment, { children: [
                   jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3', children: 'Recordings' }),
-                  jsx('div', { className: 'space-y-3', children:
-                    audioFiles.map(f => {
-                      const src = `${API}/sessions/${s.id}/files/${encodeURIComponent(f)}`;
+                  jsx(SyncedPlayer, {
+                    sessionId: s.id,
+                    files: audioFiles.map(f => {
                       const ext = f.split('.').pop();
-                      const label = f.replace(`.${ext}`, '').replace(/_/g, ' ');
-                      return jsxs('div', { key: f, className: 'space-y-1', children: [
-                        jsx('p', { className: 'text-xs text-gray-500 dark:text-gray-400 capitalize font-medium', children: label }),
-                        jsx('audio', { controls: true, preload: 'none', src, className: 'w-full h-10 rounded-lg' }),
-                      ]});
+                      return { name: f, label: f.replace(`.${ext}`, '').replace(/_/g, ' ') };
                     }),
                   }),
                 ]}),
@@ -528,12 +767,18 @@
                       className: 'flex items-center justify-between py-1 gap-2',
                       children: [
                         jsx('span', { className: 'text-sm font-mono text-gray-600 dark:text-gray-400 truncate min-w-0', children: f }),
-                        jsx('a', {
-                          href: `${API}/sessions/${s.id}/files/${encodeURIComponent(f)}`,
-                          target: '_blank',
-                          className: 'text-xs text-blue-600 dark:text-blue-400 hover:underline flex-shrink-0',
-                          children: 'download',
-                        }),
+                        jsxs('span', { className: 'flex items-center gap-2 flex-shrink-0', children: [
+                          s.file_sizes && s.file_sizes[f] != null && jsx('span', {
+                            className: 'text-[11px] text-gray-400 dark:text-gray-500 font-mono',
+                            children: formatFileSize(s.file_sizes[f]),
+                          }),
+                          jsx('a', {
+                            href: `${API}/sessions/${s.id}/files/${encodeURIComponent(f)}`,
+                            target: '_blank',
+                            className: 'text-xs text-blue-600 dark:text-blue-400 hover:underline',
+                            children: 'download',
+                          }),
+                        ]}),
                       ],
                     })),
                   }),
@@ -641,24 +886,53 @@
       const [fields, setFields] = useState({});
       const [selectedId, setSelectedId] = useState(null);
       const [showNew, setShowNew] = useState(false);
-      // Mobile: which view is showing — 'list' or 'detail'
       const [mobileView, setMobileView] = useState('list');
       const isMobile = useIsMobile();
+      const selectedIdRef = useRef(selectedId);
+      selectedIdRef.current = selectedId;
 
+      // WebSocket event handler
+      function handleWsEvent(event) {
+        switch (event.type) {
+          case 'init':
+            setSessions(event.data.sessions || []);
+            setTotal(event.data.total || 0);
+            break;
+          case 'session_created':
+            setSessions(prev => [event.data, ...prev]);
+            setTotal(prev => prev + 1);
+            break;
+          case 'session_updated':
+            setSessions(prev => prev.map(s => s.id === event.data.id ? event.data : s));
+            break;
+          case 'session_deleted':
+            setSessions(prev => prev.filter(s => s.id !== event.data.id));
+            setTotal(prev => Math.max(0, prev - 1));
+            if (selectedIdRef.current === event.data.id) setSelectedId(null);
+            break;
+          case 'file_sizes':
+            setSessions(prev => prev.map(s =>
+              s.id === event.data.id ? { ...s, file_sizes: event.data.file_sizes } : s
+            ));
+            break;
+        }
+      }
+
+      useWebSocket(handleWsEvent);
+
+      // Fetch config (sources + fields) once on mount
+      useEffect(() => {
+        api('/config').then(d => { setSources(d.sources || []); setFields(d.fields || {}); }).catch(() => {});
+      }, []);
+
+      // REST refresh for after actions (belt and suspenders with WS)
       const refresh = useCallback(async (currentOffset) => {
         try {
           const data = await api(`/sessions?limit=${PAGE_SIZE}&offset=${currentOffset ?? offset}`);
           setSessions(data.sessions);
           setTotal(data.total);
-        } catch (e) { /* ignore polling errors */ }
+        } catch (e) { /* ignore */ }
       }, [offset]);
-
-      useEffect(() => {
-        refresh();
-        api('/config').then(d => { setSources(d.sources || []); setFields(d.fields || {}); }).catch(() => {});
-        const interval = setInterval(() => refresh(), 2000);
-        return () => clearInterval(interval);
-      }, [refresh]);
 
       // Auto-select first recording session or first session
       useEffect(() => {
@@ -729,7 +1003,7 @@
               selectedId,
               onSelect: handleSelect,
               onPageChange: handlePageChange,
-              sources,
+              sources, fields,
               onCreated: async () => { setOffset(0); await refresh(0); },
               showNew, setShowNew,
             }),

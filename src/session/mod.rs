@@ -7,30 +7,92 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait};
-use tokio::sync::RwLock;
+use serde::Serialize;
+use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
 use tracing::{info, warn};
 
 use self::config::SessionConfig;
-use self::session::{Session, SessionInfo, SessionMetadata, SessionState, SourceMetadata};
+use self::session::{Session, SessionInfo, SessionMetadata, SessionState};
 use crate::audio::mic::MicSource;
 use crate::audio::recorder::Recorder;
 use crate::audio::source::{AudioSource, SourceDescriptor, SourceType};
 use crate::audio::system_audio::SystemAudioSource;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", content = "data")]
+#[serde(rename_all = "snake_case")]
+pub enum ServerEvent {
+    SessionCreated(SessionInfo),
+    SessionUpdated(SessionInfo),
+    SessionDeleted { id: String },
+    FileSizes {
+        id: String,
+        file_sizes: HashMap<String, u64>,
+    },
+}
+
 #[derive(Clone)]
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     output_dir: PathBuf,
+    event_tx: broadcast::Sender<ServerEvent>,
 }
 
 impl SessionManager {
     pub fn new(output_dir: PathBuf) -> Self {
+        let (event_tx, _) = broadcast::channel(256);
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             output_dir,
+            event_tx,
         }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ServerEvent> {
+        self.event_tx.subscribe()
+    }
+
+    fn emit(&self, event: ServerEvent) {
+        let _ = self.event_tx.send(event);
+    }
+
+    fn write_metadata(session: &Session) -> Result<(), String> {
+        std::fs::create_dir_all(&session.config.output_dir)
+            .map_err(|e| format!("failed to create session dir: {}", e))?;
+        let meta = session.to_metadata();
+        let path = session.config.output_dir.join("metadata.json");
+        let json = serde_json::to_string_pretty(&meta)
+            .map_err(|e| format!("failed to serialize metadata: {}", e))?;
+        std::fs::write(&path, json)
+            .map_err(|e| format!("failed to write metadata: {}", e))?;
+        Ok(())
+    }
+
+    /// Spawn a background task that broadcasts file sizes for recording sessions.
+    pub fn start_file_size_ticker(&self) {
+        let sessions = self.sessions.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                if event_tx.receiver_count() == 0 {
+                    continue;
+                }
+                let sessions = sessions.read().await;
+                for session in sessions.values() {
+                    if session.state == SessionState::Recording {
+                        let info = session.info();
+                        let _ = event_tx.send(ServerEvent::FileSizes {
+                            id: session.id.clone(),
+                            file_sizes: info.file_sizes,
+                        });
+                    }
+                }
+            }
+        });
     }
 
     /// Scan recordings/ for existing session folders and load their metadata.
@@ -108,8 +170,12 @@ impl SessionManager {
         let session_dir = self.session_dir(&id);
         config.output_dir = session_dir;
         let session = Session::new(id.clone(), config);
+        if let Err(e) = Self::write_metadata(&session) {
+            warn!("Failed to write metadata on create: {}", e);
+        }
         let info = session.info();
         self.sessions.write().await.insert(id, session);
+        self.emit(ServerEvent::SessionCreated(info.clone()));
         info
     }
 
@@ -129,9 +195,11 @@ impl SessionManager {
     pub async fn delete_session(&self, id: &str) -> Result<(), String> {
         // Extract recorder under lock, then stop outside lock
         let mut recorder_to_stop = None;
+        let session_dir;
         {
             let mut sessions = self.sessions.write().await;
             if let Some(mut session) = sessions.remove(id) {
+                session_dir = session.config.output_dir.clone();
                 if session.state == SessionState::Recording {
                     recorder_to_stop = session.recorder.take();
                 }
@@ -142,6 +210,13 @@ impl SessionManager {
         if let Some(mut recorder) = recorder_to_stop {
             let _ = recorder.stop();
         }
+        // Delete the session directory and all its files from disk
+        if session_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&session_dir) {
+                warn!("Failed to delete session directory {}: {}", session_dir.display(), e);
+            }
+        }
+        self.emit(ServerEvent::SessionDeleted { id: id.to_string() });
         Ok(())
     }
 
@@ -196,15 +271,22 @@ impl SessionManager {
 
         session.recorder = Some(recorder);
         session.state = SessionState::Recording;
+        session.started_at = Some(Utc::now());
         session.files = file_names.clone();
+        session.capture_source_meta();
         session.touch();
+
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata on start: {}", e);
+        }
+        self.emit(ServerEvent::SessionUpdated(session.info()));
 
         Ok(file_names)
     }
 
     pub async fn stop_recording(&self, id: &str) -> Result<Vec<String>, String> {
-        // Phase 1: Extract recorder and metadata info under write lock
-        let (mut recorder, source_meta, session_id, language, format, created_at, output_dir) = {
+        // Phase 1: Extract recorder under write lock, mark stopped
+        let mut recorder = {
             let mut sessions = self.sessions.write().await;
             let session = sessions.get_mut(id).ok_or("session not found")?;
 
@@ -215,63 +297,33 @@ impl SessionManager {
             let recorder = session.recorder.take()
                 .ok_or("no recorder found")?;
 
-            let source_meta: Vec<SourceMetadata> = recorder
-                .source_metadata()
-                .iter()
-                .map(|(desc, path)| SourceMetadata {
-                    filename: path
-                        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-                        .unwrap_or_default(),
-                    source_type: desc.source_type,
-                    source_label: desc.label.clone(),
-                    channels: 0,
-                    sample_rate: session.config.sample_rate,
-                })
-                .collect();
-
-            // Mark as stopping so UI knows
             session.state = SessionState::Stopped;
             session.touch();
 
-            (
-                recorder,
-                source_meta,
-                session.id.clone(),
-                session.config.language.clone(),
-                session.config.format,
-                session.created_at,
-                session.config.output_dir.clone(),
-            )
+            // Emit early update so UI sees "stopped" state immediately
+            self.emit(ServerEvent::SessionUpdated(session.info()));
+
+            recorder
         };
         // Write lock released here
 
         // Phase 2: Stop recorder (blocking) without holding any lock
         recorder.stop().map_err(|e| e.to_string())?;
 
-        // Phase 3: Write metadata.json
-        let metadata = SessionMetadata {
-            session_id: session_id.clone(),
-            language,
-            format,
-            created_at,
-            updated_at: Utc::now(),
-            sources: source_meta,
-        };
-        let meta_path = output_dir.join("metadata.json");
-        let json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| format!("failed to serialize metadata: {}", e))?;
-        std::fs::write(&meta_path, json)
-            .map_err(|e| format!("failed to write metadata: {}", e))?;
-        info!("Wrote metadata to \"{}\"", meta_path.display());
-
-        // Phase 4: Re-acquire lock to update session files
+        // Phase 3: Re-acquire lock, update files, write metadata
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(id) {
-            session.files.push("metadata.json".to_string());
+            if !session.files.contains(&"metadata.json".to_string()) {
+                session.files.push("metadata.json".to_string());
+            }
             session.touch();
+            if let Err(e) = Self::write_metadata(session) {
+                warn!("Failed to write metadata on stop: {}", e);
+            }
+            let info = session.info();
+            self.emit(ServerEvent::SessionUpdated(info));
             Ok(session.files.clone())
         } else {
-            // Session was deleted while we were stopping - that's ok
             Ok(vec![])
         }
     }

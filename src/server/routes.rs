@@ -1,15 +1,12 @@
 use axum::{
     Json, Router,
-    body::Body,
     extract::{Path, Query, State},
-    http::{StatusCode, header},
+    http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::fs::File;
-use tokio_util::io::ReaderStream;
 
 use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
@@ -117,6 +114,7 @@ async fn get_files(
 async fn serve_file(
     State(manager): State<SessionManager>,
     Path((id, filename)): Path<(String, String)>,
+    req: axum::extract::Request,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     // Verify session exists and file belongs to it
     let files = manager
@@ -134,31 +132,13 @@ async fn serve_file(
         .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid filename"}))))?;
 
     let file_path = manager.session_dir(&id).join(safe_name);
-    let file = File::open(&file_path)
+
+    // Use tower-http ServeFile for proper Content-Length, Accept-Ranges, and range requests
+    let serve = tower_http::services::ServeFile::new(&file_path);
+    let result = tower::ServiceExt::oneshot(serve, req)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, Json(json!({"error": "file not found on disk"}))))?;
-
-    let content_type = if filename.ends_with(".mp3") {
-        "audio/mpeg"
-    } else if filename.ends_with(".wav") {
-        "audio/wav"
-    } else if filename.ends_with(".json") {
-        "application/json"
-    } else {
-        "application/octet-stream"
-    };
-
-    let disposition = format!("inline; filename=\"{}\"", filename);
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
-
-    Ok((
-        [
-            (header::CONTENT_TYPE, content_type.to_string()),
-            (header::CONTENT_DISPOSITION, disposition),
-        ],
-        body,
-    ))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{}", e)}))))?;
+    Ok(result)
 }
 
 async fn get_config() -> Json<Value> {

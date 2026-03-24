@@ -96,6 +96,7 @@ async fn main() {
 
             let manager = SessionManager::new(recordings_dir.clone());
             manager.load_from_disk().await;
+            manager.start_file_size_ticker();
             let app = server::create_router(manager, web_ui);
 
             let addr = format!("{}:{}", host, port);

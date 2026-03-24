@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -14,6 +14,9 @@ pub struct MicSource {
     sample_rate: u32,
     stream: Option<Stream>,
     running: Arc<AtomicBool>,
+    /// Shared sender so stop() can explicitly drop it even if cpal
+    /// hasn't freed the callback closure yet.
+    sender_handle: Arc<Mutex<Option<Sender<AudioChunk>>>>,
 }
 
 impl MicSource {
@@ -23,6 +26,7 @@ impl MicSource {
             sample_rate,
             stream: None,
             running: Arc::new(AtomicBool::new(false)),
+            sender_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -65,7 +69,6 @@ impl AudioSource for MicSource {
 
         let desired_sample_rate = cpal::SampleRate(self.sample_rate);
 
-        // Try to find a config matching our desired sample rate
         let supported_configs = device.supported_input_configs()
             .map_err(|e| AudioError::DeviceError(format!("failed to query configs: {}", e)))?;
 
@@ -74,7 +77,6 @@ impl AudioSource for MicSource {
             .find(|c| c.min_sample_rate() <= desired_sample_rate && c.max_sample_rate() >= desired_sample_rate)
             .map(|c| c.with_sample_rate(desired_sample_rate))
             .or_else(|| {
-                // Fallback: use default config
                 device.default_input_config().ok()
             })
             .ok_or_else(|| AudioError::DeviceError("no suitable input config found".into()))?;
@@ -82,6 +84,10 @@ impl AudioSource for MicSource {
         let channels = config.channels();
         let actual_sample_rate = config.sample_rate().0;
         info!("Mic config: {} channels, {} Hz, {:?}", channels, actual_sample_rate, config.sample_format());
+
+        // Store sender in shared handle so stop() can explicitly drop it
+        *self.sender_handle.lock().unwrap() = Some(sender);
+        let sender_handle = self.sender_handle.clone();
 
         let running = self.running.clone();
         running.store(true, Ordering::SeqCst);
@@ -99,13 +105,16 @@ impl AudioSource for MicSource {
                         if !running.load(Ordering::Relaxed) {
                             return;
                         }
-                        let chunk = AudioChunk {
-                            samples: data.to_vec(),
-                            channels,
-                            sample_rate: actual_sample_rate,
-                            timestamp_us: start_time.elapsed().as_micros() as u64,
-                        };
-                        let _ = sender.try_send(chunk);
+                        let guard = sender_handle.lock().unwrap();
+                        if let Some(ref sender) = *guard {
+                            let chunk = AudioChunk {
+                                samples: data.to_vec(),
+                                channels,
+                                sample_rate: actual_sample_rate,
+                                timestamp_us: start_time.elapsed().as_micros() as u64,
+                            };
+                            let _ = sender.try_send(chunk);
+                        }
                     },
                     err_fn,
                     None,
@@ -118,16 +127,19 @@ impl AudioSource for MicSource {
                         if !running.load(Ordering::Relaxed) {
                             return;
                         }
-                        let samples: Vec<f32> = data.iter()
-                            .map(|&s| s as f32 / i16::MAX as f32)
-                            .collect();
-                        let chunk = AudioChunk {
-                            samples,
-                            channels,
-                            sample_rate: actual_sample_rate,
-                            timestamp_us: start_time.elapsed().as_micros() as u64,
-                        };
-                        let _ = sender.try_send(chunk);
+                        let guard = sender_handle.lock().unwrap();
+                        if let Some(ref sender) = *guard {
+                            let samples: Vec<f32> = data.iter()
+                                .map(|&s| s as f32 / i16::MAX as f32)
+                                .collect();
+                            let chunk = AudioChunk {
+                                samples,
+                                channels,
+                                sample_rate: actual_sample_rate,
+                                timestamp_us: start_time.elapsed().as_micros() as u64,
+                            };
+                            let _ = sender.try_send(chunk);
+                        }
                     },
                     err_fn,
                     None,
@@ -148,6 +160,11 @@ impl AudioSource for MicSource {
 
     fn stop(&mut self) -> Result<(), AudioError> {
         self.running.store(false, Ordering::SeqCst);
+        // Explicitly drop the sender BEFORE dropping the stream.
+        // cpal on macOS may not synchronously free the callback closure
+        // when the Stream is dropped, which would keep the sender alive
+        // and prevent the writer channel from disconnecting.
+        self.sender_handle.lock().unwrap().take();
         if let Some(stream) = self.stream.take() {
             drop(stream);
         }

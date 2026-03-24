@@ -7,7 +7,8 @@ edition = "2021"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower = "0.5"
 rust-embed = "8"
 mime_guess = "2"
 serde = { version = "1", features = ["derive"] }
@@ -26,6 +27,7 @@ env_logger = "0.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
+futures = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
