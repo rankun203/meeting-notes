@@ -141,7 +141,9 @@ impl MacosSystemAudio {
     }
 
     pub fn stop(&mut self) -> Result<(), AudioError> {
-        self.running.store(false, Ordering::SeqCst);
+        if !self.running.swap(false, Ordering::SeqCst) {
+            return Ok(()); // Already stopped
+        }
         self.cleanup();
         info!("System audio capture stopped");
         Ok(())
@@ -152,32 +154,47 @@ impl MacosSystemAudio {
     }
 
     fn cleanup(&mut self) {
+        // 1. Stop the device and destroy IO proc (stops callbacks)
         if self.aggregate_device_id != 0 && !self.io_proc_id.is_null() {
+            info!("cleanup: AudioDeviceStop");
             unsafe {
                 AudioDeviceStop(self.aggregate_device_id, self.io_proc_id);
+            }
+            // Give Core Audio time to drain any in-flight IO proc callbacks
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            info!("cleanup: AudioDeviceDestroyIOProcID");
+            unsafe {
                 AudioDeviceDestroyIOProcID(self.aggregate_device_id, self.io_proc_id);
             }
             self.io_proc_id = ptr::null_mut();
         }
 
+        // 2. Free callback data now that no callbacks can fire
+        info!("cleanup: dropping callback_data");
+        self.callback_data = None;
+
+        // 3. Tear down aggregate device
         if self.aggregate_device_id != 0 {
+            info!("cleanup: destroy_aggregate_device");
             destroy_aggregate_device(self.aggregate_device_id);
             self.aggregate_device_id = 0;
         }
 
+        // 4. Destroy the tap last
         if self.tap_id != 0 {
+            info!("cleanup: AudioHardwareDestroyProcessTap");
             unsafe { AudioHardwareDestroyProcessTap(self.tap_id); }
             self.tap_id = 0;
         }
-
-        self.callback_data = None;
+        info!("cleanup: done");
     }
 }
 
 impl Drop for MacosSystemAudio {
     fn drop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
-        self.cleanup();
+        if self.running.swap(false, Ordering::SeqCst) {
+            self.cleanup();
+        }
     }
 }
 

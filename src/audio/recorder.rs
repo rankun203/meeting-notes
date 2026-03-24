@@ -3,8 +3,16 @@ use std::path::PathBuf;
 use crossbeam_channel::{self, Sender};
 use tracing::info;
 
-use super::source::{AudioChunk, AudioError, AudioSource};
+use super::source::{AudioChunk, AudioError, AudioSource, SourceDescriptor, sanitize_label};
 use super::writer::{AudioFormat, AudioWriterHandle, Mp3Config};
+
+struct ActiveSource {
+    descriptor: SourceDescriptor,
+    source: Option<Box<dyn AudioSource>>,
+    writer: Option<AudioWriterHandle>,
+    sender: Option<Sender<AudioChunk>>,
+    file_path: Option<PathBuf>,
+}
 
 pub struct Recorder {
     session_id: String,
@@ -12,12 +20,7 @@ pub struct Recorder {
     sample_rate: u32,
     format: AudioFormat,
     mp3_config: Mp3Config,
-    mic_source: Option<Box<dyn AudioSource>>,
-    system_source: Option<Box<dyn AudioSource>>,
-    mic_writer: Option<AudioWriterHandle>,
-    system_writer: Option<AudioWriterHandle>,
-    mic_sender: Option<Sender<AudioChunk>>,
-    system_sender: Option<Sender<AudioChunk>>,
+    sources: Vec<ActiveSource>,
 }
 
 impl Recorder {
@@ -27,21 +30,25 @@ impl Recorder {
         sample_rate: u32,
         format: AudioFormat,
         mp3_config: Mp3Config,
-        mic_source: Option<Box<dyn AudioSource>>,
-        system_source: Option<Box<dyn AudioSource>>,
+        sources: Vec<(SourceDescriptor, Box<dyn AudioSource>)>,
     ) -> Self {
+        let sources = sources
+            .into_iter()
+            .map(|(desc, source)| ActiveSource {
+                descriptor: desc,
+                source: Some(source),
+                writer: None,
+                sender: None,
+                file_path: None,
+            })
+            .collect();
         Self {
             session_id,
             output_dir,
             sample_rate,
             format,
             mp3_config,
-            mic_source,
-            system_source,
-            mic_writer: None,
-            system_writer: None,
-            mic_sender: None,
-            system_sender: None,
+            sources,
         }
     }
 
@@ -52,25 +59,27 @@ impl Recorder {
         let ext = self.format.extension();
         let mut files = Vec::new();
 
-        if let Some(ref mut mic) = self.mic_source {
-            let path = self.output_dir.join(format!("{}_mic.{}", self.session_id, ext));
-            info!("Recording mic audio to \"{}\"", path.display());
-            let (sender, receiver) = crossbeam_channel::bounded(1024);
-            let writer = AudioWriterHandle::start(self.format, path.clone(), self.sample_rate, self.mp3_config, receiver)?;
-            mic.start(sender.clone())?;
-            self.mic_writer = Some(writer);
-            self.mic_sender = Some(sender);
-            files.push(path);
-        }
+        for active in &mut self.sources {
+            let label = sanitize_label(&active.descriptor.label);
+            let path = self.output_dir.join(format!("{}.{}", label, ext));
+            info!(
+                "Recording {} to \"{}\"",
+                active.descriptor.label,
+                path.display()
+            );
 
-        if let Some(ref mut system) = self.system_source {
-            let path = self.output_dir.join(format!("{}_system.{}", self.session_id, ext));
-            info!("Recording system audio to \"{}\"", path.display());
             let (sender, receiver) = crossbeam_channel::bounded(1024);
-            let writer = AudioWriterHandle::start(self.format, path.clone(), self.sample_rate, self.mp3_config, receiver)?;
-            system.start(sender.clone())?;
-            self.system_writer = Some(writer);
-            self.system_sender = Some(sender);
+            let writer = AudioWriterHandle::start(
+                self.format,
+                path.clone(),
+                self.sample_rate,
+                self.mp3_config,
+                receiver,
+            )?;
+            active.source.as_mut().unwrap().start(sender.clone())?;
+            active.writer = Some(writer);
+            active.sender = Some(sender);
+            active.file_path = Some(path.clone());
             files.push(path);
         }
 
@@ -78,26 +87,42 @@ impl Recorder {
     }
 
     pub fn stop(&mut self) -> Result<(), AudioError> {
-        if let Some(ref mut mic) = self.mic_source {
-            mic.stop()?;
-        }
-        if let Some(ref mut system) = self.system_source {
-            system.stop()?;
+        // Stop and drop all sources — dropping ensures cpal callbacks release
+        // their sender clones so the writer channels can disconnect
+        for active in &mut self.sources {
+            if let Some(mut source) = active.source.take() {
+                info!("Stopping source: {}", active.descriptor.label);
+                source.stop()?;
+                info!("Stopped source: {}", active.descriptor.label);
+                // source dropped here, freeing callback's sender clone
+            }
         }
 
-        // Drop senders to signal writer threads to finish
-        self.mic_sender.take();
-        self.system_sender.take();
+        // Drop our sender copies to fully disconnect writer channels
+        info!("Dropping senders for session {}", self.session_id);
+        for active in &mut self.sources {
+            active.sender.take();
+        }
 
         // Wait for writers to finalize
-        if let Some(writer) = self.mic_writer.take() {
-            writer.finish()?;
-        }
-        if let Some(writer) = self.system_writer.take() {
-            writer.finish()?;
+        info!("Waiting for writers to finalize for session {}", self.session_id);
+        for active in &mut self.sources {
+            if let Some(writer) = active.writer.take() {
+                info!("Finishing writer for: {}", active.descriptor.label);
+                writer.finish()?;
+                info!("Writer finished for: {}", active.descriptor.label);
+            }
         }
 
         info!("Recording stopped for session {}", self.session_id);
         Ok(())
+    }
+
+    /// Returns (descriptor, file_path) pairs for metadata generation.
+    pub fn source_metadata(&self) -> Vec<(&SourceDescriptor, Option<&PathBuf>)> {
+        self.sources
+            .iter()
+            .map(|a| (&a.descriptor, a.file_path.as_ref()))
+            .collect()
     }
 }

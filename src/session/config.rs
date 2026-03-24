@@ -20,8 +20,9 @@ pub struct SessionConfig {
     #[serde(default)]
     pub mp3: Mp3Config,
 
+    /// Selected source IDs. If None or empty, defaults to default mic + system_mix.
     #[serde(default)]
-    pub mic_device: Option<String>,
+    pub sources: Option<Vec<String>>,
 
     #[serde(skip_deserializing)]
     pub output_dir: PathBuf,
@@ -39,7 +40,7 @@ impl Default for SessionConfig {
             sample_rate: default_sample_rate(),
             format: AudioFormat::default(),
             mp3: Mp3Config::default(),
-            mic_device: None,
+            sources: None,
             output_dir: PathBuf::from("./recordings"),
         }
     }

@@ -1021,6 +1021,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "hound",
+ "libc",
  "log",
  "mime_guess",
  "mp3lame-encoder",

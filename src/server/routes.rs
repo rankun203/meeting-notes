@@ -25,6 +25,8 @@ pub fn session_routes() -> Router<SessionManager> {
         .route("/sessions/{id}/recording/stop", post(stop_recording))
         .route("/sessions/{id}/files", get(get_files))
         .route("/sessions/{id}/files/{filename}", get(serve_file))
+        .route("/config", get(get_config))
+        .route("/sources", get(list_sources))
         .route("/devices", get(list_devices))
 }
 
@@ -131,7 +133,7 @@ async fn serve_file(
         .file_name()
         .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid filename"}))))?;
 
-    let file_path = manager.output_dir().join(safe_name);
+    let file_path = manager.session_dir(&id).join(safe_name);
     let file = File::open(&file_path)
         .await
         .map_err(|_| (StatusCode::NOT_FOUND, Json(json!({"error": "file not found on disk"}))))?;
@@ -140,6 +142,8 @@ async fn serve_file(
         "audio/mpeg"
     } else if filename.ends_with(".wav") {
         "audio/wav"
+    } else if filename.ends_with(".json") {
+        "application/json"
     } else {
         "application/octet-stream"
     };
@@ -155,6 +159,92 @@ async fn serve_file(
         ],
         body,
     ))
+}
+
+async fn get_config() -> Json<Value> {
+    let sources = crate::audio::discover_sources();
+    Json(json!({
+        "sources": sources,
+        "fields": {
+            "language": {
+                "type": "text",
+                "default": "en",
+                "label": "Language",
+                "description": "Language code for transcription (e.g. en, zh, ja)",
+            },
+            "format": {
+                "type": "select",
+                "default": "wav",
+                "label": "Format",
+                "description": "Audio file format",
+                "options": [
+                    { "value": "wav", "label": "WAV" },
+                    { "value": "mp3", "label": "MP3" },
+                ],
+            },
+            "sample_rate": {
+                "type": "select",
+                "default": 48000,
+                "label": "Sample Rate",
+                "description": "Recording sample rate — higher means better quality but larger files",
+                "advanced": true,
+                "options": [
+                    { "value": 16000, "label": "16000 Hz" },
+                    { "value": 22050, "label": "22050 Hz" },
+                    { "value": 44100, "label": "44100 Hz" },
+                    { "value": 48000, "label": "48000 Hz" },
+                ],
+            },
+            "mp3_bitrate": {
+                "type": "select",
+                "default": 64,
+                "label": "MP3 Bitrate",
+                "description": "MP3 encoder bitrate — higher means better quality and larger files",
+                "advanced": true,
+                "show_when": { "field": "format", "value": "mp3" },
+                "config_path": "mp3.bitrate_kbps",
+                "options": [
+                    { "value": 32, "label": "32 kbps" },
+                    { "value": 48, "label": "48 kbps" },
+                    { "value": 64, "label": "64 kbps" },
+                    { "value": 96, "label": "96 kbps" },
+                    { "value": 128, "label": "128 kbps" },
+                    { "value": 192, "label": "192 kbps" },
+                    { "value": 256, "label": "256 kbps" },
+                    { "value": 320, "label": "320 kbps" },
+                ],
+            },
+            "mp3_sample_rate": {
+                "type": "select",
+                "default": 16000,
+                "label": "MP3 Sample Rate",
+                "description": "MP3 encoder output sample rate — can differ from recording rate; the encoder will resample",
+                "advanced": true,
+                "show_when": { "field": "format", "value": "mp3" },
+                "config_path": "mp3.sample_rate",
+                "options": [
+                    { "value": 8000, "label": "8000 Hz" },
+                    { "value": 16000, "label": "16000 Hz" },
+                    { "value": 22050, "label": "22050 Hz" },
+                    { "value": 44100, "label": "44100 Hz" },
+                    { "value": 48000, "label": "48000 Hz" },
+                ],
+            },
+            "summarization_instruction": {
+                "type": "textarea",
+                "default": "",
+                "label": "Summary Prompt",
+                "description": "Custom instruction for meeting summarization",
+                "advanced": true,
+                "placeholder": "Custom summarization...",
+            },
+        },
+    }))
+}
+
+async fn list_sources() -> Json<Value> {
+    let sources = crate::audio::discover_sources();
+    Json(json!({ "sources": sources }))
 }
 
 async fn list_devices() -> Json<Value> {

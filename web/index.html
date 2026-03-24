@@ -1,63 +1,29 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Meeting Notes</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'media',
+    }
+  </script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e5e5e5; }
-    .container { max-width: 800px; margin: 0 auto; padding: 24px; }
-    h1 { font-size: 24px; font-weight: 600; margin-bottom: 24px; }
-    h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #ccc; }
-    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .badge { font-size: 12px; padding: 2px 8px; border-radius: 12px; font-weight: 500; }
-    .badge-created { background: #1e3a5f; color: #7db4e6; }
-    .badge-recording { background: #3f1e1e; color: #e67d7d; animation: pulse 1.5s infinite; }
-    .badge-stopped { background: #1e3f1e; color: #7de67d; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .meta { font-size: 13px; color: #888; line-height: 1.6; }
-    .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; color: #888; margin-top: 8px; }
-    .meta-grid .label { color: #666; }
-    .meta-grid .value { color: #aaa; }
-    .actions { display: flex; gap: 8px; margin-top: 12px; }
-    button { padding: 8px 16px; border-radius: 6px; border: 1px solid #333; background: #222; color: #e5e5e5; cursor: pointer; font-size: 13px; transition: background 0.15s; }
-    button:hover { background: #333; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-primary { background: #2563eb; border-color: #2563eb; }
-    .btn-primary:hover { background: #1d4ed8; }
-    .btn-danger { background: #dc2626; border-color: #dc2626; }
-    .btn-danger:hover { background: #b91c1c; }
-    .btn-stop { background: #d97706; border-color: #d97706; }
-    .btn-stop:hover { background: #b45309; }
-    .new-session { margin-bottom: 24px; }
-    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-    .form-group { display: flex; flex-direction: column; gap: 4px; }
-    .form-group.full { grid-column: 1 / -1; }
-    .form-group label { font-size: 12px; color: #888; }
-    input, select, textarea { padding: 8px 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #e5e5e5; font-size: 13px; font-family: inherit; }
-    textarea { resize: vertical; min-height: 60px; }
-    input:focus, select:focus, textarea:focus { outline: none; border-color: #2563eb; }
-    .mp3-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; padding: 8px; background: #111; border-radius: 4px; }
-    .files { margin-top: 8px; }
-    .file-item { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-    .file-item span { font-size: 12px; color: #888; background: #111; padding: 2px 6px; border-radius: 4px; }
-    .audio-player { width: 100%; margin-top: 4px; }
-    .audio-player audio { width: 100%; height: 32px; }
-    .empty { text-align: center; padding: 48px; color: #555; }
-    .error { color: #e67d7d; font-size: 13px; margin-top: 8px; }
-    .devices { font-size: 13px; color: #888; margin-bottom: 16px; }
-    .collapsible { cursor: pointer; user-select: none; }
-    .collapsible::before { content: '\25B6'; display: inline-block; margin-right: 6px; font-size: 10px; transition: transform 0.15s; }
-    .collapsible.open::before { transform: rotate(90deg); }
-    .pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 16px; padding: 12px; }
-    .pagination button { padding: 6px 14px; }
-    .pagination .page-info { font-size: 13px; color: #888; }
+    @keyframes pulse-recording { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .animate-pulse-recording { animation: pulse-recording 1.5s ease-in-out infinite; }
+    audio::-webkit-media-controls-panel { background: transparent; }
+    .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+    .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+    .sidebar-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+    @media (prefers-color-scheme: dark) {
+      .sidebar-scroll::-webkit-scrollbar-thumb { background: #374151; }
+    }
   </style>
 </head>
-<body>
-  <div id="root"></div>
+<body class="h-full bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100 antialiased overflow-hidden">
+  <div id="root" class="h-full"></div>
   <script type="importmap">
     {
       "imports": {
@@ -68,12 +34,30 @@
     }
   </script>
   <script type="module">
-    import { useState, useEffect, useCallback, useRef } from 'react';
+    import { useState, useEffect, useCallback, useMemo } from 'react';
     import { createRoot } from 'react-dom/client';
-    import { jsx, jsxs, Fragment } from 'react/jsx-runtime';
+    import { jsx, jsxs as _jsxs, Fragment } from 'react/jsx-runtime';
+    // Wrapper: filter false/null/undefined from children arrays (jsx-runtime doesn't do this)
+    // Also extracts 'key' to avoid React 19 warning about key in spread
+    function jsxs(type, props, key) {
+      if (props.children && Array.isArray(props.children)) {
+        const { key: k, ...rest } = props;
+        const finalKey = key ?? k;
+        const filtered = rest.children.filter(c => c != null && c !== false);
+        if (filtered.length === 0) {
+          const { children, ...noChildren } = rest;
+          return jsx(type, noChildren, finalKey);
+        }
+        if (filtered.length === 1) {
+          return jsx(type, { ...rest, children: filtered[0] }, finalKey);
+        }
+        return _jsxs(type, { ...rest, children: filtered }, finalKey);
+      }
+      return _jsxs(type, props, key);
+    }
 
     const API = window.location.origin;
-    const PAGE_SIZE = 20;
+    const PAGE_SIZE = 50;
 
     async function api(path, opts = {}) {
       const res = await fetch(`${API}${path}`, {
@@ -88,27 +72,304 @@
       return res.json();
     }
 
-    function AudioPlayer({ sessionId, filename }) {
-      const src = `${API}/sessions/${sessionId}/files/${encodeURIComponent(filename)}`;
-      const label = filename.includes('_mic.') ? 'Mic' :
-                    filename.includes('_system.') ? 'System' :
-                    filename.replace(/^.*_/, '').replace(/\.[^.]+$/, '');
-
-      return jsx('div', { className: 'audio-player', children: jsxs(Fragment, { children: [
-        jsx('div', { style: { fontSize: '12px', color: '#888', marginBottom: '2px' }, children: label }),
-        jsx('audio', {
-          controls: true,
-          preload: 'none',
-          src,
-          style: { width: '100%', height: '32px' },
-        }),
-      ]})});
+    function useIsMobile() {
+      const [mobile, setMobile] = useState(window.innerWidth < 768);
+      useEffect(() => {
+        const mq = window.matchMedia('(max-width: 767px)');
+        const handler = (e) => setMobile(e.matches);
+        mq.addEventListener('change', handler);
+        return () => mq.removeEventListener('change', handler);
+      }, []);
+      return mobile;
     }
 
-    function SessionCard({ session, onRefresh }) {
+    // ── Icons ──
+
+    function ChevronIcon({ open }) {
+      return jsx('svg', {
+        xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+        className: `w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`,
+        children: jsx('path', {
+          fillRule: 'evenodd', clipRule: 'evenodd',
+          d: 'M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z',
+        }),
+      });
+    }
+
+    const PlusIcon = () => jsx('svg', {
+      xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+      children: jsx('path', { d: 'M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z' }),
+    });
+
+    const CloseIcon = () => jsx('svg', {
+      xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+      children: jsx('path', { d: 'M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z' }),
+    });
+
+    const MenuIcon = () => jsx('svg', {
+      xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-5 h-5',
+      children: jsx('path', {
+        fillRule: 'evenodd', clipRule: 'evenodd',
+        d: 'M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zm0 5A.75.75 0 012.75 9h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 9.75zm0 5a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75z',
+      }),
+    });
+
+    const BackIcon = () => jsx('svg', {
+      xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-5 h-5',
+      children: jsx('path', {
+        fillRule: 'evenodd', clipRule: 'evenodd',
+        d: 'M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 011.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z',
+      }),
+    });
+
+    const PlayIcon = () => jsx('svg', {
+      xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+      children: jsx('path', { d: 'M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z' }),
+    });
+
+    const StopIcon = () => jsx('svg', {
+      xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+      children: jsx('path', {
+        fillRule: 'evenodd', clipRule: 'evenodd',
+        d: 'M2 10a8 8 0 1116 0 8 8 0 01-16 0zm5-2.25A.75.75 0 017.75 7h4.5a.75.75 0 01.75.75v4.5a.75.75 0 01-.75.75h-4.5a.75.75 0 01-.75-.75v-4.5z',
+      }),
+    });
+
+    // ── Helpers ──
+
+    function StateBadge({ state, small }) {
+      const styles = {
+        created: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+        recording: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 animate-pulse-recording',
+        stopped: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+      };
+      const size = small ? 'px-1.5 py-0 text-[10px]' : 'px-2 py-0.5 text-xs';
+      return jsx('span', {
+        className: `inline-flex items-center rounded-full font-medium ${size} ${styles[state] || ''}`,
+        children: state,
+      });
+    }
+
+    function formatTime(iso) {
+      const d = new Date(iso);
+      const now = new Date();
+      const diff = now - d;
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+      if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+      if (d.getFullYear() === now.getFullYear()) {
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      }
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function typeBadgeColor(type) {
+      const c = {
+        mic: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400',
+        system_mix: 'bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400',
+        app: 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400',
+      };
+      return c[type] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
+    }
+
+    const INPUT_CLS = 'w-full rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors';
+    const LABEL_CLS = 'block text-[11px] font-medium text-gray-400 dark:text-gray-500 mb-0.5 uppercase tracking-wider';
+
+    // ── Sidebar Session Item ──
+
+    function SidebarItem({ session, selected, onClick }) {
+      const s = session;
+      return jsx('button', {
+        onClick,
+        className: [
+          'w-full text-left px-3 py-2.5 rounded-lg transition-colors',
+          selected
+            ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
+            : 'hover:bg-gray-100 dark:hover:bg-gray-800/60 border border-transparent',
+        ].join(' '),
+        children: jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
+          jsxs('div', { className: 'min-w-0 flex-1', children: [
+            jsxs('div', { className: 'flex items-center gap-2', children: [
+              jsx('code', {
+                className: `text-xs font-mono ${selected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-500 dark:text-gray-400'}`,
+                children: s.id.slice(0, 8),
+              }),
+              jsx(StateBadge, { state: s.state, small: true }),
+            ]}),
+            jsx('p', {
+              className: 'text-[11px] text-gray-400 dark:text-gray-500 mt-0.5',
+              children: formatTime(s.updated_at || s.created_at),
+            }),
+          ]}),
+          s.state === 'recording' && jsx('span', {
+            className: 'w-2 h-2 rounded-full bg-red-500 animate-pulse-recording flex-shrink-0',
+          }),
+        ]}),
+      });
+    }
+
+    // ── New Session Form ──
+
+    function NewSessionPanel({ sources: availableSources, fields, onCreated, onSelect }) {
+      // Initialize field values from backend defaults
+      const fieldEntries = useMemo(() => Object.entries(fields || {}), [fields]);
+      const initVals = useMemo(() => {
+        const v = {};
+        for (const [k, f] of fieldEntries) v[k] = f.default ?? '';
+        return v;
+      }, [fieldEntries]);
+
+      const [vals, setVals] = useState(initVals);
+      const [selectedSources, setSelectedSources] = useState([]);
+      const [showAdvanced, setShowAdvanced] = useState(false);
+      const [error, setError] = useState(null);
+      const [creating, setCreating] = useState(false);
+
+      // Re-init when fields arrive from backend
+      useEffect(() => { if (fieldEntries.length) setVals(initVals); }, [initVals]);
+
+      useEffect(() => {
+        if (availableSources.length > 0 && selectedSources.length === 0) {
+          setSelectedSources(availableSources.filter(s => s.default_selected).map(s => s.id));
+        }
+      }, [availableSources]);
+
+      function setVal(key, value) { setVals(prev => ({ ...prev, [key]: value })); }
+      function toggleSource(id) {
+        setSelectedSources(prev =>
+          prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+      }
+
+      // Check if a field should be visible given current values
+      function isVisible(f) {
+        if (!f.show_when) return true;
+        return vals[f.show_when.field] === f.show_when.value;
+      }
+
+      // Build request body, mapping config_path fields into nested objects
+      function buildBody() {
+        const body = { sources: selectedSources };
+        for (const [key, f] of fieldEntries) {
+          const v = vals[key];
+          if (v === '' && f.type !== 'text') continue;
+          if (f.config_path) {
+            const parts = f.config_path.split('.');
+            let obj = body;
+            for (let i = 0; i < parts.length - 1; i++) {
+              if (!obj[parts[i]]) obj[parts[i]] = {};
+              obj = obj[parts[i]];
+            }
+            obj[parts[parts.length - 1]] = typeof f.default === 'number' ? Number(v) : v;
+          } else {
+            body[key] = typeof f.default === 'number' ? Number(v) : v;
+          }
+        }
+        return body;
+      }
+
+      async function create() {
+        setError(null);
+        setCreating(true);
+        try {
+          const session = await api('/sessions', { method: 'POST', body: JSON.stringify(buildBody()) });
+          await onCreated();
+          if (session && session.id) onSelect(session.id);
+        } catch (e) { setError(e.message); }
+        finally { setCreating(false); }
+      }
+
+      // Render a single config field
+      function renderField(key, f) {
+        if (!isVisible(f)) return null;
+        const label = jsx('label', { className: LABEL_CLS, title: f.description, children: f.label });
+        let input;
+        if (f.type === 'select') {
+          input = jsxs('select', {
+            value: vals[key],
+            onChange: e => setVal(key, typeof f.default === 'number' ? Number(e.target.value) : e.target.value),
+            className: INPUT_CLS, title: f.description,
+            children: (f.options || []).map(o => jsx('option', { key: o.value, value: o.value, children: o.label })),
+          });
+        } else if (f.type === 'textarea') {
+          input = jsx('textarea', {
+            value: vals[key], onChange: e => setVal(key, e.target.value),
+            placeholder: f.placeholder || '', className: INPUT_CLS + ' resize-y min-h-[48px]', rows: 2,
+            title: f.description,
+          });
+        } else {
+          input = jsx('input', {
+            value: vals[key], onChange: e => setVal(key, e.target.value),
+            placeholder: f.placeholder || f.default || '', className: INPUT_CLS,
+            title: f.description,
+          });
+        }
+        return jsxs('div', { key, children: [label, input] });
+      }
+
+      // Split fields into basic and advanced
+      const basicFields = fieldEntries.filter(([, f]) => !f.advanced);
+      const advancedFields = fieldEntries.filter(([, f]) => f.advanced);
+      const visibleAdvanced = advancedFields.filter(([, f]) => isVisible(f));
+
+      return jsxs('div', { className: 'space-y-3', children: [
+        jsx('div', { className: `grid grid-cols-${Math.min(basicFields.length, 2)} gap-2`,
+          children: basicFields.map(([k, f]) => renderField(k, f)),
+        }),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Sources' }),
+          jsx('div', { className: 'space-y-0.5', children:
+            availableSources.map(s => jsx('label', {
+              key: s.id,
+              className: 'flex items-center gap-2 py-1 px-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800/50 cursor-pointer transition-colors',
+              children: jsxs(Fragment, { children: [
+                jsx('input', {
+                  type: 'checkbox',
+                  checked: selectedSources.includes(s.id),
+                  onChange: () => toggleSource(s.id),
+                  className: 'rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500/40 h-3.5 w-3.5',
+                }),
+                jsx('span', { className: 'text-xs text-gray-700 dark:text-gray-300 flex-1 truncate', children: s.label }),
+                jsx('span', {
+                  className: `text-[9px] font-medium px-1 py-0 rounded-full ${typeBadgeColor(s.source_type)}`,
+                  children: s.source_type === 'system_mix' ? 'sys' : s.source_type,
+                }),
+              ]}),
+            })),
+          }),
+        ]}),
+        visibleAdvanced.length > 0 && jsx('button', {
+          className: 'flex items-center gap-1 text-[11px] text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors',
+          onClick: () => setShowAdvanced(!showAdvanced),
+          children: jsxs(Fragment, { children: [jsx(ChevronIcon, { open: showAdvanced }), 'Advanced'] }),
+        }),
+        showAdvanced && jsx('div', { className: 'space-y-2',
+          children: advancedFields.map(([k, f]) => renderField(k, f)),
+        }),
+        jsx('button', {
+          onClick: create, disabled: creating,
+          className: 'w-full flex justify-center items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors',
+          children: creating ? 'Creating...' : 'Create Session',
+        }),
+        error && jsx('p', { className: 'text-xs text-red-500', children: error }),
+      ]});
+    }
+
+    // ── Session Detail (main panel) ──
+
+    function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile }) {
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
-      const [showDetails, setShowDetails] = useState(false);
+
+      if (!session) {
+        return jsx('div', {
+          className: 'h-full flex items-center justify-center px-4',
+          children: jsx('p', {
+            className: 'text-gray-400 dark:text-gray-600 text-sm text-center',
+            children: 'Select a session or create a new one',
+          }),
+        });
+      }
 
       async function action(fn) {
         setLoading(true);
@@ -119,232 +380,372 @@
       }
 
       const s = session;
-      const badgeClass = `badge badge-${s.state}`;
-      const hasAudioFiles = s.state === 'stopped' && s.files.length > 0;
+      const audioFiles = s.files.filter(f => f.endsWith('.wav') || f.endsWith('.mp3'));
+      const hasAudio = s.state === 'stopped' && audioFiles.length > 0;
 
-      return jsx('div', { className: 'card', children: jsxs(Fragment, { children: [
-        jsxs('div', { className: 'card-header', children: [
-          jsx('code', { children: s.id.slice(0, 8) }),
-          jsx('span', { className: badgeClass, children: s.state }),
-        ]}),
-        jsxs('div', { className: 'meta', children: [
-          `Created: ${new Date(s.created_at).toLocaleString()}`,
-          s.updated_at !== s.created_at ? ` \u00b7 Updated: ${new Date(s.updated_at).toLocaleString()}` : '',
-        ]}),
-        jsx('div', {
-          className: `meta collapsible ${showDetails ? 'open' : ''}`,
-          onClick: () => setShowDetails(!showDetails),
-          children: 'Settings',
-        }),
-        showDetails && jsx('div', { className: 'meta-grid', children: [
-          jsx('span', { className: 'label', children: 'Language' }),
-          jsx('span', { className: 'value', children: s.language }),
-          jsx('span', { className: 'label', children: 'Format' }),
-          jsx('span', { className: 'value', children: s.format }),
-          jsx('span', { className: 'label', children: 'Sample Rate' }),
-          jsx('span', { className: 'value', children: `${s.sample_rate} Hz` }),
-          s.format === 'mp3' && jsx(Fragment, { children: [
-            jsx('span', { className: 'label', children: 'MP3 Bitrate' }),
-            jsx('span', { className: 'value', children: `${s.mp3.bitrate_kbps} kbps` }),
-            jsx('span', { className: 'label', children: 'MP3 Sample Rate' }),
-            jsx('span', { className: 'value', children: `${s.mp3.sample_rate} Hz` }),
-          ]}),
-          s.mic_device && jsx(Fragment, { children: [
-            jsx('span', { className: 'label', children: 'Mic Device' }),
-            jsx('span', { className: 'value', children: s.mic_device }),
-          ]}),
-          s.summarization_instruction && jsx(Fragment, { children: [
-            jsx('span', { className: 'label', children: 'Summarization' }),
-            jsx('span', { className: 'value', children: s.summarization_instruction }),
-          ]}),
-        ]}),
-        s.files.length > 0 && !hasAudioFiles && jsx('div', { className: 'files', children:
-          s.files.map(f => jsx('span', { key: f, children: f }))
-        }),
-        hasAudioFiles && jsx('div', { className: 'files', style: { marginTop: '12px' }, children:
-          s.files.map(f => jsx(AudioPlayer, { key: f, sessionId: s.id, filename: f }))
-        }),
-        jsxs('div', { className: 'actions', children: [
-          s.state === 'created' && jsx('button', {
-            className: 'btn-primary', disabled: loading,
-            onClick: () => action(() => api(`/sessions/${s.id}/recording/start`, { method: 'POST' })),
-            children: 'Start Recording',
+      return jsx('div', {
+        className: 'h-full flex flex-col',
+        children: jsxs(Fragment, { children: [
+          // Header
+          jsxs('div', {
+            className: 'flex-shrink-0 px-4 md:px-6 py-3 md:py-4 border-b border-gray-200 dark:border-gray-800',
+            children: [
+              // Top row: back + ID + badge
+              jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
+                jsxs('div', { className: 'flex items-center gap-2 min-w-0', children: [
+                  isMobile && jsx('button', {
+                    onClick: onBack,
+                    className: 'p-1 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors',
+                    children: jsx(BackIcon, {}),
+                  }),
+                  jsx('h2', { className: 'text-base md:text-lg font-semibold tracking-tight flex-shrink-0', children: 'Session' }),
+                  jsx('code', { className: 'text-xs md:text-sm font-mono text-gray-500 dark:text-gray-400 truncate', children: s.id.slice(0, 8) }),
+                  jsx(StateBadge, { state: s.state }),
+                ]}),
+                // Action buttons
+                jsxs('div', { className: 'flex items-center gap-1.5 md:gap-2 flex-shrink-0', children: [
+                  s.state === 'created' && jsx('button', {
+                    disabled: loading,
+                    onClick: () => action(() => api(`/sessions/${s.id}/recording/start`, { method: 'POST' })),
+                    className: 'inline-flex items-center gap-1.5 px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 transition-colors',
+                    children: jsxs(Fragment, { children: [jsx(PlayIcon, {}), isMobile ? null : 'Record'] }),
+                  }),
+                  s.state === 'recording' && jsx('button', {
+                    disabled: loading,
+                    onClick: () => action(() => api(`/sessions/${s.id}/recording/stop`, { method: 'POST' })),
+                    className: 'inline-flex items-center gap-1.5 px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-40 transition-colors',
+                    children: jsxs(Fragment, { children: [jsx(StopIcon, {}), isMobile ? null : 'Stop'] }),
+                  }),
+                  jsx('button', {
+                    disabled: loading,
+                    onClick: () => action(async () => {
+                      await api(`/sessions/${s.id}`, { method: 'DELETE' });
+                      onDeleted();
+                    }),
+                    className: 'inline-flex items-center px-2.5 md:px-3 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-40 transition-colors',
+                    children: 'Delete',
+                  }),
+                ]}),
+              ]}),
+              error && jsx('p', { className: 'mt-2 text-sm text-red-500', children: error }),
+            ],
           }),
-          s.state === 'recording' && jsx('button', {
-            className: 'btn-stop', disabled: loading,
-            onClick: () => action(() => api(`/sessions/${s.id}/recording/stop`, { method: 'POST' })),
-            children: 'Stop Recording',
-          }),
-          jsx('button', {
-            className: 'btn-danger', disabled: loading,
-            onClick: () => action(() => api(`/sessions/${s.id}`, { method: 'DELETE' })),
-            children: 'Delete',
+
+          // Content
+          jsx('div', {
+            className: 'flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5',
+            children: jsxs('div', { className: 'max-w-3xl space-y-4 md:space-y-6', children: [
+
+              // Info grid
+              jsx('div', {
+                className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
+                children: jsxs('div', {
+                  className: 'grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4',
+                  children: [
+                    jsxs('div', { children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Language' }),
+                      jsx('p', { className: 'text-sm font-medium', children: s.language }),
+                    ]}),
+                    jsxs('div', { children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Format' }),
+                      jsx('p', { className: 'text-sm font-medium', children: `${s.format.toUpperCase()} / ${s.sample_rate} Hz` }),
+                    ]}),
+                    s.format === 'mp3' && jsxs('div', { children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'MP3' }),
+                      jsx('p', { className: 'text-sm font-medium', children: `${s.mp3.bitrate_kbps} kbps @ ${s.mp3.sample_rate} Hz` }),
+                    ]}),
+                    jsxs('div', { children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Created' }),
+                      jsx('p', { className: 'text-sm font-medium', children: new Date(s.created_at).toLocaleString() }),
+                    ]}),
+                    s.updated_at !== s.created_at && jsxs('div', { children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Updated' }),
+                      jsx('p', { className: 'text-sm font-medium', children: new Date(s.updated_at).toLocaleString() }),
+                    ]}),
+                    s.sources && s.sources.length > 0 && jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1', children: 'Sources' }),
+                      jsx('div', { className: 'flex flex-wrap gap-1.5', children:
+                        s.sources.map(src => jsx('span', {
+                          key: src,
+                          className: 'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+                          children: src,
+                        })),
+                      }),
+                    ]}),
+                    s.summarization_instruction && jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
+                      jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Summarization' }),
+                      jsx('p', { className: 'text-sm text-gray-600 dark:text-gray-400', children: s.summarization_instruction }),
+                    ]}),
+                  ],
+                }),
+              }),
+
+              // Recording indicator
+              s.state === 'recording' && jsx('div', {
+                className: 'rounded-xl border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/10 p-4 md:p-5',
+                children: jsxs(Fragment, { children: [
+                  jsxs('div', { className: 'flex items-center gap-2 mb-3', children: [
+                    jsx('span', { className: 'w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse-recording' }),
+                    jsx('p', { className: 'text-sm font-medium text-red-700 dark:text-red-300', children: 'Recording in progress' }),
+                  ]}),
+                  s.files.length > 0 && jsx('div', { className: 'flex flex-wrap gap-1.5', children:
+                    s.files.map(f => jsx('span', {
+                      key: f,
+                      className: 'inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 font-mono',
+                      children: f,
+                    })),
+                  }),
+                ]}),
+              }),
+
+              // Audio files
+              hasAudio && jsx('div', {
+                className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
+                children: jsxs(Fragment, { children: [
+                  jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3', children: 'Recordings' }),
+                  jsx('div', { className: 'space-y-3', children:
+                    audioFiles.map(f => {
+                      const src = `${API}/sessions/${s.id}/files/${encodeURIComponent(f)}`;
+                      const ext = f.split('.').pop();
+                      const label = f.replace(`.${ext}`, '').replace(/_/g, ' ');
+                      return jsxs('div', { key: f, className: 'space-y-1', children: [
+                        jsx('p', { className: 'text-xs text-gray-500 dark:text-gray-400 capitalize font-medium', children: label }),
+                        jsx('audio', { controls: true, preload: 'none', src, className: 'w-full h-10 rounded-lg' }),
+                      ]});
+                    }),
+                  }),
+                ]}),
+              }),
+
+              // All files
+              s.files.length > 0 && s.state === 'stopped' && jsx('div', {
+                className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
+                children: jsxs(Fragment, { children: [
+                  jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2', children: 'All Files' }),
+                  jsx('div', { className: 'space-y-1', children:
+                    s.files.map(f => jsxs('div', {
+                      key: f,
+                      className: 'flex items-center justify-between py-1 gap-2',
+                      children: [
+                        jsx('span', { className: 'text-sm font-mono text-gray-600 dark:text-gray-400 truncate min-w-0', children: f }),
+                        jsx('a', {
+                          href: `${API}/sessions/${s.id}/files/${encodeURIComponent(f)}`,
+                          target: '_blank',
+                          className: 'text-xs text-blue-600 dark:text-blue-400 hover:underline flex-shrink-0',
+                          children: 'download',
+                        }),
+                      ],
+                    })),
+                  }),
+                ]}),
+              }),
+
+              jsxs('p', {
+                className: 'text-[11px] text-gray-300 dark:text-gray-700 font-mono break-all',
+                children: ['ID: ', s.id],
+              }),
+            ]}),
           }),
         ]}),
-        error && jsx('div', { className: 'error', children: error }),
-      ]})});
+      });
     }
 
-    function NewSessionForm({ devices, onCreated }) {
-      const [language, setLanguage] = useState('en');
-      const [format, setFormat] = useState('wav');
-      const [sampleRate, setSampleRate] = useState(48000);
-      const [mp3Bitrate, setMp3Bitrate] = useState(64);
-      const [mp3SampleRate, setMp3SampleRate] = useState(16000);
-      const [micDevice, setMicDevice] = useState('');
-      const [summarization, setSummarization] = useState('');
-      const [showAdvanced, setShowAdvanced] = useState(false);
-      const [error, setError] = useState(null);
+    // ── Sidebar ──
 
-      async function create() {
-        setError(null);
-        const body = { language, format, sample_rate: sampleRate };
-        if (format === 'mp3') {
-          body.mp3 = { bitrate_kbps: mp3Bitrate, sample_rate: mp3SampleRate };
-        }
-        if (micDevice) body.mic_device = micDevice;
-        if (summarization.trim()) body.summarization_instruction = summarization.trim();
-        try {
-          await api('/sessions', { method: 'POST', body: JSON.stringify(body) });
-          await onCreated();
-        } catch (e) { setError(e.message); }
+    function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageChange, sources, fields, onCreated, showNew, setShowNew }) {
+      const toggleBtnCls = [
+        'w-7 h-7 flex items-center justify-center rounded-lg transition-colors',
+        showNew
+          ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+          : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-600 dark:hover:text-gray-300',
+      ].join(' ');
+
+      const header = jsx('div', {
+        key: 'header',
+        className: 'flex-shrink-0 px-4 py-3 md:py-4 border-b border-gray-100 dark:border-gray-800',
+        children: jsxs('div', { className: 'flex items-center justify-between', children: [
+          jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Meeting Notes' }),
+          jsx('button', {
+            onClick: () => setShowNew(!showNew),
+            className: toggleBtnCls,
+            title: showNew ? 'Close' : 'New session',
+            children: showNew ? jsx(CloseIcon, {}) : jsx(PlusIcon, {}),
+          }),
+        ]}),
+      });
+
+      const sidebarChildren = [header];
+
+      // New session form
+      if (showNew) {
+        sidebarChildren.push(jsx('div', {
+          key: 'new-form',
+          className: 'px-3 py-3 border-b border-gray-100 dark:border-gray-800',
+          children: jsx(NewSessionPanel, {
+            sources, fields,
+            onCreated: async () => { await onCreated(); },
+            onSelect: (id) => { setShowNew(false); onSelect(id); },
+          }),
+        }));
       }
 
-      return jsx('div', { className: 'new-session card', children: jsxs(Fragment, { children: [
-        jsx('h2', { children: 'New Session' }),
-        jsxs('div', { className: 'form-grid', children: [
-          jsxs('div', { className: 'form-group', children: [
-            jsx('label', { children: 'Language' }),
-            jsx('input', { value: language, onChange: e => setLanguage(e.target.value), placeholder: 'en, zh, ja...' }),
-          ]}),
-          jsxs('div', { className: 'form-group', children: [
-            jsx('label', { children: 'Format' }),
-            jsxs('select', { value: format, onChange: e => setFormat(e.target.value), children: [
-              jsx('option', { value: 'wav', children: 'WAV' }),
-              jsx('option', { value: 'mp3', children: 'MP3' }),
-            ]}),
-          ]}),
-          format === 'mp3' && jsxs(Fragment, { children: [
-            jsxs('div', { className: 'form-group', children: [
-              jsx('label', { children: 'MP3 Bitrate (kbps)' }),
-              jsxs('select', { value: mp3Bitrate, onChange: e => setMp3Bitrate(Number(e.target.value)), children: [
-                jsx('option', { value: 32, children: '32' }),
-                jsx('option', { value: 48, children: '48' }),
-                jsx('option', { value: 64, children: '64' }),
-                jsx('option', { value: 96, children: '96' }),
-                jsx('option', { value: 128, children: '128' }),
-                jsx('option', { value: 192, children: '192' }),
-                jsx('option', { value: 256, children: '256' }),
-                jsx('option', { value: 320, children: '320' }),
-              ]}),
-            ]}),
-            jsxs('div', { className: 'form-group', children: [
-              jsx('label', { children: 'MP3 Sample Rate (Hz)' }),
-              jsxs('select', { value: mp3SampleRate, onChange: e => setMp3SampleRate(Number(e.target.value)), children: [
-                jsx('option', { value: 8000, children: '8000' }),
-                jsx('option', { value: 16000, children: '16000' }),
-                jsx('option', { value: 22050, children: '22050' }),
-                jsx('option', { value: 44100, children: '44100' }),
-                jsx('option', { value: 48000, children: '48000' }),
-              ]}),
-            ]}),
-          ]}),
-        ]}),
-        jsx('div', {
-          className: `meta collapsible ${showAdvanced ? 'open' : ''}`,
-          onClick: () => setShowAdvanced(!showAdvanced),
-          style: { marginBottom: showAdvanced ? '8px' : '12px' },
-          children: 'Advanced',
-        }),
-        showAdvanced && jsxs('div', { className: 'form-grid', style: { marginBottom: '12px' }, children: [
-          jsxs('div', { className: 'form-group', children: [
-            jsx('label', { children: 'Sample Rate (Hz)' }),
-            jsxs('select', { value: sampleRate, onChange: e => setSampleRate(Number(e.target.value)), children: [
-              jsx('option', { value: 16000, children: '16000' }),
-              jsx('option', { value: 22050, children: '22050' }),
-              jsx('option', { value: 44100, children: '44100' }),
-              jsx('option', { value: 48000, children: '48000' }),
-            ]}),
-          ]}),
-          jsxs('div', { className: 'form-group', children: [
-            jsx('label', { children: 'Mic Device' }),
-            jsxs('select', { value: micDevice, onChange: e => setMicDevice(e.target.value), children: [
-              jsx('option', { value: '', children: 'Default' }),
-              ...devices.map(d => jsx('option', { key: d, value: d, children: d })),
-            ]}),
-          ]}),
-          jsxs('div', { className: 'form-group full', children: [
-            jsx('label', { children: 'Summarization Instruction' }),
-            jsx('textarea', { value: summarization, onChange: e => setSummarization(e.target.value), placeholder: 'Custom prompt for LLM summarization and todo extraction...' }),
-          ]}),
-        ]}),
-        jsx('button', { className: 'btn-primary', onClick: create, children: 'Create Session' }),
-        error && jsx('div', { className: 'error', children: error }),
-      ]})});
+      // Sessions list
+      sidebarChildren.push(jsx('div', {
+        key: 'list',
+        className: 'flex-1 overflow-y-auto sidebar-scroll px-2 py-2 space-y-0.5',
+        children: sessions.length === 0
+          ? jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-600 text-center py-8', children: 'No sessions yet' })
+          : sessions.map(s => jsx(SidebarItem, {
+              key: s.id, session: s,
+              selected: s.id === selectedId,
+              onClick: () => onSelect(s.id),
+            })),
+      }));
+
+      // Pagination
+      if (total > PAGE_SIZE) {
+        sidebarChildren.push(jsxs('div', {
+          key: 'pagination',
+          className: 'flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-100 dark:border-gray-800 text-[11px] text-gray-400 dark:text-gray-500',
+          children: [
+            jsx('button', {
+              disabled: offset === 0,
+              onClick: () => onPageChange(Math.max(0, offset - PAGE_SIZE)),
+              className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
+              children: 'Prev',
+            }),
+            jsx('span', { children: `${Math.floor(offset / PAGE_SIZE) + 1} / ${Math.ceil(total / PAGE_SIZE)}` }),
+            jsx('button', {
+              disabled: offset + PAGE_SIZE >= total,
+              onClick: () => onPageChange(offset + PAGE_SIZE),
+              className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
+              children: 'Next',
+            }),
+          ],
+        }));
+      }
+
+      return jsx('div', {
+        className: 'h-full flex flex-col bg-white dark:bg-gray-900 md:border-r border-gray-200 dark:border-gray-800',
+        children: sidebarChildren,
+      });
     }
 
-    function Pagination({ total, limit, offset, onChange }) {
-      if (total <= limit) return null;
-
-      const currentPage = Math.floor(offset / limit) + 1;
-      const totalPages = Math.ceil(total / limit);
-
-      return jsxs('div', { className: 'pagination', children: [
-        jsx('button', {
-          disabled: offset === 0,
-          onClick: () => onChange(Math.max(0, offset - limit)),
-          children: 'Previous',
-        }),
-        jsx('span', { className: 'page-info', children: `Page ${currentPage} of ${totalPages} (${total} sessions)` }),
-        jsx('button', {
-          disabled: offset + limit >= total,
-          onClick: () => onChange(offset + limit),
-          children: 'Next',
-        }),
-      ]});
-    }
+    // ── App ──
 
     function App() {
       const [sessions, setSessions] = useState([]);
       const [total, setTotal] = useState(0);
       const [offset, setOffset] = useState(0);
-      const [devices, setDevices] = useState([]);
-      const [error, setError] = useState(null);
+      const [sources, setSources] = useState([]);
+      const [fields, setFields] = useState({});
+      const [selectedId, setSelectedId] = useState(null);
+      const [showNew, setShowNew] = useState(false);
+      // Mobile: which view is showing — 'list' or 'detail'
+      const [mobileView, setMobileView] = useState('list');
+      const isMobile = useIsMobile();
 
       const refresh = useCallback(async (currentOffset) => {
         try {
           const data = await api(`/sessions?limit=${PAGE_SIZE}&offset=${currentOffset ?? offset}`);
           setSessions(data.sessions);
           setTotal(data.total);
-        } catch (e) { setError(e.message); }
+        } catch (e) { /* ignore polling errors */ }
       }, [offset]);
 
       useEffect(() => {
         refresh();
-        api('/devices').then(d => setDevices(d.devices || [])).catch(() => {});
+        api('/config').then(d => { setSources(d.sources || []); setFields(d.fields || {}); }).catch(() => {});
         const interval = setInterval(() => refresh(), 2000);
         return () => clearInterval(interval);
       }, [refresh]);
+
+      // Auto-select first recording session or first session
+      useEffect(() => {
+        if (sessions.length > 0 && !selectedId) {
+          const recording = sessions.find(s => s.state === 'recording');
+          setSelectedId(recording ? recording.id : sessions[0].id);
+        }
+      }, [sessions]);
+
+      function handleSelect(id) {
+        setSelectedId(id);
+        if (isMobile) setMobileView('detail');
+      }
+
+      function handleBack() {
+        setMobileView('list');
+      }
 
       function handlePageChange(newOffset) {
         setOffset(newOffset);
         refresh(newOffset);
       }
 
-      async function handleCreated() {
-        setOffset(0);
-        await refresh(0);
+      function handleDeleted() {
+        setSelectedId(null);
+        if (isMobile) setMobileView('list');
       }
 
-      return jsx('div', { className: 'container', children: jsxs(Fragment, { children: [
-        jsx('h1', { children: 'Meeting Notes' }),
-        jsx(NewSessionForm, { devices, onCreated: handleCreated }),
-        error && jsx('div', { className: 'error', children: error }),
-        sessions.length === 0
-          ? jsx('div', { className: 'empty', children: 'No sessions yet. Create one to start recording.' })
-          : sessions.map(s => jsx(SessionCard, { key: s.id, session: s, onRefresh: refresh })),
-        jsx(Pagination, { total, limit: PAGE_SIZE, offset, onChange: handlePageChange }),
-      ]})});
+      const selectedSession = sessions.find(s => s.id === selectedId) || null;
+
+      // ── Mobile layout: full-screen views ──
+      if (isMobile) {
+        if (mobileView === 'detail' && selectedSession) {
+          return jsx('div', {
+            className: 'h-full bg-gray-50 dark:bg-gray-950',
+            children: jsx(SessionDetail, {
+              session: selectedSession,
+              onRefresh: refresh,
+              onDeleted: handleDeleted,
+              onBack: handleBack,
+              isMobile: true,
+            }),
+          });
+        }
+        // List view
+        return jsx('div', {
+          className: 'h-full',
+          children: jsx(Sidebar, {
+            sessions, total, offset,
+            selectedId,
+            onSelect: handleSelect,
+            onPageChange: handlePageChange,
+            sources, fields,
+            onCreated: async () => { setOffset(0); await refresh(0); },
+            showNew, setShowNew,
+          }),
+        });
+      }
+
+      // ── Desktop layout: side-by-side ──
+      return jsxs('div', {
+        className: 'h-full flex',
+        children: [
+          jsx('div', {
+            className: 'w-72 flex-shrink-0 h-full',
+            children: jsx(Sidebar, {
+              sessions, total, offset,
+              selectedId,
+              onSelect: handleSelect,
+              onPageChange: handlePageChange,
+              sources,
+              onCreated: async () => { setOffset(0); await refresh(0); },
+              showNew, setShowNew,
+            }),
+          }),
+          jsx('div', {
+            className: 'flex-1 h-full bg-gray-50 dark:bg-gray-950',
+            children: jsx(SessionDetail, {
+              session: selectedSession,
+              onRefresh: refresh,
+              onDeleted: handleDeleted,
+              onBack: handleBack,
+              isMobile: false,
+            }),
+          }),
+        ],
+      });
     }
 
     createRoot(document.getElementById('root')).render(jsx(App, {}));

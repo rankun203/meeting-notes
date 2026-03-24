@@ -6,6 +6,32 @@ use tracing::info;
 use meeting_notes_daemon::server;
 use meeting_notes_daemon::session::SessionManager;
 
+fn install_signal_handlers() {
+    unsafe {
+        for sig in [libc::SIGSEGV, libc::SIGBUS, libc::SIGABRT] {
+            libc::signal(sig, crash_handler as libc::sighandler_t);
+        }
+    }
+}
+
+extern "C" fn crash_handler(sig: libc::c_int) {
+    let name = match sig {
+        libc::SIGSEGV => "SIGSEGV (segmentation fault)",
+        libc::SIGBUS => "SIGBUS (bus error)",
+        libc::SIGABRT => "SIGABRT (abort)",
+        _ => "unknown signal",
+    };
+    eprintln!("\n=== FATAL: {} (signal {}) ===", name, sig);
+    eprintln!("Set RUST_BACKTRACE=1 for a backtrace.");
+    // Print backtrace if available
+    eprintln!("{:?}", std::backtrace::Backtrace::force_capture());
+    // Re-raise with default handler to get the proper exit status
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
 const APP_NAME: &str = "org.rankun.meeting-notes";
 
 fn default_data_dir() -> PathBuf {
@@ -47,6 +73,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    install_signal_handlers();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -67,6 +95,7 @@ async fn main() {
             let recordings_dir = std::fs::canonicalize(&recordings_dir).unwrap_or(recordings_dir);
 
             let manager = SessionManager::new(recordings_dir.clone());
+            manager.load_from_disk().await;
             let app = server::create_router(manager, web_ui);
 
             let addr = format!("{}:{}", host, port);
