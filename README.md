@@ -98,14 +98,6 @@ Open `http://127.0.0.1:33487` in your browser.
 - [ ] Windows support
 - [ ] Linux support
 
-## Platform Support
-
-| Platform | Microphone | System Audio | Status |
-|----------|-----------|--------------|--------|
-| macOS | cpal | Audio Process Tap | Available |
-| Linux | cpal | PipeWire | Planned |
-| Windows | cpal | WASAPI loopback | Planned |
-
 ## Development
 
 ```bash
