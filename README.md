@@ -11,6 +11,7 @@
 - **Multi-source recording** — capture microphone and system audio as separate tracks
 - **Multi-format** — WAV (lossless) and MP3 (CBR) output
 - **Web UI** — built-in single-page client with real-time updates via WebSocket
+- **Low resource usage** — built with Rust; ~3% single-core for WAV, ~25% for MP3 recording
 
 ## Installation
 
