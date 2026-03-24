@@ -102,5 +102,5 @@ Open `http://127.0.0.1:33487` in your browser.
 
 ```bash
 # Run with debug logging
-RUST_LOG=meeting_notes_daemon=debug cargo run -- serve --web-ui
+RUST_BACKTRACE=1 RUST_LOG=meeting_notes_daemon=debug cargo run -- serve --web-ui
 ```
