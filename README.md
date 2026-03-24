@@ -1,60 +1,112 @@
 # meeting-notes
 
-**meeting-notes** is a local meeting recorder daemon with a built-in web UI. It captures microphone and system audio simultaneously, saves recordings per-session, and provides synced multi-track playback.
+**meeting-notes** is a local-first meeting recorder daemon. It captures microphone and system audio as separate tracks, manages recording sessions via a REST API, and serves a built-in web UI as one of its clients.
 
 ![demo](demo.png)
 
 ## Features
 
-- **Multi-source recording** — captures microphone and system audio as separate tracks
-- **WAV and MP3** — record in lossless WAV or compressed MP3 (CBR)
-- **Web UI** — built-in single-page app with real-time updates via WebSocket
-- **Synced playback** — play all tracks together with shared controls and per-track mute
-- **Session management** — create, name, start/stop, delete sessions with persistent metadata
-- **Crash recovery** — metadata.json written at every state transition; sessions restore on restart
-- **macOS system audio** — uses Audio Process Tap API to capture all system output at full volume
+- **REST API** — full resource-based API for session and recording management
+- **Recordings management** — create, name, start/stop, delete sessions with persistent metadata
+- **Multi-source recording** — capture microphone and system audio as separate tracks
+- **Multi-format** — WAV (lossless) and MP3 (CBR) output
+- **Web UI** — built-in single-page client with real-time updates via WebSocket
 
 ## Installation
 
-Requires Rust toolchain.
+Requires [Rust toolchain](https://rustup.rs).
 
 ```bash
-cargo build --release
+cargo install --git https://github.com/rankun203/meeting-notes
 ```
 
 ## Usage
 
 ```bash
 # Start the daemon with web UI
-cargo run -- serve --web-ui
+meeting-notes-daemon serve --web-ui
 
 # Custom port and data directory
-cargo run -- serve --port 8080 --data-dir ~/my-recordings --web-ui
+meeting-notes-daemon serve --port 8080 --data-dir ~/my-recordings --web-ui
 ```
 
 Open `http://127.0.0.1:33487` in your browser.
 
 ## Architecture
 
-- `src/audio/` — audio capture (mic via cpal, system audio via macOS Process Tap), WAV/MP3 writers
-- `src/session/` — session lifecycle, metadata persistence, broadcast events
-- `src/server/` — HTTP API (axum), WebSocket handler, embedded web UI
-- `web/index.html` — single-file React frontend (no build step)
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        meeting-notes daemon                      │
+│                                                                  │
+│  ┌───────────────────────┐    ┌───────────────────────────────┐  │
+│  │   Audio Capture       │    │   REST API + WebSocket        │  │
+│  │                       │    │                               │  │
+│  │  macOS:               │    │  POST /sessions               │  │
+│  │   Mic ── cpal         │    │  POST /sessions/:id/start     │  │
+│  │   System ── ProcessTap│    │  POST /sessions/:id/stop      │  │
+│  │                       │    │  GET  /sessions/:id/files/:f  │  │
+│  │  Linux: (TBD)         │    │  WS   /ws (live updates)      │  │
+│  │   Mic ── cpal         │    │                               │  │
+│  │   System ── PipeWire  │    └──────────┬────────────────────┘  │
+│  │                       │               │                       │
+│  │  Windows: (TBD)       │               │                       │
+│  │   Mic ── cpal         │    ┌──────────▼────────────────────┐  │
+│  │   System ── WASAPI    │    │   Clients                     │  │
+│  │                       │    │                               │  │
+│  └──────────┬────────────┘    │   Web UI (built-in)           │  │
+│             │                 │   Logseq Plugin (planned)     │  │
+│             ▼                 │   Obsidian Plugin (planned)   │  │
+│  ┌───────────────────────┐    │   CLI / custom clients        │  │
+│  │  Writers              │    └───────────────────────────────┘  │
+│  │  WAV (hound)          │                                       │
+│  │  MP3 (LAME)           │                                       │
+│  └──────────┬────────────┘                                       │
+│             │                                                    │
+│             ▼                                                    │
+│  ┌───────────────────────┐    ┌───────────────────────────────┐  │
+│  │  Session Storage      │    │   Transcription (planned)     │  │
+│  │                       │    │                               │  │
+│  │  recordings/          │───▶│   Cloud or local deployment   │  │
+│  │    {id}/              │    │   Speech-to-text API          │  │
+│  │      metadata.json    │    │          │                    │  │
+│  │      mic.mp3          │    │          ▼                    │  │
+│  │      system.mp3       │    │   Meeting summary + TODOs     │  │
+│  └───────────────────────┘    └───────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 ## API
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/config` | Available sources and config options |
-| `POST` | `/sessions` | Create a new session |
-| `GET` | `/sessions` | List sessions |
-| `GET` | `/sessions/:id` | Get session details |
-| `PATCH` | `/sessions/:id` | Rename session |
-| `DELETE` | `/sessions/:id` | Delete session and files |
-| `POST` | `/sessions/:id/recording/start` | Start recording |
-| `POST` | `/sessions/:id/recording/stop` | Stop recording |
-| `GET` | `/sessions/:id/files/:name` | Download/stream a file |
-| `WS` | `/ws` | Real-time session updates |
+| Resource | Method | Endpoint | Description |
+|----------|--------|----------|-------------|
+| Config | `GET` | `/config` | Available sources and config options |
+| Sessions | `POST` | `/sessions` | Create a new session |
+| Sessions | `GET` | `/sessions` | List sessions |
+| Sessions | `GET` | `/sessions/:id` | Get session details |
+| Sessions | `PATCH` | `/sessions/:id` | Rename session |
+| Sessions | `DELETE` | `/sessions/:id` | Delete session and files |
+| Recording | `POST` | `/sessions/:id/recording/start` | Start recording |
+| Recording | `POST` | `/sessions/:id/recording/stop` | Stop recording |
+| Files | `GET` | `/sessions/:id/files/:name` | Download/stream a file |
+| Events | `WS` | `/ws` | Real-time session updates |
+
+## Roadmap
+
+- [ ] Full meeting transcription
+- [ ] Speaker diarization
+- [ ] Meeting summary and TODO extraction
+- [ ] Logseq plugin
+- [ ] Obsidian plugin
+- [ ] Windows support
+- [ ] Linux support
+
+## Platform Support
+
+| Platform | Microphone | System Audio | Status |
+|----------|-----------|--------------|--------|
+| macOS | cpal | Audio Process Tap | Available |
+| Linux | cpal | PipeWire | Planned |
+| Windows | cpal | WASAPI loopback | Planned |
 
 ## Development
 
@@ -62,5 +114,3 @@ Open `http://127.0.0.1:33487` in your browser.
 # Run with debug logging
 RUST_LOG=meeting_notes_daemon=debug cargo run -- serve --web-ui
 ```
-
-The web UI is embedded at compile time via `rust-embed`. Edit `web/index.html` and rebuild to see changes.
