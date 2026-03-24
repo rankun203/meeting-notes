@@ -6,11 +6,13 @@
 
 ## Features
 
-- **REST API** — full resource-based API for session and recording management
-- **Recordings management** — create, name, start/stop, delete sessions with persistent metadata
-- **Multi-source recording** — capture microphone and system audio as separate tracks
+- **Zero setup** — no virtual audio devices or kernel extensions needed, just install and run
+- **Multi-track recording** — capture microphone and system audio simultaneously as separate tracks
+- **Concurrent sessions** — run multiple recording sessions in parallel, each with its own set of audio tracks
 - **Multi-format** — WAV (lossless), MP3 (CBR), and Opus (VBR) output
+- **Recordings management** — create, name, start/stop, delete sessions with persistent metadata
 - **Web UI** — built-in single-page client with real-time updates via WebSocket
+- **REST API** — full resource-based API for session and recording management
 - **Low resource usage** — built with Rust; ~2% CPU for WAV, ~4% for Opus, ~6% for MP3
 
 ## Installation
