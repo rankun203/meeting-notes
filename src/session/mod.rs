@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use self::config::SessionConfig;
-use self::session::{Session, SessionInfo, SessionMetadata, SessionState};
+use self::session::{Session, SessionInfo, SessionMetadata, SessionState, Notice, NoticeLevel};
 use crate::audio::mic::MicSource;
 use crate::audio::recorder::Recorder;
 use crate::audio::source::{AudioSource, SourceDescriptor, SourceType};
@@ -30,6 +30,10 @@ pub enum ServerEvent {
     FileSizes {
         id: String,
         file_sizes: HashMap<String, u64>,
+    },
+    SessionNotice {
+        id: String,
+        notice: Notice,
     },
 }
 
@@ -70,7 +74,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Spawn a background task that broadcasts file sizes for recording sessions.
+    /// Spawn a background task that broadcasts file sizes for recording sessions
+    /// and detects audio issues (e.g., mic permission denied).
     pub fn start_file_size_ticker(&self) {
         let sessions = self.sessions.clone();
         let event_tx = self.event_tx.clone();
@@ -81,14 +86,24 @@ impl SessionManager {
                 if event_tx.receiver_count() == 0 {
                     continue;
                 }
-                let sessions = sessions.read().await;
-                for session in sessions.values() {
+                let mut sessions = sessions.write().await;
+                for session in sessions.values_mut() {
                     if session.state == SessionState::Recording {
                         let info = session.info();
                         let _ = event_tx.send(ServerEvent::FileSizes {
                             id: session.id.clone(),
-                            file_sizes: info.file_sizes,
+                            file_sizes: info.file_sizes.clone(),
                         });
+
+                        // Detect mic sources producing no audio data.
+                        // After 5+ seconds of recording, a mic file under 200 bytes
+                        // means the callback never fired — likely a permission issue.
+                        if let Some(started) = session.started_at {
+                            let elapsed = Utc::now() - started;
+                            if elapsed.num_seconds() >= 5 {
+                                detect_silent_sources(session, &info.file_sizes, &event_tx);
+                            }
+                        }
                     }
                 }
             }
@@ -139,11 +154,6 @@ impl SessionManager {
                 .collect();
 
             let session = Session::from_metadata(&metadata, &self.output_dir, files);
-            info!(
-                "Loaded session {} from disk ({} files)",
-                session.id,
-                session.files.len()
-            );
             sessions.insert(session.id.clone(), session);
         }
         info!("Loaded {} sessions from disk", sessions.len());
@@ -274,7 +284,36 @@ impl SessionManager {
             sources,
         );
 
-        let files = recorder.start().map_err(|e| e.to_string())?;
+        // Drop the write lock before the blocking start — source.start() calls
+        // Core Audio APIs that can hang when devices are being reconfigured.
+        let session_id = session.id.clone();
+        drop(sessions);
+
+        // Run on a blocking thread so Core Audio calls don't stall the async runtime.
+        // Timeout after 15s — Core Audio can hang when the audio device graph is
+        // being reconfigured (USB-to-HDMI adapter, virtual audio devices, etc.).
+        let (mut recorder, files) = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            tokio::task::spawn_blocking(move || {
+                recorder.start().map(|files| (recorder, files))
+            }),
+        )
+        .await
+        .map_err(|_| "recording start timed out after 15s — audio system may be busy (try restarting the app)".to_string())?
+        .map_err(|e| format!("recorder thread panicked: {e}"))?
+        .map_err(|e| e.to_string())?;
+
+        // Re-acquire lock to update session state
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(&session_id).ok_or("session not found")?;
+
+        // Guard against concurrent start (session may have been modified while unlocked)
+        if session.state == SessionState::Recording {
+            // Another start_recording won the race — stop what we just started
+            let _ = recorder.stop();
+            return Err("session is already recording".to_string());
+        }
+
         let file_names: Vec<String> = files
             .iter()
             .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
@@ -400,4 +439,69 @@ fn format_base36(mut n: u64) -> String {
     }
     buf.reverse();
     String::from_utf8(buf).unwrap()
+}
+
+/// Check recording sources for missing audio data and emit notices.
+/// A mic source with < 200 bytes after 5+ seconds of recording likely means
+/// macOS denied microphone access (TCC). The stream starts but callbacks never fire.
+fn detect_silent_sources(
+    session: &mut Session,
+    file_sizes: &HashMap<String, u64>,
+    event_tx: &broadcast::Sender<ServerEvent>,
+) {
+    // Only check mic sources — system audio has different failure modes.
+    for meta in &session.source_meta {
+        if meta.source_type != SourceType::Mic {
+            continue;
+        }
+        let size = file_sizes.get(&meta.filename).copied().unwrap_or(0);
+        // Opus header-only is ~164 bytes, WAV header is 44 bytes.
+        // If the file is under 200 bytes, the callback never delivered audio.
+        if size >= 200 {
+            continue;
+        }
+        // Don't add duplicate notices for the same source.
+        let already_warned = session.notices.iter().any(|n| {
+            n.message.contains(&meta.source_label)
+                && n.message.contains("not receiving audio")
+        });
+        if already_warned {
+            continue;
+        }
+
+        let platform = std::env::consts::OS;
+        let (message, details) = if platform == "macos" {
+            (
+                format!("Microphone \"{}\" is not receiving audio", meta.source_label),
+                Some(
+                    "macOS may have denied microphone access. \
+                    Check System Settings > Privacy & Security > Microphone \
+                    and ensure your terminal app (or VS Code) is allowed."
+                        .to_string(),
+                ),
+            )
+        } else {
+            (
+                format!("Microphone \"{}\" is not receiving audio", meta.source_label),
+                Some("Check that your microphone is connected and permissions are granted.".to_string()),
+            )
+        };
+
+        let notice = Notice {
+            level: NoticeLevel::Warning,
+            message,
+            platform: Some(platform.to_string()),
+            details,
+            created_at: Utc::now(),
+        };
+        session.notices.push(notice.clone());
+        let _ = event_tx.send(ServerEvent::SessionNotice {
+            id: session.id.clone(),
+            notice,
+        });
+        warn!(
+            "Session {}: mic source '{}' has {} bytes after 5+ seconds — possible permission issue",
+            session.id, meta.source_label, size
+        );
+    }
 }

@@ -17,6 +17,25 @@ pub enum SessionState {
     Stopped,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notice {
+    pub level: NoticeLevel,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 pub struct Session {
     pub id: String,
     pub name: Option<String>,
@@ -30,6 +49,8 @@ pub struct Session {
     pub files: Vec<String>,
     /// Source metadata captured when recording starts, persists after recorder is taken.
     pub source_meta: Vec<SourceMetadata>,
+    /// In-memory notices (not persisted to disk).
+    pub notices: Vec<Notice>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +76,8 @@ pub struct SessionInfo {
     pub duration_secs: Option<f64>,
     pub files: Vec<String>,
     pub file_sizes: HashMap<String, u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<Notice>,
 }
 
 /// Written to metadata.json in the session folder.
@@ -115,6 +138,7 @@ impl Session {
             recorder: None,
             files: Vec::new(),
             source_meta: Vec::new(),
+            notices: Vec::new(),
         }
     }
 
@@ -150,6 +174,7 @@ impl Session {
             recorder: None,
             files,
             source_meta: meta.sources.clone(),
+            notices: Vec::new(),
         }
     }
 
@@ -221,6 +246,7 @@ impl Session {
             duration_secs,
             files: self.files.clone(),
             file_sizes,
+            notices: self.notices.clone(),
         }
     }
 

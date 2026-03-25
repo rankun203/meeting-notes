@@ -33,6 +33,12 @@ impl MicSource {
     fn find_device(&self) -> Result<cpal::Device, AudioError> {
         let host = cpal::default_host();
 
+        // Log all input devices for diagnostics
+        if let Ok(devices) = host.input_devices() {
+            let names: Vec<String> = devices.filter_map(|d| d.name().ok()).collect();
+            info!("Available input devices: {:?}", names);
+        }
+
         if let Some(ref name) = self.device_name {
             let devices = host.input_devices()
                 .map_err(|e| AudioError::DeviceError(format!("failed to list devices: {}", e)))?;
@@ -87,11 +93,11 @@ impl AudioSource for MicSource {
 
         // Store sender in shared handle so stop() can explicitly drop it
         *self.sender_handle.lock().unwrap() = Some(sender);
-        let sender_handle = self.sender_handle.clone();
-
-        let running = self.running.clone();
-        running.store(true, Ordering::SeqCst);
+        self.running.store(true, Ordering::SeqCst);
         let start_time = Instant::now();
+
+        let sender_handle = self.sender_handle.clone();
+        let running = self.running.clone();
 
         let err_fn = |err: cpal::StreamError| {
             warn!("Mic stream error: {}", err);
@@ -146,12 +152,21 @@ impl AudioSource for MicSource {
                 )
             }
             format => {
+                self.running.store(false, Ordering::SeqCst);
+                self.sender_handle.lock().unwrap().take();
                 return Err(AudioError::DeviceError(format!("unsupported sample format: {:?}", format)));
             }
-        }.map_err(|e| AudioError::DeviceError(format!("failed to build stream: {}", e)))?;
+        }.map_err(|e| {
+            self.running.store(false, Ordering::SeqCst);
+            self.sender_handle.lock().unwrap().take();
+            AudioError::DeviceError(format!("failed to build stream: {}", e))
+        })?;
 
-        stream.play()
-            .map_err(|e| AudioError::DeviceError(format!("failed to start stream: {}", e)))?;
+        stream.play().map_err(|e| {
+            self.running.store(false, Ordering::SeqCst);
+            self.sender_handle.lock().unwrap().take();
+            AudioError::DeviceError(format!("failed to start stream: {}", e))
+        })?;
 
         self.stream = Some(stream);
         info!("Mic recording started");
