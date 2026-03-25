@@ -77,4 +77,10 @@ pub trait AudioSource: Send + Sync {
     fn start(&mut self, sender: Sender<AudioChunk>) -> Result<(), AudioError>;
     fn stop(&mut self) -> Result<(), AudioError>;
     fn name(&self) -> &str;
+
+    /// Returns true if the underlying device was lost (e.g. Core Audio device graph change).
+    /// Default: always false. MicSource overrides this.
+    fn is_device_lost(&self) -> bool {
+        false
+    }
 }

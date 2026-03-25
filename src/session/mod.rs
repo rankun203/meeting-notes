@@ -74,21 +74,32 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Spawn a background task that broadcasts file sizes for recording sessions
-    /// and detects audio issues (e.g., mic permission denied).
+    /// Spawn a background task that broadcasts file sizes for recording sessions,
+    /// detects audio issues (e.g., mic permission denied), and auto-reconnects
+    /// sources that lost their device (e.g., Teams joining a call).
     pub fn start_file_size_ticker(&self) {
         let sessions = self.sessions.clone();
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            /// Max reconnect attempts per session before giving up.
+            const MAX_RECONNECT_ATTEMPTS: u32 = 3;
+            let mut reconnect_attempts: HashMap<String, u32> = HashMap::new();
             loop {
                 interval.tick().await;
                 if event_tx.receiver_count() == 0 {
                     continue;
                 }
-                let mut sessions = sessions.write().await;
-                for session in sessions.values_mut() {
-                    if session.state == SessionState::Recording {
+
+                // Phase 1: broadcast file sizes, detect silent sources, find device-lost sessions.
+                let mut device_lost_sessions: Vec<String> = Vec::new();
+                {
+                    let mut sessions = sessions.write().await;
+                    for session in sessions.values_mut() {
+                        if session.state != SessionState::Recording {
+                            continue;
+                        }
+
                         let info = session.info();
                         let _ = event_tx.send(ServerEvent::FileSizes {
                             id: session.id.clone(),
@@ -96,12 +107,102 @@ impl SessionManager {
                         });
 
                         // Detect mic sources producing no audio data.
-                        // After 5+ seconds of recording, a mic file under 200 bytes
-                        // means the callback never fired — likely a permission issue.
                         if let Some(started) = session.started_at {
                             let elapsed = Utc::now() - started;
                             if elapsed.num_seconds() >= 5 {
                                 detect_silent_sources(session, &info.file_sizes, &event_tx);
+                            }
+                        }
+
+                        // Check for device-lost sources that need reconnection.
+                        if let Some(ref recorder) = session.recorder {
+                            if recorder.has_device_lost_sources() {
+                                let attempts = reconnect_attempts.get(&session.id).copied().unwrap_or(0);
+                                if attempts < MAX_RECONNECT_ATTEMPTS {
+                                    device_lost_sessions.push(session.id.clone());
+                                }
+                            }
+                        }
+                    }
+                } // write lock released
+
+                // Phase 2: attempt reconnection outside the lock on a blocking thread.
+                for session_id in device_lost_sessions {
+                    let sessions_ref = sessions.clone();
+                    let event_tx_ref = event_tx.clone();
+                    let sid = session_id.clone();
+
+                    // Take the recorder out, reconnect on a blocking thread, put it back.
+                    let mut sessions_guard = sessions_ref.write().await;
+                    let recorder = match sessions_guard.get_mut(&sid) {
+                        Some(s) => s.recorder.take(),
+                        None => continue,
+                    };
+                    drop(sessions_guard);
+
+                    if let Some(mut recorder) = recorder {
+                        let result = tokio::task::spawn_blocking(move || {
+                            let r = recorder.restart_lost_sources();
+                            (recorder, r)
+                        }).await;
+
+                        let mut sessions_guard = sessions_ref.write().await;
+                        match result {
+                            Ok((recorder, Ok(restarted))) => {
+                                if let Some(session) = sessions_guard.get_mut(&sid) {
+                                    session.recorder = Some(recorder);
+                                    reconnect_attempts.remove(&sid);
+
+                                    for label in &restarted {
+                                        let notice = Notice {
+                                            level: NoticeLevel::Info,
+                                            message: format!("Microphone \"{}\" reconnected after audio device change", label),
+                                            platform: Some(std::env::consts::OS.to_string()),
+                                            details: None,
+                                            created_at: Utc::now(),
+                                        };
+                                        session.notices.push(notice.clone());
+                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                            id: sid.clone(),
+                                            notice,
+                                        });
+                                    }
+                                    info!("Reconnected mic sources for session {}: {:?}", sid, restarted);
+                                }
+                            }
+                            Ok((recorder, Err(e))) => {
+                                let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
+                                *attempts += 1;
+                                warn!("Mic reconnect failed for session {} (attempt {}): {}", sid, attempts, e);
+
+                                if let Some(session) = sessions_guard.get_mut(&sid) {
+                                    session.recorder = Some(recorder);
+
+                                    if *attempts >= MAX_RECONNECT_ATTEMPTS {
+                                        let notice = Notice {
+                                            level: NoticeLevel::Error,
+                                            message: "Microphone lost — could not reconnect".to_string(),
+                                            platform: Some(std::env::consts::OS.to_string()),
+                                            details: Some(
+                                                "A video conferencing app (e.g. Teams) may have disrupted Core Audio. \
+                                                Stop and restart recording. If that fails, restart the audio system: \
+                                                sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod"
+                                                    .to_string(),
+                                            ),
+                                            created_at: Utc::now(),
+                                        };
+                                        session.notices.push(notice.clone());
+                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                            id: sid.clone(),
+                                            notice,
+                                        });
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Mic reconnect thread panicked for session {}: {}", sid, e);
+                                let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
+                                *attempts += 1;
                             }
                         }
                     }

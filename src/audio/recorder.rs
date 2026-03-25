@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crossbeam_channel::{self, Sender};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::source::{AudioChunk, AudioError, AudioSource, SourceDescriptor, sanitize_label};
 use super::writer::{AudioFormat, AudioWriterHandle, Mp3Config, OpusConfig};
@@ -128,5 +128,40 @@ impl Recorder {
             .iter()
             .map(|a| (&a.descriptor, a.file_path.as_ref()))
             .collect()
+    }
+
+    /// Check if any source has lost its device (e.g. Core Audio graph change).
+    pub fn has_device_lost_sources(&self) -> bool {
+        self.sources.iter().any(|a| {
+            a.source.as_ref().map_or(false, |s| s.is_device_lost())
+        })
+    }
+
+    /// Restart sources that lost their device. Stops the old stream and starts
+    /// a new one with the existing sender channel, so the writer keeps running.
+    pub fn restart_lost_sources(&mut self) -> Result<Vec<String>, AudioError> {
+        let mut restarted = Vec::new();
+        for active in &mut self.sources {
+            let source = match active.source.as_mut() {
+                Some(s) if s.is_device_lost() => s,
+                _ => continue,
+            };
+
+            let sender = match active.sender.as_ref() {
+                Some(s) => s.clone(),
+                None => continue,
+            };
+
+            let label = active.descriptor.label.clone();
+            warn!("Restarting lost source: {}", label);
+
+            // Drop old stream, then build fresh one with new device handle
+            source.stop()?;
+            source.start(sender)?;
+
+            info!("Source reconnected: {}", label);
+            restarted.push(label);
+        }
+        Ok(restarted)
     }
 }

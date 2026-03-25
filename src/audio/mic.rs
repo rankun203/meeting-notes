@@ -14,6 +14,10 @@ pub struct MicSource {
     sample_rate: u32,
     stream: Option<Stream>,
     running: Arc<AtomicBool>,
+    /// Set by cpal's error callback when Core Audio reports DeviceNotAvailable.
+    /// Signals that the device graph changed (e.g. Teams joined a call) and
+    /// the stream needs to be rebuilt with a fresh device handle.
+    device_lost: Arc<AtomicBool>,
     /// Shared sender so stop() can explicitly drop it even if cpal
     /// hasn't freed the callback closure yet.
     sender_handle: Arc<Mutex<Option<Sender<AudioChunk>>>>,
@@ -26,6 +30,7 @@ impl MicSource {
             sample_rate,
             stream: None,
             running: Arc::new(AtomicBool::new(false)),
+            device_lost: Arc::new(AtomicBool::new(false)),
             sender_handle: Arc::new(Mutex::new(None)),
         }
     }
@@ -94,13 +99,19 @@ impl AudioSource for MicSource {
         // Store sender in shared handle so stop() can explicitly drop it
         *self.sender_handle.lock().unwrap() = Some(sender);
         self.running.store(true, Ordering::SeqCst);
+        self.device_lost.store(false, Ordering::SeqCst);
         let start_time = Instant::now();
 
         let sender_handle = self.sender_handle.clone();
         let running = self.running.clone();
 
-        let err_fn = |err: cpal::StreamError| {
+        let device_lost = self.device_lost.clone();
+        let err_fn = move |err: cpal::StreamError| {
             warn!("Mic stream error: {}", err);
+            if matches!(err, cpal::StreamError::DeviceNotAvailable) {
+                warn!("Core Audio device lost — likely caused by audio device graph change (Teams, USB, etc.)");
+                device_lost.store(true, Ordering::SeqCst);
+            }
         };
 
         let stream = match config.sample_format() {
@@ -189,5 +200,9 @@ impl AudioSource for MicSource {
 
     fn name(&self) -> &str {
         "microphone"
+    }
+
+    fn is_device_lost(&self) -> bool {
+        self.device_lost.load(Ordering::SeqCst)
     }
 }
