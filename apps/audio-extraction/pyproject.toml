@@ -6,10 +6,11 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "whisperx>=3.8.0",
     "runpod>=1.7.0",
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
     "requests>=2.31.0",
 ]
+
+# torch and torchaudio are provided by the RunPod base image.
+# Do NOT add them here — version mismatches break torchvision C++ extensions.
 
 [build-system]
 requires = ["hatchling"]

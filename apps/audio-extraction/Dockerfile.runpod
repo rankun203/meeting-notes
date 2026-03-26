@@ -10,9 +10,12 @@ RUN apt-get update && \
 # Install uv for fast dependency resolution
 RUN pip install --no-cache-dir uv
 
-# Install dependencies first (layer cached unless pyproject.toml changes)
+# Install dependencies first (layer cached unless pyproject.toml changes).
+# Freeze torch* packages from the base image — whisperx would pull newer
+# versions that break the pre-installed torchvision C++ extensions.
 COPY pyproject.toml .
-RUN uv pip install --system .
+RUN pip freeze | grep -E '^(torch|torchaudio|torchvision)==' > /tmp/torch-constraints.txt && \
+    uv pip install --system --constraint /tmp/torch-constraints.txt .
 
 # Copy source code (changes here don't invalidate dependency cache)
 COPY src/ src/
