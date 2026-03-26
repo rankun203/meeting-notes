@@ -30,9 +30,9 @@
   <script type="importmap">
     {
       "imports": {
-        "react": "https://esm.sh/react@19?dev",
-        "react-dom/client": "https://esm.sh/react-dom@19/client?dev",
-        "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime?dev"
+        "react": "https://esm.sh/react@19",
+        "react-dom/client": "https://esm.sh/react-dom@19/client",
+        "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime"
       }
     }
   </script>
@@ -332,8 +332,16 @@
         setCreating(true);
         try {
           const session = await api('/sessions', { method: 'POST', body: JSON.stringify(buildBody()) });
-          await onCreated();
-          if (session && session.id) onSelect(session.id);
+          if (session && session.id) {
+            // Auto-start recording
+            try {
+              await api(`/sessions/${session.id}/recording/start`, { method: 'POST' });
+            } catch (e) {
+              setError(`Created but failed to start recording: ${e.message}`);
+            }
+            await onCreated();
+            onSelect(session.id);
+          }
         } catch (e) { setError(e.message); }
         finally { setCreating(false); }
       }
@@ -407,8 +415,14 @@
         }),
         jsx('button', {
           onClick: create, disabled: creating,
-          className: 'w-full flex justify-center items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors',
-          children: creating ? 'Creating...' : 'Create Session',
+          className: 'w-full flex justify-center items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 transition-colors',
+          children: creating ? 'Starting...' : jsxs(Fragment, { children: [
+            jsx('svg', {
+              xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'currentColor', className: 'w-4 h-4',
+              children: jsx('circle', { cx: '12', cy: '12', r: '8' }),
+            }),
+            'Start Recording',
+          ]}),
         }),
         error && jsx('p', { className: 'text-xs text-red-500', children: error }),
       ]});
@@ -872,13 +886,6 @@
     // ── Sidebar ──
 
     function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageChange, sources, fields, onCreated, showNew, setShowNew }) {
-      const toggleBtnCls = [
-        'w-7 h-7 flex items-center justify-center rounded-lg transition-colors',
-        showNew
-          ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
-          : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-600 dark:hover:text-gray-300',
-      ].join(' ');
-
       const header = jsx('div', {
         key: 'header',
         className: 'flex-shrink-0 px-4 py-3 md:py-4 border-b border-gray-100 dark:border-gray-800',
@@ -886,9 +893,16 @@
           jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Meeting Notes' }),
           jsx('button', {
             onClick: () => setShowNew(!showNew),
-            className: toggleBtnCls,
-            title: showNew ? 'Close' : 'New session',
-            children: showNew ? jsx(CloseIcon, {}) : jsx(PlusIcon, {}),
+            className: showNew
+              ? 'w-7 h-7 flex items-center justify-center rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors'
+              : 'w-7 h-7 flex items-center justify-center rounded-full bg-red-500 hover:bg-red-600 text-white transition-colors',
+            title: showNew ? 'Close' : 'Record',
+            children: showNew
+              ? jsx(CloseIcon, {})
+              : jsx('svg', {
+                  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'currentColor', className: 'w-4 h-4',
+                  children: jsx('circle', { cx: '12', cy: '12', r: '8' }),
+                }),
           }),
         ]}),
       });
