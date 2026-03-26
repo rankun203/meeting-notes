@@ -1,9 +1,6 @@
 """WhisperX transcription + alignment + diarization pipeline."""
 
-import gc
 import logging
-
-import torch
 import whisperx
 
 from audio_extraction.embeddings import extract_speaker_embeddings

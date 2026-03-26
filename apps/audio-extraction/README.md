@@ -67,27 +67,63 @@ Takes audio files in, returns transcripts with word-level timestamps, speaker la
 }
 ```
 
-## Deploy to RunPod
+## Deploy to RunPod Serverless
+
+### Option A: GitHub integration (recommended)
+
+RunPod can build and deploy directly from your GitHub repo — no local Docker builds needed.
+
+1. **Connect GitHub**: RunPod console → Settings → GitHub → Authorize
+2. **Create endpoint**: Serverless → New Endpoint → Import Git Repository
+3. **Configure**:
+   - Repository: select this repo
+   - Branch: `master`
+   - Dockerfile path: `apps/audio-extraction/Dockerfile.runpod`
+   - Docker context: `apps/audio-extraction`
+   - Build secret: `hf_token=hf_...` (to pre-cache pyannote models in the image)
+4. **Set runtime env vars**: `HF_TOKEN`, and optionally override defaults below
+5. **Select GPU**: A40 (48GB, best value) or A100 (80GB, fastest)
+6. **Deploy** — builds trigger on GitHub releases
+
+### Option B: Manual Docker build
 
 ```bash
-# Build the image
-docker build -f Dockerfile.runpod -t audio-extraction .
+cd apps/audio-extraction
 
-# Tag and push to your registry
-docker tag audio-extraction your-registry/audio-extraction:latest
-docker push your-registry/audio-extraction:latest
+# Build with all models pre-cached (pass HF_TOKEN as secret to cache pyannote models)
+DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
+  --secret id=hf_token,env=HF_TOKEN \
+  -f Dockerfile.runpod -t YOUR_DOCKERHUB/audio-extraction:v0.1.0 .
+
+# Push to Docker Hub
+docker push YOUR_DOCKERHUB/audio-extraction:v0.1.0
+
+# Then create a RunPod serverless endpoint using this image
 ```
-
-Then create a RunPod serverless endpoint using this image.
 
 ### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WHISPER_MODEL_SIZE` | `large-v2` | Whisper model size |
-| `WHISPER_BATCH_SIZE` | `16` | Batch size for transcription |
-| `WHISPER_COMPUTE_TYPE` | `float16` | Compute type (`float16`, `int8`) |
-| `HF_TOKEN` | — | HuggingFace token (required for diarization) |
+| `WHISPER_MODEL_SIZE` | `large-v2` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`) |
+| `WHISPER_BATCH_SIZE` | `16` | Batch size for transcription (lower = less VRAM) |
+| `WHISPER_COMPUTE_TYPE` | `float16` | Compute type (`float16` for GPU, `int8` for CPU) |
+| `WHISPER_DEVICE` | `cuda` | Device (`cuda` or `cpu`) |
+| `HF_TOKEN` | — | HuggingFace token (required for pyannote diarization) |
+
+### Calling the endpoint
+
+```bash
+# Submit async job
+curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/run \
+  -H "authorization: Bearer YOUR_RUNPOD_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"input": {"tracks": [{"audio_url": "https://...", "track_name": "mic", "source_type": "mic", "channels": 1}], "language": "en", "diarize": true}}'
+
+# Poll for result
+curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/JOB_ID \
+  -H "authorization: Bearer YOUR_RUNPOD_API_KEY"
+```
 
 ## Local development
 

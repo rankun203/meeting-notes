@@ -6,9 +6,7 @@ on each, extracts speaker embeddings, and returns per-track results.
 
 import os
 import tempfile
-
 import requests
-import runpod
 
 from audio_extraction.pipeline import TranscriptionPipeline
 
@@ -31,10 +29,11 @@ def get_pipeline() -> TranscriptionPipeline:
 
 def download_audio(url: str, suffix: str = ".audio") -> str:
     """Download audio from URL to a temporary file. Returns the file path."""
-    resp = requests.get(url, timeout=300)
+    resp = requests.get(url, timeout=300, stream=True)
     resp.raise_for_status()
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(resp.content)
+    for chunk in resp.iter_content(chunk_size=8192):
+        tmp.write(chunk)
     tmp.close()
     return tmp.name
 
@@ -72,8 +71,9 @@ def handler(event: dict) -> dict:
             track_name = track["track_name"]
             source_type = track["source_type"]
 
-            # Determine file suffix from URL
-            suffix = "." + audio_url.rsplit(".", 1)[-1] if "." in audio_url else ".audio"
+            # Determine file suffix from URL (strip query params first)
+            path = audio_url.split("?")[0].split("#")[0]
+            suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ".audio"
             audio_path = download_audio(audio_url, suffix=suffix)
             downloaded_files.append(audio_path)
 

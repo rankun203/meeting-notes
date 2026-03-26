@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /app
@@ -10,24 +11,55 @@ RUN apt-get update && \
 # Install uv for fast dependency resolution
 RUN pip install --no-cache-dir uv
 
-# Copy project files
+# Install dependencies first (layer cached unless pyproject.toml changes)
 COPY pyproject.toml .
+RUN uv pip install --system .
+
+# Copy source code (changes here don't invalidate dependency cache)
 COPY src/ src/
+RUN uv pip install --system --no-deps -e .
 
-# Install the project and all dependencies
-RUN uv pip install --system -e .
+# ---------------------------------------------------------------------------
+# Pre-download ALL models at build time so cold starts are near-instant.
+# GPU is not available during docker build, so we load on CPU.
+# ---------------------------------------------------------------------------
 
-# Pre-download whisper model at build time to avoid cold-start latency.
-# Uses CPU here since GPU isn't available during docker build.
 ARG WHISPER_MODEL_SIZE=large-v2
+
+# 1. Whisper model (~3 GB for large-v2)
 RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cpu', compute_type='int8')"
 
-# Pre-download alignment models for common languages
-RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')" || true
+# 2. Alignment models for common languages (~400 MB each)
+RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
 RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 
-# Note: pyannote diarization + embedding models require HF_TOKEN at runtime
-# and will be downloaded on first request if not cached in the network volume.
+# 3. Pyannote diarization + speaker embedding models (~600 MB total)
+#    Requires HF_TOKEN — pass via Docker BuildKit secret to avoid leaking into layers:
+#      docker build --secret id=hf_token,env=HF_TOKEN -f Dockerfile.runpod .
+#    Or set as a build secret in RunPod GitHub integration settings.
+#    If no secret is provided, models will download on first request at runtime.
+RUN --mount=type=secret,id=hf_token,required=false \
+    if [ -f /run/secrets/hf_token ]; then \
+      export HF_TOKEN=$(cat /run/secrets/hf_token) && \
+      python -c " \
+import os; \
+from pyannote.audio import Pipeline; \
+Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=os.environ['HF_TOKEN']); \
+print('Diarization model cached') \
+" && \
+      python -c " \
+import os; \
+from pyannote.audio import Inference; \
+Inference('pyannote/embedding', use_auth_token=os.environ['HF_TOKEN']); \
+print('Embedding model cached') \
+"; \
+    else \
+      echo 'WARNING: hf_token secret not set — pyannote models will download on first request'; \
+    fi
+
+# ---------------------------------------------------------------------------
+# Runtime configuration (override via RunPod env vars)
+# ---------------------------------------------------------------------------
 
 ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
 ENV WHISPER_DEVICE=cuda
