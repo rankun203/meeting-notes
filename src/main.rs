@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
+use meeting_notes_daemon::people::PeopleManager;
 use meeting_notes_daemon::server;
 use meeting_notes_daemon::session::SessionManager;
+use meeting_notes_daemon::tunnel::TunnelManager;
 
 fn install_signal_handlers() {
     unsafe {
@@ -97,7 +99,19 @@ async fn main() {
             let manager = SessionManager::new(recordings_dir.clone());
             manager.load_from_disk().await;
             manager.start_file_size_ticker();
-            let app = server::create_router(manager, web_ui);
+
+            let people_manager = PeopleManager::new(&data_dir);
+            people_manager.load_from_disk().await;
+
+            // Download cloudflared in background (non-blocking)
+            let tunnel_manager = TunnelManager::new(&data_dir);
+            tokio::spawn(async move {
+                if let Err(e) = tunnel_manager.ensure_cloudflared().await {
+                    tracing::warn!("Failed to download cloudflared: {}", e);
+                }
+            });
+
+            let app = server::create_router(manager, people_manager, web_ui);
 
             let addr = format!("{}:{}", host, port);
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();

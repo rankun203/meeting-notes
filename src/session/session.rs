@@ -55,6 +55,8 @@ pub struct Session {
     pub source_meta: Vec<SourceMetadata>,
     /// In-memory notices (not persisted to disk).
     pub notices: Vec<Notice>,
+    /// Current processing state (transcribing, matching, completed, failed).
+    pub processing_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,6 +84,11 @@ pub struct SessionInfo {
     pub file_sizes: HashMap<String, u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<Notice>,
+    pub transcript_available: bool,
+    pub summary_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processing_state: Option<String>,
+    pub unconfirmed_speakers: u32,
 }
 
 /// Written to metadata.json in the session folder.
@@ -143,6 +150,7 @@ impl Session {
             files: Vec::new(),
             source_meta: Vec::new(),
             notices: Vec::new(),
+            processing_state: None,
         }
     }
 
@@ -179,6 +187,7 @@ impl Session {
             files,
             source_meta: meta.sources.clone(),
             notices: Vec::new(),
+            processing_state: None,
         }
     }
 
@@ -234,6 +243,16 @@ impl Session {
             })
             .collect();
         let duration_secs = Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps);
+        let transcript_available = self.config.output_dir.join("transcript.json").exists();
+        let summary_available = self.config.output_dir.join("summary.json").exists();
+
+        // Count unconfirmed speakers from transcript.json if it exists
+        let unconfirmed_speakers = if transcript_available {
+            count_unconfirmed_speakers(&self.config.output_dir.join("transcript.json"))
+        } else {
+            0
+        };
+
         SessionInfo {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -251,6 +270,10 @@ impl Session {
             files: self.files.clone(),
             file_sizes,
             notices: self.notices.clone(),
+            transcript_available,
+            summary_available,
+            processing_state: self.processing_state.clone(),
+            unconfirmed_speakers,
         }
     }
 
@@ -342,4 +365,24 @@ fn ogg_opus_duration(path: &std::path::Path) -> Option<f64> {
     };
 
     granule_pos.map(|gp| (gp.saturating_sub(pre_skip)) as f64 / 48000.0)
+}
+
+/// Count speakers in transcript.json that have no person_id assigned.
+fn count_unconfirmed_speakers(transcript_path: &std::path::Path) -> u32 {
+    let json = match std::fs::read_to_string(transcript_path) {
+        Ok(j) => j,
+        Err(_) => return 0,
+    };
+    let value: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    // Count entries in speaker_embeddings where person_id is null
+    if let Some(embs) = value.get("speaker_embeddings").and_then(|v| v.as_object()) {
+        embs.values()
+            .filter(|v| v.get("person_id").map_or(true, |p| p.is_null()))
+            .count() as u32
+    } else {
+        0
+    }
 }

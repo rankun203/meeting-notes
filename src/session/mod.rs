@@ -39,6 +39,18 @@ pub enum ServerEvent {
         id: String,
         notices: Vec<Notice>,
     },
+    TranscriptionProgress {
+        id: String,
+        status: String,
+    },
+    TranscriptionCompleted {
+        id: String,
+        unconfirmed_speakers: u32,
+    },
+    TranscriptionFailed {
+        id: String,
+        error: String,
+    },
 }
 
 #[derive(Clone)]
@@ -491,6 +503,36 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         let session = sessions.get(id).ok_or("session not found")?;
         Ok(session.files.clone())
+    }
+
+    /// Set the processing state for a session.
+    pub async fn set_processing_state(&self, id: &str, state: Option<String>) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(id) {
+            session.processing_state = state;
+            session.touch();
+            self.emit(ServerEvent::SessionUpdated(session.info()));
+        }
+    }
+
+    /// Get the session directory path, session language, and source metadata.
+    pub async fn get_session_extraction_info(
+        &self,
+        id: &str,
+    ) -> Result<(std::path::PathBuf, String, Vec<session::SourceMetadata>), String> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(id).ok_or("session not found")?;
+        if session.state == SessionState::Recording {
+            return Err("cannot transcribe while recording".to_string());
+        }
+        if session.files.iter().all(|f| f == "metadata.json") {
+            return Err("no audio files to transcribe".to_string());
+        }
+        Ok((
+            session.config.output_dir.clone(),
+            session.config.language.clone(),
+            session.source_meta.clone(),
+        ))
     }
 }
 

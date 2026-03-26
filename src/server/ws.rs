@@ -8,20 +8,20 @@ use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tracing::{info, warn};
 
-use crate::session::SessionManager;
+use super::routes::AppState;
 
-pub fn ws_routes() -> Router<SessionManager> {
+pub fn ws_routes() -> Router<AppState> {
     Router::new().route("/ws", get(ws_handler))
 }
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    State(manager): State<SessionManager>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, manager))
+    ws.on_upgrade(move |socket| handle_socket(socket, state.session_manager))
 }
 
-async fn handle_socket(socket: WebSocket, manager: SessionManager) {
+async fn handle_socket(socket: WebSocket, manager: crate::session::SessionManager) {
     info!("WebSocket client connected");
 
     let (mut ws_tx, mut ws_rx) = socket.split();

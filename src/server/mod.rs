@@ -5,14 +5,26 @@ pub mod ws;
 use axum::Router;
 use tower_http::cors::CorsLayer;
 
+use crate::people::PeopleManager;
 use crate::session::SessionManager;
 
-pub fn create_router(session_manager: SessionManager, enable_web_ui: bool) -> Router {
+use self::routes::AppState;
+
+pub fn create_router(
+    session_manager: SessionManager,
+    people_manager: PeopleManager,
+    enable_web_ui: bool,
+) -> Router {
+    let state = AppState {
+        session_manager,
+        people_manager,
+    };
+
     let mut app = Router::new()
         .merge(routes::session_routes())
         .merge(ws::ws_routes())
         .layer(CorsLayer::permissive())
-        .with_state(session_manager);
+        .with_state(state);
 
     if enable_web_ui {
         app = app.merge(web_ui::web_ui_routes());

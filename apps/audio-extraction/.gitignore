@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# uv
+uv.lock
+
+# Environment / secrets
+.env
+.env.*
+
+# Model cache
+*.bin
+*.pt
+*.safetensors

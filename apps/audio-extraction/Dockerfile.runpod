@@ -1,0 +1,37 @@
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast dependency resolution
+RUN pip install --no-cache-dir uv
+
+# Copy project files
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install the project and all dependencies
+RUN uv pip install --system -e .
+
+# Pre-download whisper model at build time to avoid cold-start latency.
+# Uses CPU here since GPU isn't available during docker build.
+ARG WHISPER_MODEL_SIZE=large-v2
+RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cpu', compute_type='int8')"
+
+# Pre-download alignment models for common languages
+RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')" || true
+RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
+
+# Note: pyannote diarization + embedding models require HF_TOKEN at runtime
+# and will be downloaded on first request if not cached in the network volume.
+
+ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+ENV WHISPER_DEVICE=cuda
+ENV WHISPER_COMPUTE_TYPE=float16
+ENV WHISPER_BATCH_SIZE=16
+
+CMD ["python", "-m", "audio_extraction"]
