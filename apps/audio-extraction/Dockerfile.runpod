@@ -42,19 +42,19 @@ RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 #    If not cached at build time, models download on first request using
 #    the HF_TOKEN runtime env var set in RunPod endpoint settings.
 ARG HF_TOKEN=""
-RUN python -c " \
-import os; \
-token = os.environ.get('HF_TOKEN') or None; \
-if not token: \
-    print('HF_TOKEN not set at build time — pyannote models will download on first request'); \
-    exit(0); \
-from pyannote.audio import Pipeline; \
-Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=token); \
-print('Diarization model cached'); \
-from pyannote.audio import Inference; \
-Inference('pyannote/embedding', use_auth_token=token); \
-print('Embedding model cached'); \
-" || echo 'Pyannote model download failed — will retry at runtime'
+RUN python3 <<'PYEOF' || echo 'Pyannote model download failed — will retry at runtime'
+import os, sys
+token = os.environ.get('HF_TOKEN') or None
+if not token:
+    print('HF_TOKEN not set at build time — pyannote models will download on first request')
+    sys.exit(0)
+from pyannote.audio import Pipeline
+Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=token)
+print('Diarization model cached')
+from pyannote.audio import Inference
+Inference('pyannote/embedding', use_auth_token=token)
+print('Embedding model cached')
+PYEOF
 
 # ---------------------------------------------------------------------------
 # Runtime configuration (override via RunPod env vars)
