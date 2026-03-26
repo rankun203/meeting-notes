@@ -594,7 +594,7 @@
 
     // ── Session Detail (main panel) ──
 
-    function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile }) {
+    function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields }) {
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [renaming, setRenaming] = useState(false);
@@ -719,7 +719,7 @@
                   children: [
                     jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Language' }),
-                      jsx('p', { className: 'text-sm font-medium', children: s.language }),
+                      jsx('p', { className: 'text-sm font-medium', children: (fields?.language?.options?.find(o => o.value === s.language)?.label) || s.language }),
                     ]}),
                     jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Format' }),
@@ -996,6 +996,13 @@
                 : s
             ));
             break;
+          case 'session_notices':
+            setSessions(prev => prev.map(s =>
+              s.id === event.data.id
+                ? { ...s, notices: event.data.notices }
+                : s
+            ));
+            break;
         }
       }
 
@@ -1055,6 +1062,7 @@
               onDeleted: handleDeleted,
               onBack: handleBack,
               isMobile: true,
+              fields,
             }),
           });
         }
@@ -1097,6 +1105,7 @@
               onDeleted: handleDeleted,
               onBack: handleBack,
               isMobile: false,
+              fields,
             }),
           }),
         ],

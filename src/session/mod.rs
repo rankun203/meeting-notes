@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::Utc;
-use cpal::traits::{DeviceTrait, HostTrait};
 use serde::Serialize;
 use tokio::sync::{RwLock, broadcast};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,6 +33,11 @@ pub enum ServerEvent {
     SessionNotice {
         id: String,
         notice: Notice,
+    },
+    /// Full replacement of a session's live notices list.
+    SessionNotices {
+        id: String,
+        notices: Vec<Notice>,
     },
 }
 
@@ -106,11 +110,13 @@ impl SessionManager {
                             file_sizes: info.file_sizes.clone(),
                         });
 
-                        // Detect mic sources producing no audio data.
+                        // Update live notices (silent mic, no system audio, etc).
+                        // 10s grace period: AVAudioEngine + opus buffering can delay
+                        // the first bytes reaching disk.
                         if let Some(started) = session.started_at {
                             let elapsed = Utc::now() - started;
-                            if elapsed.num_seconds() >= 5 {
-                                detect_silent_sources(session, &info.file_sizes, &event_tx);
+                            if elapsed.num_seconds() >= 10 {
+                                update_source_notices(session, &info.file_sizes, &event_tx);
                             }
                         }
 
@@ -155,6 +161,7 @@ impl SessionManager {
 
                                     for label in &restarted {
                                         let notice = Notice {
+                                            key: None,
                                             level: NoticeLevel::Info,
                                             message: format!("Microphone \"{}\" reconnected after audio device change", label),
                                             platform: Some(std::env::consts::OS.to_string()),
@@ -180,6 +187,7 @@ impl SessionManager {
 
                                     if *attempts >= MAX_RECONNECT_ATTEMPTS {
                                         let notice = Notice {
+                                            key: None,
                                             level: NoticeLevel::Error,
                                             message: "Microphone lost — could not reconnect".to_string(),
                                             platform: Some(std::env::consts::OS.to_string()),
@@ -486,15 +494,9 @@ impl SessionManager {
     }
 }
 
-/// Default source IDs when none specified: default mic + system_mix.
+/// Default source IDs when none specified: mic + system_mix.
 fn default_source_ids() -> Vec<String> {
-    let host = cpal::default_host();
-    let default_mic_id = host
-        .default_input_device()
-        .and_then(|d| d.name().ok())
-        .map(|name| format!("mic:{}", name))
-        .unwrap_or_else(|| "mic:".to_string());
-    vec![default_mic_id, "system_mix".to_string()]
+    vec!["mic".to_string(), "system_mix".to_string()]
 }
 
 /// Resolve a source ID string to a (descriptor, AudioSource) pair.
@@ -511,19 +513,15 @@ fn resolve_source(
             device_name: None,
         };
         Ok((desc, Box::new(source)))
-    } else if let Some(device_name) = source_id.strip_prefix("mic:") {
-        let device_opt = if device_name.is_empty() {
-            None
-        } else {
-            Some(device_name.to_string())
-        };
-        let label = device_opt.clone().unwrap_or_else(|| "Microphone".to_string());
-        let source = MicSource::new(device_opt.clone(), sample_rate);
+    } else if source_id == "mic" || source_id.starts_with("mic:") {
+        // All mic source IDs resolve to the same AVAudioEngine-based source
+        // that uses the system default input device.
+        let source = MicSource::new(sample_rate);
         let desc = SourceDescriptor {
-            id: source_id.to_string(),
+            id: "mic".to_string(),
             source_type: SourceType::Mic,
-            label,
-            device_name: device_opt,
+            label: "System Microphone".to_string(),
+            device_name: None,
         };
         Ok((desc, Box::new(source)))
     } else {
@@ -542,67 +540,104 @@ fn format_base36(mut n: u64) -> String {
     String::from_utf8(buf).unwrap()
 }
 
-/// Check recording sources for missing audio data and emit notices.
-/// A mic source with < 200 bytes after 5+ seconds of recording likely means
-/// macOS denied microphone access (TCC). The stream starts but callbacks never fire.
-fn detect_silent_sources(
+/// Recompute live notices for recording sources based on current file sizes.
+/// Notices with a `key` are auto-managed: added when a condition is detected,
+/// removed when it resolves. Emits SessionNotices when the set changes.
+fn update_source_notices(
     session: &mut Session,
     file_sizes: &HashMap<String, u64>,
     event_tx: &broadcast::Sender<ServerEvent>,
 ) {
-    // Only check mic sources — system audio has different failure modes.
+    let platform = std::env::consts::OS;
+    let mut expected_keys: HashMap<String, Notice> = HashMap::new();
+
     for meta in &session.source_meta {
-        if meta.source_type != SourceType::Mic {
-            continue;
-        }
         let size = file_sizes.get(&meta.filename).copied().unwrap_or(0);
-        // Opus header-only is ~164 bytes, WAV header is 44 bytes.
-        // If the file is under 200 bytes, the callback never delivered audio.
-        if size >= 200 {
-            continue;
-        }
-        // Don't add duplicate notices for the same source.
-        let already_warned = session.notices.iter().any(|n| {
-            n.message.contains(&meta.source_label)
-                && n.message.contains("not receiving audio")
-        });
-        if already_warned {
-            continue;
-        }
+        let key = format!("silent:{}", meta.filename);
 
-        let platform = std::env::consts::OS;
-        let (message, details) = if platform == "macos" {
-            (
-                format!("Microphone \"{}\" is not receiving audio", meta.source_label),
-                Some(
-                    "macOS may have denied microphone access. \
-                    Check System Settings > Privacy & Security > Microphone \
-                    and ensure your terminal app (or VS Code) is allowed."
-                        .to_string(),
-                ),
-            )
-        } else {
-            (
-                format!("Microphone \"{}\" is not receiving audio", meta.source_label),
-                Some("Check that your microphone is connected and permissions are granted.".to_string()),
-            )
-        };
-
-        let notice = Notice {
-            level: NoticeLevel::Warning,
-            message,
-            platform: Some(platform.to_string()),
-            details,
-            created_at: Utc::now(),
-        };
-        session.notices.push(notice.clone());
-        let _ = event_tx.send(ServerEvent::SessionNotice {
-            id: session.id.clone(),
-            notice,
-        });
-        warn!(
-            "Session {}: mic source '{}' has {} bytes after 5+ seconds — possible permission issue",
-            session.id, meta.source_label, size
-        );
+        match meta.source_type {
+            SourceType::Mic => {
+                // Under 1 KB after 10s means no real audio data.
+                if size < 1024 {
+                    let (message, details) = if platform == "macos" {
+                        (
+                            format!("\"{}\" is not receiving audio", meta.source_label),
+                            Some(
+                                "macOS may have denied microphone access. \
+                                Check System Settings > Privacy & Security > Microphone \
+                                and ensure your terminal app (or VS Code) is allowed."
+                                    .to_string(),
+                            ),
+                        )
+                    } else {
+                        (
+                            format!("\"{}\" is not receiving audio", meta.source_label),
+                            Some("Check that your microphone is connected and permissions are granted.".to_string()),
+                        )
+                    };
+                    expected_keys.insert(key, Notice {
+                        key: Some(format!("silent:{}", meta.filename)),
+                        level: NoticeLevel::Warning,
+                        message,
+                        platform: Some(platform.to_string()),
+                        details,
+                        created_at: Utc::now(),
+                    });
+                }
+            }
+            SourceType::SystemMix => {
+                // 0 bytes = no system audio captured. Could be no permission
+                // or just nothing playing.
+                if size == 0 {
+                    let (message, details) = if platform == "macos" {
+                        (
+                            "System audio is not receiving data".to_string(),
+                            Some(
+                                "Either nothing is playing, or permission is missing. \
+                                Check System Settings > Privacy & Security > Screen & System Audio Recording."
+                                    .to_string(),
+                            ),
+                        )
+                    } else {
+                        (
+                            "System audio is not receiving data".to_string(),
+                            None,
+                        )
+                    };
+                    expected_keys.insert(key, Notice {
+                        key: Some(format!("silent:{}", meta.filename)),
+                        level: NoticeLevel::Info,
+                        message,
+                        platform: Some(platform.to_string()),
+                        details,
+                        created_at: Utc::now(),
+                    });
+                }
+            }
+            _ => {}
+        }
     }
+
+    // Compute what changed: compare current keyed notices with expected
+    let current_keys: std::collections::HashSet<String> = session.notices.iter()
+        .filter_map(|n| n.key.clone())
+        .collect();
+    let expected_key_set: std::collections::HashSet<String> = expected_keys.keys().cloned().collect();
+
+    if current_keys == expected_key_set {
+        return; // No change
+    }
+
+    // Remove stale keyed notices, keep non-keyed (manual) notices
+    session.notices.retain(|n| n.key.is_none());
+    // Add current keyed notices
+    for (_, notice) in expected_keys {
+        session.notices.push(notice);
+    }
+
+    // Emit full notices list
+    let _ = event_tx.send(ServerEvent::SessionNotices {
+        id: session.id.clone(),
+        notices: session.notices.clone(),
+    });
 }

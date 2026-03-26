@@ -33,7 +33,7 @@ impl AudioFormat {
 
 impl Default for AudioFormat {
     fn default() -> Self {
-        AudioFormat::Wav
+        AudioFormat::Opus
     }
 }
 

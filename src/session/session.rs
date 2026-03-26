@@ -27,6 +27,10 @@ pub enum NoticeLevel {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notice {
+    /// Unique key for auto-managed notices (e.g. "silent:mic").
+    /// Notices with a key are live — they appear/disappear as conditions change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub level: NoticeLevel,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -5,29 +5,21 @@ pub mod writer;
 
 pub mod system_audio;
 
-use cpal::traits::{DeviceTrait, HostTrait};
 use source::{SourceInfo, SourceType};
 
-/// Enumerate all available audio sources (mics + system audio).
+/// Enumerate all available audio sources.
+/// Mic is always the system default (managed via System Settings > Sound > Input).
 pub fn discover_sources() -> Vec<SourceInfo> {
     let mut sources = Vec::new();
 
-    let host = cpal::default_host();
-    let default_input = host.default_input_device().and_then(|d| d.name().ok());
-
-    if let Ok(devices) = host.input_devices() {
-        for device in devices {
-            if let Ok(name) = device.name() {
-                let is_default = default_input.as_deref() == Some(&name);
-                sources.push(SourceInfo {
-                    id: format!("mic:{}", name),
-                    source_type: SourceType::Mic,
-                    label: name,
-                    default_selected: is_default,
-                });
-            }
-        }
-    }
+    // Single mic source — AVAudioEngine always uses the system default input device.
+    // Users change their mic in System Settings > Sound > Input.
+    sources.push(SourceInfo {
+        id: "mic".to_string(),
+        source_type: SourceType::Mic,
+        label: "System Microphone".to_string(),
+        default_selected: true,
+    });
 
     // System mix — always listed, best-effort at start time
     sources.push(SourceInfo {

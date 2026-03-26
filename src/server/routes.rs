@@ -181,7 +181,7 @@ async fn get_config() -> Json<Value> {
             },
             "format": {
                 "type": "select",
-                "default": "mp3",
+                "default": "opus",
                 "label": "Format",
                 "description": "Audio file format",
                 "options": [

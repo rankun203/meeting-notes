@@ -1,9 +1,9 @@
 # Resilient mic recording during Teams meetings
 
 ## Problem
-When a user joins a Microsoft Teams meeting on macOS, the built-in microphone becomes unavailable to other audio apps. The error from cpal is: "The requested device is no longer available. For example, it has been unplugged."
+When a user joins a Microsoft Teams meeting on macOS, the built-in microphone becomes unavailable to apps using cpal (Core Audio HAL API). The error: "The requested device is no longer available. For example, it has been unplugged."
 
-The mic works fine before joining Teams, and works again after restarting the computer (or restarting coreaudiod).
+The mic works fine before joining Teams. Restarting the daemon doesn't help — only a computer restart (or coreaudiod restart) fixes it. Meanwhile, leading AI meeting notes applications continue recording fine.
 
 ## Root cause
 Teams installs a HAL (Hardware Abstraction Layer) audio plugin at:
@@ -11,41 +11,50 @@ Teams installs a HAL (Hardware Abstraction Layer) audio plugin at:
 /Library/Audio/Plug-Ins/HAL/MSTeamsAudioDevice.driver
 ```
 
-When joining a call (especially with screen sharing + audio), this plugin dynamically creates/destroys virtual I/O devices, which triggers a Core Audio **device graph reconfiguration**. This invalidates all existing `AudioDeviceID` integer handles. The physical microphone is still present — it just gets assigned a new device ID.
+When joining a call (especially with screen sharing + audio), this plugin dynamically creates/destroys virtual I/O devices, triggering a Core Audio **device graph reconfiguration**. This invalidates all existing `AudioDeviceID` integer handles.
 
-### Key technical details
-- `AudioDeviceID` values are transient integers, not stable identifiers. Use `kAudioDevicePropertyDeviceUID` (CFString) for persistent identification.
-- Core Audio batches property change notifications, so apps can miss intermediate states.
-- cpal 0.15.3 monitors `kAudioDevicePropertyDeviceIsAlive` per-stream and fires `StreamError::DeviceNotAvailable` via the error callback when the device dies.
-- cpal does NOT monitor `kAudioHardwarePropertyDevices` (device list changes) or `kAudioHardwarePropertyDefaultInputDevice` at the host level.
+### Why cpal fails but other apps work
+- **cpal** uses the low-level Core Audio HAL API (`AudioDeviceCreateIOProcID` + `AudioDeviceStart`). When device graph changes invalidate `AudioDeviceID` handles, the HAL API gives hard errors that persist even across fresh enumerations.
+- **Leading AI meeting notes apps** use **AVAudioEngine** — Apple's higher-level audio API. AVAudioEngine's `inputNode` automatically tracks the system default input device and handles device graph changes gracefully.
 
-## Solution: auto-reconnect
+## Solution: AVAudioEngine
+
+We replaced cpal with AVAudioEngine for mic capture on macOS.
 
 ### How it works
-1. **Detection:** MicSource's cpal error callback sets an `AtomicBool` flag (`device_lost`) when `StreamError::DeviceNotAvailable` fires.
-2. **Recovery:** The session manager's file-size ticker (runs every 2s) checks `recorder.has_device_lost_sources()`. When true, it dispatches reconnection on a `spawn_blocking` thread.
-3. **Reconnection:** `restart_lost_sources()` calls `source.stop()` (drops old stream) then `source.start(sender)` (re-enumerates devices, finds mic with new ID, builds fresh stream). The writer channel stays alive throughout — just a brief gap in audio data.
-4. **Notification:** On success, an info notice is emitted to the frontend. On failure (after 3 attempts), an error notice with recovery instructions.
+1. **AVAudioEngine's `inputNode`** always tracks the system default input device — no manual device enumeration needed.
+2. **Tap installed on inputNode** delivers PCM audio buffers via a callback block (similar to cpal's callback, but at a higher API level).
+3. **Configuration change notification:** When Teams (or any app) modifies the audio device graph, AVAudioEngine posts `AVAudioEngineConfigurationChangeNotification` and stops itself. We observe this notification and **auto-restart the engine** — the tap persists across restarts, so audio resumes with only a brief gap.
+4. **No AudioDeviceID dependency:** AVAudioEngine abstracts away device IDs entirely. The engine always routes to whatever the current system default is.
 
-### Files modified
-- `src/audio/mic.rs` — `device_lost: Arc<AtomicBool>`, error callback detection, `is_device_lost()`
-- `src/audio/source.rs` — `is_device_lost()` on AudioSource trait (default: false)
-- `src/audio/recorder.rs` — `has_device_lost_sources()`, `restart_lost_sources()`
-- `src/session/mod.rs` — file-size ticker auto-recovery logic
+### Implementation (src/audio/mic.rs)
+- Uses raw `objc2` message sending (same pattern as system_audio/macos.rs) to call AVAudioEngine APIs
+- `block2` crate (0.5.x, compatible with objc2 0.5) for the ObjC block callbacks
+- Non-interleaved PCM buffers from AVAudioPCMBuffer are interleaved before sending to the writer
+- `NSNotificationCenter` observer for `AVAudioEngineConfigurationChangeNotification` auto-restarts the engine
 
-### Constraints
-- The reconnection (Core Audio calls) must happen on a blocking thread, not the async runtime.
-- The session write lock must be dropped before `spawn_blocking` and re-acquired after.
-- The old stream must be fully dropped before building a new one.
+### Dependencies added
+```toml
+# In [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSNotification"] }  # added feature
+```
+
+### cpal retained for
+- Device enumeration (`discover_sources()` in `src/audio/mod.rs`)
+- Default source ID resolution (`default_source_ids()` in `src/session/mod.rs`)
+
+## Fallback recovery
+The session manager's file-size ticker also monitors for device-lost sources (via `AudioSource::is_device_lost()` trait method) and attempts reconnection as a safety net. This handles edge cases where AVAudioEngine's notification might not fire.
 
 ## Manual recovery
-If auto-reconnect fails:
+If all else fails:
 1. Stop and restart recording from the UI
-2. Or restart Core Audio: `sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod`
-3. Nuclear option: remove Teams' audio driver: `sudo rm -rf /Library/Audio/Plug-Ins/HAL/MSTeamsAudioDevice.driver` (requires Teams reinstall to restore)
+2. Nuclear option: remove Teams' audio driver: `sudo rm -rf /Library/Audio/Plug-Ins/HAL/MSTeamsAudioDevice.driver` (requires Teams reinstall to restore)
+3. Note: `sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod` is blocked by SIP on modern macOS
 
 ## References
 - cpal issue #373: device change notifications (open since 2019)
-- cpal issue #704: silent device fallback
 - Teams HAL plugin: https://hochwald.net/post/resolving-audio-issues-microsoft-teams-macos
 - eqMac #976: Teams virtual device conflicts
+- AVAudioEngine config change: Apple Developer docs on AVAudioEngineConfigurationChangeNotification
