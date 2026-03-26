@@ -80,7 +80,7 @@ RunPod can build and deploy directly from your GitHub repo — no local Docker b
    - Branch: `master`
    - Dockerfile path: `apps/audio-extraction/Dockerfile.runpod`
    - Docker context: `apps/audio-extraction`
-   - Build secret: `hf_token=hf_...` (to pre-cache pyannote models in the image)
+   - Build arg: `HF_TOKEN=hf_...` (to pre-cache pyannote models in the image)
 4. **Set runtime env vars**: `HF_TOKEN`, and optionally override defaults below
 5. **Select GPU**: A40 (48GB, best value) or A100 (80GB, fastest)
 6. **Deploy** — builds trigger on GitHub releases
@@ -90,9 +90,9 @@ RunPod can build and deploy directly from your GitHub repo — no local Docker b
 ```bash
 cd apps/audio-extraction
 
-# Build with all models pre-cached (pass HF_TOKEN as secret to cache pyannote models)
-DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
-  --secret id=hf_token,env=HF_TOKEN \
+# Build with all models pre-cached (pass HF_TOKEN to cache pyannote models)
+docker build --platform linux/amd64 \
+  --build-arg HF_TOKEN=hf_... \
   -f Dockerfile.runpod -t YOUR_DOCKERHUB/audio-extraction:v0.1.0 .
 
 # Push to Docker Hub

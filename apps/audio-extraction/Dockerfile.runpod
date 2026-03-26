@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /app
@@ -34,28 +33,23 @@ RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
 RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 
 # 3. Pyannote diarization + speaker embedding models (~600 MB total)
-#    Requires HF_TOKEN — pass via Docker BuildKit secret to avoid leaking into layers:
-#      docker build --secret id=hf_token,env=HF_TOKEN -f Dockerfile.runpod .
-#    Or set as a build secret in RunPod GitHub integration settings.
-#    If no secret is provided, models will download on first request at runtime.
-RUN --mount=type=secret,id=hf_token,required=false \
-    if [ -f /run/secrets/hf_token ]; then \
-      export HF_TOKEN=$(cat /run/secrets/hf_token) && \
-      python -c " \
+#    Tries HF_TOKEN from build arg first, then skips gracefully.
+#    If not cached at build time, models download on first request using
+#    the HF_TOKEN runtime env var set in RunPod endpoint settings.
+ARG HF_TOKEN=""
+RUN python -c " \
 import os; \
+token = os.environ.get('HF_TOKEN') or None; \
+if not token: \
+    print('HF_TOKEN not set at build time — pyannote models will download on first request'); \
+    exit(0); \
 from pyannote.audio import Pipeline; \
-Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=os.environ['HF_TOKEN']); \
-print('Diarization model cached') \
-" && \
-      python -c " \
-import os; \
+Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=token); \
+print('Diarization model cached'); \
 from pyannote.audio import Inference; \
-Inference('pyannote/embedding', use_auth_token=os.environ['HF_TOKEN']); \
-print('Embedding model cached') \
-"; \
-    else \
-      echo 'WARNING: hf_token secret not set — pyannote models will download on first request'; \
-    fi
+Inference('pyannote/embedding', use_auth_token=token); \
+print('Embedding model cached'); \
+" || echo 'Pyannote model download failed — will retry at runtime'
 
 # ---------------------------------------------------------------------------
 # Runtime configuration (override via RunPod env vars)
