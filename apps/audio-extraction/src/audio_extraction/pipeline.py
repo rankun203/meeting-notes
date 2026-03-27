@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,15 @@ import requests as req
 import torch
 import whisperx
 from pyannote.audio import Pipeline as PyannotePipeline
+from pyannote.audio.pipelines.speaker_diarization import DiarizeOutput
 from whisperx.diarize import DiarizationPipeline
+
+# Suppress known harmless warnings from pyannote internals:
+# - TF32 reproducibility warning (pyannote disables TF32 intentionally)
+# - std() degrees-of-freedom warning on very short segments
+warnings.filterwarnings("ignore", message="TensorFloat-32.*has been disabled")
+warnings.filterwarnings("ignore", message="std\\(\\): degrees of freedom")
+warnings.filterwarnings("ignore", message="Passing `gradient_checkpointing` to a config")
 
 logger = logging.getLogger(__name__)
 
@@ -44,32 +53,72 @@ class TranscriptionPipeline:
         self._align_models: dict[str, tuple] = {}
         self._diarize_model = None
 
+    # ------------------------------------------------------------------
+    # Model loading
+    # ------------------------------------------------------------------
+
     def _get_diarize_model(self) -> DiarizationPipeline | None:
         """Load diarization model on first use. Requires HF_TOKEN."""
         if self._diarize_model is None and self.hf_token:
-            logger.info("Loading diarization pipeline (downloads pyannote sub-models on first run)")
-            logger.info("Required gated model licenses:")
-            logger.info("  - https://huggingface.co/pyannote/speaker-diarization-community-1")
-            logger.info("  - https://huggingface.co/pyannote/segmentation-3.0")
+            logger.info("Loading diarization pipeline")
 
-            # Pre-check: verify HF_TOKEN can access gated models before attempting
-            # the full pipeline load (which hangs silently on 403).
-            self._verify_hf_access()
-
-
-            # Disable HF progress bars — can cause issues in non-interactive envs.
             os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
             os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
             os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 
             model_name = "pyannote/speaker-diarization-community-1"
+            pipeline = self._load_pyannote_pipeline(model_name)
 
-            # Pipeline.from_pretrained() hangs in RunPod's serverless worker
-            # (works fine from SSH). Workaround: run the download in a subprocess,
-            # then load from local cache.
-            logger.info("Step 1/3: Pre-downloading models via subprocess...")
+            logger.info("Moving diarization pipeline to %s...", self.device)
             t0 = time.time()
-            download_script = f"""
+            pipeline = pipeline.to(torch.device(self.device))
+            logger.info("Moved to %s in %.1fs", self.device, time.time() - t0)
+
+            # Wrap in DiarizationPipeline without re-downloading
+            self._diarize_model = object.__new__(DiarizationPipeline)
+            self._diarize_model.model = pipeline
+            logger.info("Diarization pipeline ready")
+        return self._diarize_model
+
+    def _load_pyannote_pipeline(self, model_name: str) -> PyannotePipeline:
+        """Load pyannote pipeline, trying offline cache first."""
+        # Try cache first (offline) — instant when pre-cached at Docker build time
+        logger.info("Loading from cache (offline)...")
+        t0 = time.time()
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            pipeline = PyannotePipeline.from_pretrained(
+                model_name, token=self.hf_token
+            )
+            logger.info("Loaded from cache in %.1fs", time.time() - t0)
+            return pipeline
+        except Exception as e:
+            logger.info("Cache miss (%.1fs): %s", time.time() - t0, e)
+        finally:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+
+        # Cache miss — verify access, download via subprocess (avoids hangs
+        # in RunPod's serverless worker), then load from cache.
+        self._verify_hf_access()
+        self._download_pyannote_subprocess(model_name)
+
+        logger.info("Loading from cache after download...")
+        t0 = time.time()
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            pipeline = PyannotePipeline.from_pretrained(
+                model_name, token=self.hf_token
+            )
+        finally:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        logger.info("Loaded from cache in %.1fs", time.time() - t0)
+        return pipeline
+
+    def _download_pyannote_subprocess(self, model_name: str):
+        """Download pyannote models in a subprocess to avoid hangs."""
+        logger.info("Downloading models via subprocess...")
+        t0 = time.time()
+        download_script = f"""
 import os
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -77,39 +126,15 @@ from pyannote.audio import Pipeline
 pipeline = Pipeline.from_pretrained('{model_name}', token='{self.hf_token}')
 print('DOWNLOAD_OK')
 """
-            result = subprocess.run(
-                [sys.executable, "-c", download_script],
-                capture_output=True, text=True, timeout=180,
-            )
-            if "DOWNLOAD_OK" not in result.stdout:
-                logger.error("Subprocess stdout: %s", result.stdout[-500:] if result.stdout else "(empty)")
-                logger.error("Subprocess stderr: %s", result.stderr[-500:] if result.stderr else "(empty)")
-                raise RuntimeError(f"Failed to download diarization models in subprocess")
-            logger.info("Step 1/3 done in %.1fs: models cached to disk", time.time() - t0)
-
-            # Now load from cache in this process.
-            # Force offline mode to prevent any network calls that might hang.
-            logger.info("Step 2/3: Loading pipeline from cache (offline)...")
-            t0 = time.time()
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            try:
-                pipeline = PyannotePipeline.from_pretrained(
-                    model_name, token=self.hf_token
-                )
-            finally:
-                os.environ.pop("HF_HUB_OFFLINE", None)
-            logger.info("Step 2/3 done in %.1fs", time.time() - t0)
-
-            logger.info("Step 3/3: Moving to device=%s...", self.device)
-            t0 = time.time()
-            pipeline = pipeline.to(torch.device(self.device))
-            logger.info("Step 3/3 done in %.1fs", time.time() - t0)
-
-            # Construct DiarizationPipeline wrapper without re-downloading
-            self._diarize_model = object.__new__(DiarizationPipeline)
-            self._diarize_model.model = pipeline
-            logger.info("Diarization pipeline loaded successfully")
-        return self._diarize_model
+        result = subprocess.run(
+            [sys.executable, "-c", download_script],
+            capture_output=True, text=True, timeout=180,
+        )
+        if "DOWNLOAD_OK" not in result.stdout:
+            logger.error("Subprocess stdout: %s", result.stdout[-500:] if result.stdout else "(empty)")
+            logger.error("Subprocess stderr: %s", result.stderr[-500:] if result.stderr else "(empty)")
+            raise RuntimeError("Failed to download diarization models in subprocess")
+        logger.info("Download done in %.1fs", time.time() - t0)
 
     def _verify_hf_access(self):
         """Pre-check that HF_TOKEN can access required gated models."""
@@ -149,6 +174,82 @@ print('DOWNLOAD_OK')
             self._align_models[language] = (model_a, metadata)
         return self._align_models[language]
 
+    # ------------------------------------------------------------------
+    # Pipeline steps
+    # ------------------------------------------------------------------
+
+    def _transcribe(self, audio: np.ndarray, language: str) -> dict:
+        """Run WhisperX speech-to-text."""
+        logger.info("Transcribing (%.1fs audio)", len(audio) / 16000)
+        t0 = time.time()
+        result = self.model.transcribe(audio, batch_size=self.batch_size, language=language)
+        logger.info("Transcription done in %.1fs", time.time() - t0)
+        return result
+
+    def _align(self, segments: list[dict], audio: np.ndarray, language: str) -> dict:
+        """Run forced alignment for word-level timestamps."""
+        logger.info("Aligning %d segments", len(segments))
+        t0 = time.time()
+        model_a, metadata = self._get_align_model(language)
+        result = whisperx.align(
+            segments, model_a, metadata, audio, self.device,
+            return_char_alignments=False,
+        )
+        logger.info("Alignment done in %.1fs", time.time() - t0)
+        return result
+
+    def _diarize(
+        self,
+        audio: np.ndarray,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+    ) -> tuple[any, dict[str, list[float]]]:
+        """Run speaker diarization. Returns (annotation, speaker_embeddings)."""
+        diarize_model = self._get_diarize_model()
+        if diarize_model is None:
+            return None, {}
+
+        logger.info("Diarizing %.1fs of audio...", len(audio) / 16000)
+        t0 = time.time()
+
+        kwargs = {}
+        if min_speakers is not None:
+            kwargs["min_speakers"] = min_speakers
+        if max_speakers is not None:
+            kwargs["max_speakers"] = max_speakers
+
+        # Progress hook — pyannote calls this at each pipeline step
+        step_times: dict[str, float] = {}
+        def _progress_hook(step_name, step_artifact, file=None, **kw):
+            completed = kw.get("completed")
+            total = kw.get("total")
+            if completed is not None and total is not None:
+                if completed == total or completed % max(total // 5, 1) == 0:
+                    logger.info("  diarize/%s: %d/%d (%.0f%%)",
+                                step_name, completed, total, 100 * completed / total)
+            else:
+                elapsed = time.time() - t0
+                step_times[step_name] = elapsed
+                logger.info("  diarize/%s done (%.1fs elapsed)", step_name, elapsed)
+
+        # Pass waveform dict directly to avoid torchcodec dependency
+        waveform = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
+        audio_input = {"waveform": waveform, "sample_rate": 16000}
+        diarize_output = diarize_model.model(
+            audio_input, hook=_progress_hook, **kwargs
+        )
+
+        # Extract annotation and embeddings
+        annotation, speaker_embeddings = _parse_diarize_output(diarize_output)
+
+        logger.info("Diarization done in %.1fs (%d speakers)",
+                     time.time() - t0, len(speaker_embeddings))
+        return annotation, speaker_embeddings
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
     def process_track(
         self,
         audio_path: str,
@@ -157,76 +258,48 @@ print('DOWNLOAD_OK')
         speaker_prefix: str = "mic",
         min_speakers: int | None = None,
         max_speakers: int | None = None,
+        audio: np.ndarray | None = None,
     ) -> dict:
         """Process a single audio track through the full pipeline.
 
-        Returns dict with: segments, speaker_embeddings, duration_secs
+        Args:
+            audio_path: Path to audio file.
+            language: Language code for transcription.
+            diarize: Whether to run speaker diarization.
+            speaker_prefix: Prefix for speaker IDs (avoids cross-track collisions).
+            min_speakers: Minimum expected speakers.
+            max_speakers: Maximum expected speakers.
+            audio: Pre-decoded audio array (skips loading if provided).
+
+        Returns:
+            dict with: duration_secs, segments, speaker_embeddings
         """
-        # Load audio
-        audio = whisperx.load_audio(audio_path)
-        duration_secs = len(audio) / 16000  # whisperx loads at 16kHz
+        if audio is None:
+            audio = whisperx.load_audio(audio_path)
+        duration_secs = len(audio) / 16000
 
         # Step 1: Transcribe
-        logger.info("Transcribing %s (%.1fs)", audio_path, duration_secs)
-        result = self.model.transcribe(audio, batch_size=self.batch_size, language=language)
+        result = self._transcribe(audio, language)
 
         # Step 2: Align (word-level timestamps)
-        logger.info("Aligning transcript")
-        model_a, metadata = self._get_align_model(result["language"])
-        result = whisperx.align(
-            result["segments"],
-            model_a,
-            metadata,
-            audio,
-            self.device,
-            return_char_alignments=False,
-        )
+        result = self._align(result["segments"], audio, result["language"])
 
         # Step 3: Diarize (speaker labels + embeddings)
         speaker_embeddings = {}
-        diarize_model = self._get_diarize_model() if diarize else None
-        if diarize_model is not None:
-            logger.info("Diarizing")
-            diarize_kwargs = {}
-            if min_speakers is not None:
-                diarize_kwargs["min_speakers"] = min_speakers
-            if max_speakers is not None:
-                diarize_kwargs["max_speakers"] = max_speakers
-
-            # Call pyannote pipeline directly (not whisperx wrapper) because:
-            # 1. We use object.__new__ to bypass whisperx's constructor
-            # 2. whisperx's __call__ expects str/ndarray, not dict
-            # 3. We need to pass waveform dict to avoid torchcodec dependency
-            waveform_tensor = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
-            audio_input = {"waveform": waveform_tensor, "sample_rate": 16000}
-
-            # Call the underlying pyannote pipeline directly
-            diarize_output = diarize_model.model(
-                audio_input, return_embeddings=True, **diarize_kwargs
+        if diarize:
+            annotation, speaker_embeddings = self._diarize(
+                audio, min_speakers, max_speakers
             )
-
-            # pyannote returns (Annotation, embeddings) or just Annotation
-            if isinstance(diarize_output, tuple):
-                annotation, raw_embeddings = diarize_output
-                if raw_embeddings:
-                    speaker_embeddings = {
-                        k: v if isinstance(v, list) else v.tolist()
-                        for k, v in raw_embeddings.items()
-                    }
-            else:
-                annotation = diarize_output
-
-            # Convert pyannote Annotation to DataFrame for whisperx
-            diarize_segments = pd.DataFrame(
-                [
-                    {"start": turn.start, "end": turn.end, "speaker": speaker}
-                    for turn, _, speaker in annotation.itertracks(yield_label=True)
-                ]
-            )
-
-            result = whisperx.assign_word_speakers(
-                diarize_segments, result, fill_nearest=True
-            )
+            if annotation is not None:
+                diarize_segments = pd.DataFrame(
+                    [
+                        {"start": turn.start, "end": turn.end, "speaker": speaker}
+                        for turn, _, speaker in annotation.itertracks(yield_label=True)
+                    ]
+                )
+                result = whisperx.assign_word_speakers(
+                    diarize_segments, result, fill_nearest=True
+                )
 
         # Prefix speaker IDs to avoid cross-track collisions
         segments = _prefix_speakers(result["segments"], speaker_prefix)
@@ -239,6 +312,39 @@ print('DOWNLOAD_OK')
             "segments": segments,
             "speaker_embeddings": speaker_embeddings,
         }
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _parse_diarize_output(output) -> tuple[any, dict[str, list[float]]]:
+    """Extract annotation and speaker embeddings from pyannote output."""
+    speaker_embeddings = {}
+
+    if isinstance(output, DiarizeOutput):
+        # pyannote-audio 4.x
+        annotation = output.speaker_diarization
+        raw = output.speaker_embeddings
+        if raw is not None:
+            labels = annotation.labels()
+            speaker_embeddings = {
+                label: raw[i].tolist()
+                for i, label in enumerate(labels)
+                if i < raw.shape[0]
+            }
+    elif isinstance(output, tuple):
+        # Legacy: tuple of (Annotation, embeddings_dict)
+        annotation, raw = output
+        if raw:
+            speaker_embeddings = {
+                k: v if isinstance(v, list) else v.tolist()
+                for k, v in raw.items()
+            }
+    else:
+        annotation = output
+
+    return annotation, speaker_embeddings
 
 
 def _prefix_speakers(segments: list[dict], prefix: str) -> list[dict]:

@@ -8,8 +8,10 @@ import logging
 import os
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
+import whisperx
 
 from audio_extraction.pipeline import TranscriptionPipeline
 
@@ -53,6 +55,26 @@ def download_audio(url: str, suffix: str = ".audio") -> str:
     return tmp.name
 
 
+def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
+    """Download and decode audio for a track (CPU-bound). Returns (track_name, source_type, audio_path, audio_array, duration)."""
+    audio_url = track["audio_url"]
+    track_name = track["track_name"]
+    source_type = track["source_type"]
+
+    path = audio_url.split("?")[0].split("#")[0]
+    suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ".audio"
+    audio_path = download_audio(audio_url, suffix=suffix)
+
+    # Pre-decode audio (CPU-bound ffmpeg work) so it's ready for GPU
+    logger.info("Decoding %s", track_name)
+    t0 = time.time()
+    audio = whisperx.load_audio(audio_path)
+    duration = len(audio) / 16000
+    logger.info("Decoded %s: %.1fs audio in %.1fs", track_name, duration, time.time() - t0)
+
+    return track_name, source_type, audio_path, audio, duration
+
+
 def handler(event: dict) -> dict:
     """RunPod serverless handler."""
     inp = event["input"]
@@ -70,42 +92,42 @@ def handler(event: dict) -> dict:
     downloaded_files = []
 
     try:
-        for idx, track in enumerate(tracks):
-            audio_url = track["audio_url"]
-            track_name = track["track_name"]
-            source_type = track["source_type"]
+        # Download and decode all tracks in parallel (CPU-bound) while
+        # overlapping with GPU processing of earlier tracks.
+        with ThreadPoolExecutor(max_workers=len(tracks)) as pool:
+            futures = [pool.submit(_download_and_decode, t) for t in tracks]
 
-            logger.info("Track %d/%d: \"%s\" (%s)", idx + 1, len(tracks), track_name, source_type)
+            for idx, future in enumerate(futures):
+                track_name, source_type, audio_path, audio, duration = future.result()
+                downloaded_files.append(audio_path)
 
-            # Download
-            path = audio_url.split("?")[0].split("#")[0]
-            suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ".audio"
-            audio_path = download_audio(audio_url, suffix=suffix)
-            downloaded_files.append(audio_path)
+                logger.info("Track %d/%d: \"%s\" (%s, %.1fs)",
+                            idx + 1, len(tracks), track_name, source_type, duration)
 
-            # Process
-            prefix = "mic" if source_type == "mic" else "sys"
-            track_t0 = time.time()
-            result = pipeline.process_track(
-                audio_path=audio_path,
-                language=language,
-                diarize=diarize,
-                speaker_prefix=prefix,
-                min_speakers=min_speakers,
-                max_speakers=max_speakers,
-            )
-            track_elapsed = time.time() - track_t0
+                # Process on GPU (audio already decoded)
+                prefix = "mic" if source_type == "mic" else "sys"
+                track_t0 = time.time()
+                result = pipeline.process_track(
+                    audio_path=audio_path,
+                    audio=audio,
+                    language=language,
+                    diarize=diarize,
+                    speaker_prefix=prefix,
+                    min_speakers=min_speakers,
+                    max_speakers=max_speakers,
+                )
+                track_elapsed = time.time() - track_t0
 
-            segs = len(result.get("segments", []))
-            embs = len(result.get("speaker_embeddings", {}))
-            dur = result.get("duration_secs", 0)
-            logger.info("Track \"%s\" done: %d segments, %d speakers, %.1fs audio in %.1fs (%.1fx realtime)",
-                        track_name, segs, embs, dur, track_elapsed, dur / max(track_elapsed, 0.001))
+                segs = len(result.get("segments", []))
+                embs = len(result.get("speaker_embeddings", {}))
+                dur = result.get("duration_secs", 0)
+                logger.info("Track \"%s\" done: %d segments, %d speakers, %.1fs audio in %.1fs (%.1fx realtime)",
+                            track_name, segs, embs, dur, track_elapsed, dur / max(track_elapsed, 0.001))
 
-            results[track_name] = {
-                "source_type": source_type,
-                **result,
-            }
+                results[track_name] = {
+                    "source_type": source_type,
+                    **result,
+                }
     finally:
         for path in downloaded_files:
             try:

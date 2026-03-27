@@ -32,8 +32,14 @@ ARG WHISPER_MODEL_SIZE=large-v2
 
 # 1. Whisper model (~3 GB for large-v2) + upgrade Lightning checkpoint
 RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cpu', compute_type='int8')" && \
-    python -m lightning.pytorch.utilities.upgrade_checkpoint \
-      /usr/local/lib/python3.12/dist-packages/whisperx/assets/pytorch_model.bin 2>/dev/null || true
+    python -c "\
+from lightning.pytorch.utilities.migration.utils import migrate_checkpoint; \
+import torch, pathlib; \
+p = pathlib.Path('/usr/local/lib/python3.12/dist-packages/whisperx/assets/pytorch_model.bin'); \
+ckpt = torch.load(p, map_location='cpu', weights_only=False); \
+migrated, _ = migrate_checkpoint(ckpt); \
+torch.save(migrated, p); \
+print('Lightning checkpoint upgraded in-place')" 2>/dev/null || true
 
 # 2. Alignment models for common languages (~400 MB each)
 RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
