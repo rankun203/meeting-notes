@@ -1,7 +1,6 @@
 """Entry point for RunPod serverless: `python -m audio_extraction`."""
 
 import logging
-import os
 import platform
 import subprocess
 import sys
