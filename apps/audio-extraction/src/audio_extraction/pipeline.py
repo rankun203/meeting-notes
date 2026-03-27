@@ -39,32 +39,50 @@ class TranscriptionPipeline:
     def _get_diarize_model(self) -> DiarizationPipeline | None:
         """Load diarization model on first use. Requires HF_TOKEN."""
         if self._diarize_model is None and self.hf_token:
-            logger.info("Loading diarization pipeline (this downloads pyannote sub-models on first run)")
-            logger.info("If this hangs, you likely need to accept gated model licenses:")
+            logger.info("Loading diarization pipeline (downloads pyannote sub-models on first run)")
+            logger.info("Required gated model licenses:")
             logger.info("  - https://huggingface.co/pyannote/speaker-diarization-community-1")
             logger.info("  - https://huggingface.co/pyannote/segmentation-3.0")
-            logger.info("  - https://huggingface.co/pyannote/embedding")
 
-            import concurrent.futures
-            timeout_secs = 120
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    DiarizationPipeline, token=self.hf_token, device=self.device
-                )
-                try:
-                    self._diarize_model = future.result(timeout=timeout_secs)
-                except concurrent.futures.TimeoutError:
-                    future.cancel()
-                    raise RuntimeError(
-                        f"Diarization model loading timed out after {timeout_secs}s. "
-                        "This usually means a pyannote sub-model is gated and your HF_TOKEN "
-                        "doesn't have access. Accept licenses at:\n"
-                        "  https://huggingface.co/pyannote/speaker-diarization-community-1\n"
-                        "  https://huggingface.co/pyannote/segmentation-3.0\n"
-                        "  https://huggingface.co/pyannote/embedding"
-                    )
+            # Pre-check: verify HF_TOKEN can access gated models before attempting
+            # the full pipeline load (which hangs silently on 403).
+            self._verify_hf_access()
+
+            logger.info("Access verified, loading pipeline...")
+            self._diarize_model = DiarizationPipeline(
+                token=self.hf_token, device=self.device
+            )
             logger.info("Diarization pipeline loaded successfully")
         return self._diarize_model
+
+    def _verify_hf_access(self):
+        """Pre-check that HF_TOKEN can access required gated models."""
+        import requests as req
+        gated_models = [
+            "pyannote/speaker-diarization-community-1",
+            "pyannote/segmentation-3.0",
+        ]
+        for model in gated_models:
+            url = f"https://huggingface.co/api/models/{model}"
+            logger.info("Checking access: %s", model)
+            try:
+                resp = req.get(url, headers={"Authorization": f"Bearer {self.hf_token}"}, timeout=10)
+                if resp.status_code == 401:
+                    raise RuntimeError(
+                        f"HF_TOKEN is invalid or expired. Check your token at https://huggingface.co/settings/tokens"
+                    )
+                elif resp.status_code == 403:
+                    raise RuntimeError(
+                        f"Access denied to {model}. Accept the license at https://huggingface.co/{model}"
+                    )
+                elif resp.status_code != 200:
+                    logger.warning("Unexpected status %d for %s, proceeding anyway", resp.status_code, model)
+                else:
+                    logger.info("Access OK: %s", model)
+            except req.ConnectionError as e:
+                raise RuntimeError(f"Cannot reach HuggingFace API: {e}")
+            except req.Timeout:
+                raise RuntimeError(f"HuggingFace API timeout checking {model}")
 
     def _get_align_model(self, language: str):
         """Load and cache alignment model per language."""
