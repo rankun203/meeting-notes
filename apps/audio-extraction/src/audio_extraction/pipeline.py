@@ -1,6 +1,8 @@
 """WhisperX transcription + alignment + diarization pipeline."""
 
 import logging
+import numpy as np
+import torch
 import whisperx
 from whisperx.diarize import DiarizationPipeline
 
@@ -97,10 +99,18 @@ class TranscriptionPipeline:
             if max_speakers is not None:
                 diarize_kwargs["max_speakers"] = max_speakers
 
+            # Pass waveform tensor instead of file path to avoid torchcodec
+            # dependency (pyannote uses torchcodec for file I/O which needs
+            # libnvrtc.so.13, not available in all CUDA base images).
+            # whisperx.load_audio returns float32 mono at 16kHz; pyannote
+            # expects a (channel, time) tensor at any sample rate.
+            waveform_tensor = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
+            audio_input = {"waveform": waveform_tensor, "sample_rate": 16000}
+
             # return_embeddings=True gives us speaker voice fingerprints
             # directly from pyannote — no need for a separate embedding model
             diarize_result = diarize_model(
-                audio_path, return_embeddings=True, **diarize_kwargs
+                audio_input, return_embeddings=True, **diarize_kwargs
             )
 
             if isinstance(diarize_result, tuple):
