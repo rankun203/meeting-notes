@@ -4,8 +4,6 @@ import logging
 import whisperx
 from whisperx.diarize import DiarizationPipeline
 
-from audio_extraction.embeddings import extract_speaker_embeddings
-
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +37,7 @@ class TranscriptionPipeline:
         if hf_token:
             logger.info("Loading diarization pipeline")
             self.diarize_model = DiarizationPipeline(
-                use_auth_token=hf_token, device=device
+                token=hf_token, device=device
             )
 
     def _get_align_model(self, language: str):
@@ -85,7 +83,7 @@ class TranscriptionPipeline:
             return_char_alignments=False,
         )
 
-        # Step 3: Diarize (speaker labels)
+        # Step 3: Diarize (speaker labels + embeddings)
         speaker_embeddings = {}
         if diarize and self.diarize_model is not None:
             logger.info("Diarizing")
@@ -95,16 +93,25 @@ class TranscriptionPipeline:
             if max_speakers is not None:
                 diarize_kwargs["max_speakers"] = max_speakers
 
-            diarize_segments = self.diarize_model(audio_path, **diarize_kwargs)
-            result = whisperx.assign_word_speakers(diarize_segments, result)
+            # return_embeddings=True gives us speaker voice fingerprints
+            # directly from pyannote — no need for a separate embedding model
+            diarize_result = self.diarize_model(
+                audio_path, return_embeddings=True, **diarize_kwargs
+            )
 
-            # Step 4: Extract speaker embeddings
-            logger.info("Extracting speaker embeddings")
-            speaker_embeddings = extract_speaker_embeddings(
-                audio_path=audio_path,
-                diarize_segments=diarize_segments,
-                device=self.device,
-                hf_token=self.hf_token,
+            if isinstance(diarize_result, tuple):
+                diarize_segments, raw_embeddings = diarize_result
+                # raw_embeddings: dict[str, list[float]]
+                if raw_embeddings:
+                    speaker_embeddings = {
+                        k: v if isinstance(v, list) else v.tolist()
+                        for k, v in raw_embeddings.items()
+                    }
+            else:
+                diarize_segments = diarize_result
+
+            result = whisperx.assign_word_speakers(
+                diarize_segments, result, fill_nearest=True
             )
 
         # Prefix speaker IDs to avoid cross-track collisions
