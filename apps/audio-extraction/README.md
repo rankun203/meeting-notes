@@ -237,6 +237,20 @@ Diarization done in 27.5s (2 speakers)
 | English, 16.6 hr | 67 min mic + 15.5 hr system | 2 | 722s | 77-96x |
 | Chinese, 1.7 hr | 51 min mic + 51 min system | 2 | 140s | 46-49x |
 
+Peak VRAM is ~5.5 GiB regardless of audio length. Any GPU with 8+ GB works.
+
+### GPU comparison
+
+| | A40 | RTX 4090 | L40S | RTX 5090 |
+|---|---|---|---|---|
+| **Architecture** | Ampere (sm_80) | Ada (sm_89) | Ada (sm_89) | Blackwell (sm_100) |
+| **VRAM** | 48 GB GDDR6 | 24 GB GDDR6X | 48 GB GDDR6 | 32 GB GDDR7 |
+| **Memory BW** | 696 GB/s | 1,008 GB/s | 864 GB/s | ~1,792 GB/s |
+| **FP16 Tensor** | 150 TFLOPS | 330 TFLOPS | 366 TFLOPS | ~420 TFLOPS |
+| **Est. speed** | 1x | ~1.3x | ~1.2x | ~2x |
+
+This workload is memory-bandwidth bound (inference, not training), so the 4090 outperforms the L40S despite lower FP16 TFLOPS. The 48 GB on A40/L40S is unused headroom — 24 GB is more than enough.
+
 ### Troubleshooting
 
 - **"Pyannote model pre-cache skipped"** at build time: `HF_TOKEN` wasn't passed as a build arg. Models download at runtime instead (~14s on first request).
