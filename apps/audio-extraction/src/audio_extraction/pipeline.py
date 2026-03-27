@@ -83,13 +83,18 @@ print('DOWNLOAD_OK')
                 raise RuntimeError(f"Failed to download diarization models in subprocess")
             logger.info("Step 1/3 done in %.1fs: models cached to disk", time.time() - t0)
 
-            # Now load from cache in this process (no network needed)
-            logger.info("Step 2/3: Loading pipeline from cache...")
+            # Now load from cache in this process.
+            # Force offline mode to prevent any network calls that might hang.
+            logger.info("Step 2/3: Loading pipeline from cache (offline)...")
             t0 = time.time()
+            os.environ["HF_HUB_OFFLINE"] = "1"
             from pyannote.audio import Pipeline as PyannotePipeline
-            pipeline = PyannotePipeline.from_pretrained(
-                model_name, token=self.hf_token
-            )
+            try:
+                pipeline = PyannotePipeline.from_pretrained(
+                    model_name, token=self.hf_token
+                )
+            finally:
+                os.environ.pop("HF_HUB_OFFLINE", None)
             logger.info("Step 2/3 done in %.1fs", time.time() - t0)
 
             logger.info("Step 3/3: Moving to device=%s...", self.device)
