@@ -1,9 +1,17 @@
 """WhisperX transcription + alignment + diarization pipeline."""
 
 import logging
+import os
+import subprocess
+import sys
+import time
+
 import numpy as np
+import pandas as pd
+import requests as req
 import torch
 import whisperx
+from pyannote.audio import Pipeline as PyannotePipeline
 from whisperx.diarize import DiarizationPipeline
 
 logger = logging.getLogger(__name__)
@@ -48,10 +56,6 @@ class TranscriptionPipeline:
             # the full pipeline load (which hangs silently on 403).
             self._verify_hf_access()
 
-            import os
-            import time
-            import subprocess
-            import sys
 
             # Disable HF progress bars — can cause issues in non-interactive envs.
             os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -88,7 +92,6 @@ print('DOWNLOAD_OK')
             logger.info("Step 2/3: Loading pipeline from cache (offline)...")
             t0 = time.time()
             os.environ["HF_HUB_OFFLINE"] = "1"
-            from pyannote.audio import Pipeline as PyannotePipeline
             try:
                 pipeline = PyannotePipeline.from_pretrained(
                     model_name, token=self.hf_token
@@ -110,7 +113,6 @@ print('DOWNLOAD_OK')
 
     def _verify_hf_access(self):
         """Pre-check that HF_TOKEN can access required gated models."""
-        import requests as req
         gated_models = [
             "pyannote/speaker-diarization-community-1",
             "pyannote/segmentation-3.0",
@@ -204,7 +206,6 @@ print('DOWNLOAD_OK')
             )
 
             # pyannote returns (Annotation, embeddings) or just Annotation
-            import pandas as pd
             if isinstance(diarize_output, tuple):
                 annotation, raw_embeddings = diarize_output
                 if raw_embeddings:

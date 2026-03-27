@@ -54,11 +54,8 @@ if not token:
     sys.exit(0)
 print('HF_TOKEN found, pre-caching pyannote models...')
 from pyannote.audio import Pipeline
-Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=token)
-print('Diarization model cached')
-from pyannote.audio import Inference
-Inference('pyannote/embedding', token=token)
-print('Embedding model cached')
+Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', token=token)
+print('Diarization pipeline cached (includes segmentation + embedding sub-models)')
 PYEOF
 
 # ---------------------------------------------------------------------------
