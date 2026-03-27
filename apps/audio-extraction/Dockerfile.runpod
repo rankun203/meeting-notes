@@ -44,7 +44,7 @@ RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 #    using the HF_TOKEN env var set in RunPod endpoint settings.
 #    For manual builds, pass --build-arg HF_TOKEN=hf_... to pre-cache.
 ARG HF_TOKEN=""
-RUN python3 <<'PYEOF' || echo 'Pyannote model pre-cache skipped — will download at runtime'
+RUN python <<'PYEOF' || echo 'Pyannote model pre-cache skipped — will download at runtime'
 import os, sys
 token = os.environ.get('HF_TOKEN') or None
 if not token:
@@ -53,10 +53,10 @@ if not token:
     sys.exit(0)
 print('HF_TOKEN found, pre-caching pyannote models...')
 from pyannote.audio import Pipeline
-Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=token)
+Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', token=token)
 print('Diarization model cached')
 from pyannote.audio import Inference
-Inference('pyannote/embedding', use_auth_token=token)
+Inference('pyannote/embedding', token=token)
 print('Embedding model cached')
 PYEOF
 
