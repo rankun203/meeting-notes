@@ -18,7 +18,8 @@ RUN pip freeze | grep -iE '^(torch|torchaudio|torchvision)==' > /tmp/torch-const
     uv pip install --system \
       --constraint /tmp/torch-constraints.txt \
       . && \
-    pip uninstall -y torchcodec 2>/dev/null || true
+    pip install --no-cache-dir "torchcodec>=0.7,<0.8" 2>/dev/null || \
+    echo "torchcodec install failed — pyannote will use waveform dict fallback"
 
 # ---------------------------------------------------------------------------
 # Pre-download ALL models at build time so cold starts are near-instant.
