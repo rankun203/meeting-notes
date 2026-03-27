@@ -32,13 +32,16 @@ class TranscriptionPipeline:
         )
 
         self._align_models: dict[str, tuple] = {}
+        self._diarize_model = None
 
-        self.diarize_model = None
-        if hf_token:
+    def _get_diarize_model(self) -> DiarizationPipeline | None:
+        """Load diarization model on first use. Requires HF_TOKEN."""
+        if self._diarize_model is None and self.hf_token:
             logger.info("Loading diarization pipeline")
-            self.diarize_model = DiarizationPipeline(
-                token=hf_token, device=device
+            self._diarize_model = DiarizationPipeline(
+                token=self.hf_token, device=self.device
             )
+        return self._diarize_model
 
     def _get_align_model(self, language: str):
         """Load and cache alignment model per language."""
@@ -85,7 +88,8 @@ class TranscriptionPipeline:
 
         # Step 3: Diarize (speaker labels + embeddings)
         speaker_embeddings = {}
-        if diarize and self.diarize_model is not None:
+        diarize_model = self._get_diarize_model() if diarize else None
+        if diarize_model is not None:
             logger.info("Diarizing")
             diarize_kwargs = {}
             if min_speakers is not None:
@@ -95,7 +99,7 @@ class TranscriptionPipeline:
 
             # return_embeddings=True gives us speaker voice fingerprints
             # directly from pyannote — no need for a separate embedding model
-            diarize_result = self.diarize_model(
+            diarize_result = diarize_model(
                 audio_path, return_embeddings=True, **diarize_kwargs
             )
 
