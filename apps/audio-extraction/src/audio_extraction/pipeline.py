@@ -53,8 +53,14 @@ class TranscriptionPipeline:
             #   1. Pipeline.from_pretrained(model_config, token, cache_dir)
             #   2. .to(device)
             # We replicate this with logging between each step.
+            import os
             import time
             from pyannote.audio import Pipeline as PyannotePipeline
+
+            # Disable HF progress bars — they can deadlock in non-interactive
+            # environments like RunPod's serverless worker.
+            os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+            os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
             model_name = "pyannote/speaker-diarization-community-1"
 
