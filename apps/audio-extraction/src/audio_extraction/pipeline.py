@@ -48,33 +48,54 @@ class TranscriptionPipeline:
             # the full pipeline load (which hangs silently on 403).
             self._verify_hf_access()
 
-            # Load pipeline step-by-step with logging to identify where it hangs.
-            # whisperx.DiarizationPipeline.__init__ does:
-            #   1. Pipeline.from_pretrained(model_config, token, cache_dir)
-            #   2. .to(device)
-            # We replicate this with logging between each step.
             import os
             import time
-            from pyannote.audio import Pipeline as PyannotePipeline
+            import subprocess
+            import sys
 
-            # Disable HF progress bars — they can deadlock in non-interactive
-            # environments like RunPod's serverless worker.
+            # Disable HF progress bars — can cause issues in non-interactive envs.
             os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
             os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+            os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 
             model_name = "pyannote/speaker-diarization-community-1"
 
-            logger.info("Step 1/2: Pipeline.from_pretrained('%s')...", model_name)
+            # Pipeline.from_pretrained() hangs in RunPod's serverless worker
+            # (works fine from SSH). Workaround: run the download in a subprocess,
+            # then load from local cache.
+            logger.info("Step 1/3: Pre-downloading models via subprocess...")
             t0 = time.time()
+            download_script = f"""
+import os
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+from pyannote.audio import Pipeline
+pipeline = Pipeline.from_pretrained('{model_name}', token='{self.hf_token}')
+print('DOWNLOAD_OK')
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", download_script],
+                capture_output=True, text=True, timeout=180,
+            )
+            if "DOWNLOAD_OK" not in result.stdout:
+                logger.error("Subprocess stdout: %s", result.stdout[-500:] if result.stdout else "(empty)")
+                logger.error("Subprocess stderr: %s", result.stderr[-500:] if result.stderr else "(empty)")
+                raise RuntimeError(f"Failed to download diarization models in subprocess")
+            logger.info("Step 1/3 done in %.1fs: models cached to disk", time.time() - t0)
+
+            # Now load from cache in this process (no network needed)
+            logger.info("Step 2/3: Loading pipeline from cache...")
+            t0 = time.time()
+            from pyannote.audio import Pipeline as PyannotePipeline
             pipeline = PyannotePipeline.from_pretrained(
                 model_name, token=self.hf_token
             )
-            logger.info("Step 1/2 done in %.1fs", time.time() - t0)
+            logger.info("Step 2/3 done in %.1fs", time.time() - t0)
 
-            logger.info("Step 2/2: Moving to device=%s...", self.device)
+            logger.info("Step 3/3: Moving to device=%s...", self.device)
             t0 = time.time()
             pipeline = pipeline.to(torch.device(self.device))
-            logger.info("Step 2/2 done in %.1fs", time.time() - t0)
+            logger.info("Step 3/3 done in %.1fs", time.time() - t0)
 
             # Construct DiarizationPipeline wrapper without re-downloading
             self._diarize_model = object.__new__(DiarizationPipeline)
