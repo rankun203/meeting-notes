@@ -39,10 +39,31 @@ class TranscriptionPipeline:
     def _get_diarize_model(self) -> DiarizationPipeline | None:
         """Load diarization model on first use. Requires HF_TOKEN."""
         if self._diarize_model is None and self.hf_token:
-            logger.info("Loading diarization pipeline")
-            self._diarize_model = DiarizationPipeline(
-                token=self.hf_token, device=self.device
-            )
+            logger.info("Loading diarization pipeline (this downloads pyannote sub-models on first run)")
+            logger.info("If this hangs, you likely need to accept gated model licenses:")
+            logger.info("  - https://huggingface.co/pyannote/speaker-diarization-community-1")
+            logger.info("  - https://huggingface.co/pyannote/segmentation-3.0")
+            logger.info("  - https://huggingface.co/pyannote/embedding")
+
+            import concurrent.futures
+            timeout_secs = 120
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    DiarizationPipeline, token=self.hf_token, device=self.device
+                )
+                try:
+                    self._diarize_model = future.result(timeout=timeout_secs)
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    raise RuntimeError(
+                        f"Diarization model loading timed out after {timeout_secs}s. "
+                        "This usually means a pyannote sub-model is gated and your HF_TOKEN "
+                        "doesn't have access. Accept licenses at:\n"
+                        "  https://huggingface.co/pyannote/speaker-diarization-community-1\n"
+                        "  https://huggingface.co/pyannote/segmentation-3.0\n"
+                        "  https://huggingface.co/pyannote/embedding"
+                    )
+            logger.info("Diarization pipeline loaded successfully")
         return self._diarize_model
 
     def _get_align_model(self, language: str):
