@@ -136,7 +136,115 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/JOB_ID \
   -H "authorization: Bearer YOUR_RUNPOD_API_KEY"
 ```
 
-## Local development
+## Local testing with Docker + GPU
+
+Test the full pipeline locally before deploying to RunPod. Requires Docker with NVIDIA GPU support (`nvidia-container-toolkit`).
+
+### 1. Build the image
+
+```bash
+cd apps/audio-extraction
+
+# Build with all models pre-cached (~5 GB download on first build)
+# Pass HF_TOKEN to cache pyannote gated models at build time
+docker build -f Dockerfile.runpod \
+  --build-arg HF_TOKEN="$HF_TOKEN" \
+  -t meeting-notes-extraction .
+```
+
+### 2. Serve test audio files
+
+The container downloads audio from URLs. To test with local files, run a file server and expose it with a tunnel so the container can reach it.
+
+```bash
+# Serve a directory containing audio files (e.g. .opus, .wav, .mp3)
+cd /path/to/recordings
+python3 -m http.server 8199 &
+
+# Expose via cloudflared (or ngrok, etc.) so Docker can reach it
+cloudflared tunnel --url http://localhost:8199
+# Note the https://*.trycloudflare.com URL
+```
+
+### 3. Create test_input.json
+
+```json
+{
+  "input": {
+    "tracks": [
+      {
+        "audio_url": "https://YOUR-TUNNEL-URL/session_id/system_microphone.opus",
+        "track_name": "system_microphone",
+        "source_type": "mic",
+        "channels": 1
+      },
+      {
+        "audio_url": "https://YOUR-TUNNEL-URL/session_id/system_audio.opus",
+        "track_name": "system_audio",
+        "source_type": "system_mix",
+        "channels": 2
+      }
+    ],
+    "language": "en",
+    "diarize": true
+  }
+}
+```
+
+### 4. Run the container
+
+```bash
+docker run --rm --gpus all \
+  -e HF_TOKEN="$HF_TOKEN" \
+  -v /path/to/test_input.json:/app/test_input.json:ro \
+  meeting-notes-extraction
+```
+
+RunPod's worker detects `test_input.json`, processes it as a local job, prints the full result to stdout, and exits. No network API needed.
+
+### What to look for
+
+**Startup** should be fast (~3s) with no model downloads:
+```
+Pipeline initialized in 2.7s
+Loading from cache (offline)...
+Loaded from cache in 0.7s
+```
+
+**Per-track output** shows segments, speakers, and realtime factor:
+```
+Track "system_microphone" done: 72 segments, 2 speakers, 4021.6s audio in 49.3s (81.6x realtime)
+```
+
+**Diarization progress** is logged at each step:
+```
+Diarizing 3097.1s of audio...
+  diarize/segmentation: 3089/3089 (100%)
+  diarize/segmentation done (1.5s elapsed)
+  diarize/embeddings: 58/290 (20%)
+  ...
+  diarize/embeddings: 290/290 (100%)
+  diarize/embeddings done (26.2s elapsed)
+Diarization done in 27.5s (2 speakers)
+```
+
+**No warnings** should appear in the output (onnxruntime GPU discovery warnings in Docker are expected and harmless).
+
+### Performance reference (NVIDIA L40S, 46 GB)
+
+| Test | Audio | Tracks | Time | Realtime factor |
+|------|-------|--------|------|-----------------|
+| English, 16.6 hr | 67 min mic + 15.5 hr system | 2 | 722s | 77-96x |
+| Chinese, 1.7 hr | 51 min mic + 51 min system | 2 | 140s | 46-49x |
+
+### Troubleshooting
+
+- **"Pyannote model pre-cache skipped"** at build time: `HF_TOKEN` wasn't passed as a build arg. Models download at runtime instead (~14s on first request).
+- **"Access denied to pyannote/..."**: Accept the model licenses on HuggingFace (see [gated models](#huggingface-gated-models) above).
+- **OOM / CUDA out of memory**: Lower `WHISPER_BATCH_SIZE` (e.g. `-e WHISPER_BATCH_SIZE=8`).
+- **"test_input.json not found, exiting"**: Mount the file with `-v /path/to/test_input.json:/app/test_input.json:ro`.
+
+## Local development (without Docker)
 
 ```bash
 uv sync
