@@ -1,9 +1,19 @@
 """Entry point for RunPod serverless: `python -m audio_extraction`."""
 
 import logging
+import os
 import platform
 import subprocess
 import sys
+
+# --- Critical: set these BEFORE any other imports ---
+# Prevent fork-related deadlocks in RunPod's serverless worker.
+# RunPod forks a heartbeat process after our code runs; these env vars
+# prevent deadlocks from tokenizers, OpenMP, and huggingface_hub.
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 logging.basicConfig(level=logging.INFO, format="%(filename)-20s:%(lineno)-4d %(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,16 +40,26 @@ def log_system_info():
         except FileNotFoundError:
             pass
 
-    # GPU + CUDA
+    # GPU + CUDA — use nvidia-smi instead of torch.cuda to avoid
+    # initializing the CUDA runtime context before RunPod forks.
+    # CUDA is not fork-safe; initializing it here causes deadlocks.
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            for i, line in enumerate(result.stdout.strip().splitlines()):
+                logger.info("GPU %d: %s", i, line.strip())
+        else:
+            logger.info("GPU: nvidia-smi failed")
+    except FileNotFoundError:
+        logger.info("GPU: nvidia-smi not found")
+
+    # PyTorch version (import only, no CUDA init)
     try:
         import torch
-        logger.info("PyTorch: %s (CUDA: %s)", torch.__version__, torch.version.cuda)
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                logger.info("GPU %d: %s (%.1f GB)", i, props.name, props.total_memory / 1e9)
-        else:
-            logger.info("GPU: CUDA not available")
+        logger.info("PyTorch: %s (CUDA compiled: %s)", torch.__version__, torch.version.cuda)
     except ImportError:
         logger.info("PyTorch: not installed")
 
@@ -52,7 +72,7 @@ def log_system_info():
         )
         key_packages = [
             "whisperx", "faster-whisper", "ctranslate2", "pyannote-audio",
-            "torch==", "torchaudio", "torchvision", "torchcodec",
+            "torch==", "torchaudio", "torchvision",
             "transformers", "runpod", "numpy", "pandas",
         ]
         for line in sorted(result.stdout.splitlines()):
