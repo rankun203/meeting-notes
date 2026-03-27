@@ -48,10 +48,31 @@ class TranscriptionPipeline:
             # the full pipeline load (which hangs silently on 403).
             self._verify_hf_access()
 
-            logger.info("Access verified, loading pipeline...")
-            self._diarize_model = DiarizationPipeline(
-                token=self.hf_token, device=self.device
+            # Load pipeline step-by-step with logging to identify where it hangs.
+            # whisperx.DiarizationPipeline.__init__ does:
+            #   1. Pipeline.from_pretrained(model_config, token, cache_dir)
+            #   2. .to(device)
+            # We replicate this with logging between each step.
+            import time
+            from pyannote.audio import Pipeline as PyannotePipeline
+
+            model_name = "pyannote/speaker-diarization-community-1"
+
+            logger.info("Step 1/2: Pipeline.from_pretrained('%s')...", model_name)
+            t0 = time.time()
+            pipeline = PyannotePipeline.from_pretrained(
+                model_name, use_auth_token=self.hf_token
             )
+            logger.info("Step 1/2 done in %.1fs", time.time() - t0)
+
+            logger.info("Step 2/2: Moving to device=%s...", self.device)
+            t0 = time.time()
+            pipeline = pipeline.to(torch.device(self.device))
+            logger.info("Step 2/2 done in %.1fs", time.time() - t0)
+
+            # Construct DiarizationPipeline wrapper without re-downloading
+            self._diarize_model = object.__new__(DiarizationPipeline)
+            self._diarize_model.model = pipeline
             logger.info("Diarization pipeline loaded successfully")
         return self._diarize_model
 
