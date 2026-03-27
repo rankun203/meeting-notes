@@ -111,6 +111,17 @@ docker push YOUR_DOCKERHUB/audio-extraction:v0.1.0
 | `WHISPER_DEVICE` | `cuda` | Device (`cuda` or `cpu`) |
 | `HF_TOKEN` | — | HuggingFace token (required for pyannote diarization) |
 
+### HuggingFace gated models
+
+Speaker diarization uses pyannote models that require accepting licenses on HuggingFace.
+Visit each link below, log in, and click "Agree and access repository":
+
+1. https://huggingface.co/pyannote/speaker-diarization-community-1
+2. https://huggingface.co/pyannote/segmentation-3.0
+3. https://huggingface.co/pyannote/embedding
+
+All three must be accepted for `diarize: true` to work. Without them, diarization will timeout with a clear error message.
+
 ### Calling the endpoint
 
 ```bash
