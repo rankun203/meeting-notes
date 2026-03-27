@@ -61,7 +61,7 @@ class TranscriptionPipeline:
             logger.info("Step 1/2: Pipeline.from_pretrained('%s')...", model_name)
             t0 = time.time()
             pipeline = PyannotePipeline.from_pretrained(
-                model_name, use_auth_token=self.hf_token
+                model_name, token=self.hf_token
             )
             logger.info("Step 1/2 done in %.1fs", time.time() - t0)
 
