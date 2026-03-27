@@ -43,18 +43,33 @@ RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 ARG HF_TOKEN=""
 RUN --mount=type=secret,id=HF_TOKEN,required=false \
     python3 <<'PYEOF' || echo 'Pyannote model download failed — will retry at runtime'
-import os, sys
+import os, sys, glob
+
+# Debug: list available secrets
+secret_files = glob.glob('/run/secrets/*')
+if secret_files:
+    print(f'Available secrets: {secret_files}')
+else:
+    print('No secrets found at /run/secrets/')
 
 # Try Docker secret first (RunPod), then ARG/env fallback (manual builds)
 token = None
-try:
-    with open('/run/secrets/HF_TOKEN') as f:
-        token = f.read().strip()
-    print('Using HF_TOKEN from Docker secret')
-except FileNotFoundError:
-    token = os.environ.get('HF_TOKEN') or None
+
+# Try common secret names RunPod might use
+for secret_name in ['HF_TOKEN', 'hf_token', 'HUGGING_FACE_HUB_TOKEN']:
+    try:
+        with open(f'/run/secrets/{secret_name}') as f:
+            token = f.read().strip()
+        if token:
+            print(f'Using HF_TOKEN from Docker secret: /run/secrets/{secret_name}')
+            break
+    except FileNotFoundError:
+        continue
+
+if not token:
+    token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN') or None
     if token:
-        print('Using HF_TOKEN from build arg')
+        print('Using HF_TOKEN from build arg/env')
 
 if not token:
     print('HF_TOKEN not set at build time — pyannote models will download on first request')
