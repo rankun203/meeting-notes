@@ -36,45 +36,19 @@ RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
 RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 
 # 3. Pyannote diarization + speaker embedding models (~600 MB total)
-#    RunPod passes the "Hugging Face access token" as a Docker secret (--secret id=HF_TOKEN).
-#    We also support ARG HF_TOKEN as fallback for manual docker builds.
-#    If neither is available, models download on first request using the
-#    HF_TOKEN runtime env var set in RunPod endpoint settings.
+#    RunPod's GitHub integration does NOT pass the HF token at build time.
+#    These gated models download on first diarization request at runtime
+#    using the HF_TOKEN env var set in RunPod endpoint settings.
+#    For manual builds, pass --build-arg HF_TOKEN=hf_... to pre-cache.
 ARG HF_TOKEN=""
-RUN --mount=type=secret,id=HF_TOKEN,required=false \
-    python3 <<'PYEOF' || echo 'Pyannote model download failed — will retry at runtime'
-import os, sys, glob
-
-# Debug: list available secrets
-secret_files = glob.glob('/run/secrets/*')
-if secret_files:
-    print(f'Available secrets: {secret_files}')
-else:
-    print('No secrets found at /run/secrets/')
-
-# Try Docker secret first (RunPod), then ARG/env fallback (manual builds)
-token = None
-
-# Try common secret names RunPod might use
-for secret_name in ['HF_TOKEN', 'hf_token', 'HUGGING_FACE_HUB_TOKEN']:
-    try:
-        with open(f'/run/secrets/{secret_name}') as f:
-            token = f.read().strip()
-        if token:
-            print(f'Using HF_TOKEN from Docker secret: /run/secrets/{secret_name}')
-            break
-    except FileNotFoundError:
-        continue
-
+RUN python3 <<'PYEOF' || echo 'Pyannote model pre-cache skipped — will download at runtime'
+import os, sys
+token = os.environ.get('HF_TOKEN') or None
 if not token:
-    token = os.environ.get('HF_TOKEN') or os.environ.get('HUGGING_FACE_HUB_TOKEN') or None
-    if token:
-        print('Using HF_TOKEN from build arg/env')
-
-if not token:
-    print('HF_TOKEN not set at build time — pyannote models will download on first request')
+    print('HF_TOKEN not available at build time (expected for RunPod GitHub builds)')
+    print('Pyannote models will download on first diarization request using runtime HF_TOKEN')
     sys.exit(0)
-
+print('HF_TOKEN found, pre-caching pyannote models...')
 from pyannote.audio import Pipeline
 Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=token)
 print('Diarization model cached')
