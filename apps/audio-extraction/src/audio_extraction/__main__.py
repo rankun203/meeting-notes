@@ -72,7 +72,10 @@ def log_system_info():
     logger.info("=== End System Information ===")
 
 
-log_system_info()
+try:
+    log_system_info()
+except Exception:
+    logger.exception("Failed to log system info")
 
 import runpod
 from audio_extraction.handler import handler
