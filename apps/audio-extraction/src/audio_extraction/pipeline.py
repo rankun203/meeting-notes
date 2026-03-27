@@ -2,6 +2,7 @@
 
 import logging
 import whisperx
+from whisperx.diarize import DiarizationPipeline
 
 from audio_extraction.embeddings import extract_speaker_embeddings
 
@@ -37,7 +38,7 @@ class TranscriptionPipeline:
         self.diarize_model = None
         if hf_token:
             logger.info("Loading diarization pipeline")
-            self.diarize_model = whisperx.DiarizationPipeline(
+            self.diarize_model = DiarizationPipeline(
                 use_auth_token=hf_token, device=device
             )
 
