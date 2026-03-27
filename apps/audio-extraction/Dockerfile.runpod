@@ -17,7 +17,8 @@ RUN pip freeze | grep -iE '^(torch|torchaudio|torchvision)==' > /tmp/torch-const
     cat /tmp/torch-constraints.txt && \
     uv pip install --system \
       --constraint /tmp/torch-constraints.txt \
-      .
+      . && \
+    pip uninstall -y torchcodec 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Pre-download ALL models at build time so cold starts are near-instant.
