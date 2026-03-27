@@ -4,7 +4,7 @@ WORKDIR /app
 
 # System dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get install -y --no-install-recommends ffmpeg htop && \
     rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast dependency resolution
@@ -36,16 +36,30 @@ RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
 RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 
 # 3. Pyannote diarization + speaker embedding models (~600 MB total)
-#    Tries HF_TOKEN from build arg first, then skips gracefully.
-#    If not cached at build time, models download on first request using
-#    the HF_TOKEN runtime env var set in RunPod endpoint settings.
+#    RunPod passes the "Hugging Face access token" as a Docker secret (--secret id=HF_TOKEN).
+#    We also support ARG HF_TOKEN as fallback for manual docker builds.
+#    If neither is available, models download on first request using the
+#    HF_TOKEN runtime env var set in RunPod endpoint settings.
 ARG HF_TOKEN=""
-RUN python3 <<'PYEOF' || echo 'Pyannote model download failed — will retry at runtime'
+RUN --mount=type=secret,id=HF_TOKEN,required=false \
+    python3 <<'PYEOF' || echo 'Pyannote model download failed — will retry at runtime'
 import os, sys
-token = os.environ.get('HF_TOKEN') or None
+
+# Try Docker secret first (RunPod), then ARG/env fallback (manual builds)
+token = None
+try:
+    with open('/run/secrets/HF_TOKEN') as f:
+        token = f.read().strip()
+    print('Using HF_TOKEN from Docker secret')
+except FileNotFoundError:
+    token = os.environ.get('HF_TOKEN') or None
+    if token:
+        print('Using HF_TOKEN from build arg')
+
 if not token:
     print('HF_TOKEN not set at build time — pyannote models will download on first request')
     sys.exit(0)
+
 from pyannote.audio import Pipeline
 Pipeline.from_pretrained('pyannote/speaker-diarization-3.1', use_auth_token=token)
 print('Diarization model cached')
