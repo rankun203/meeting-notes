@@ -191,30 +191,37 @@ print('DOWNLOAD_OK')
             if max_speakers is not None:
                 diarize_kwargs["max_speakers"] = max_speakers
 
-            # Pass waveform tensor instead of file path to avoid torchcodec
-            # dependency (pyannote uses torchcodec for file I/O which needs
-            # libnvrtc.so.13, not available in all CUDA base images).
-            # whisperx.load_audio returns float32 mono at 16kHz; pyannote
-            # expects a (channel, time) tensor at any sample rate.
+            # Call pyannote pipeline directly (not whisperx wrapper) because:
+            # 1. We use object.__new__ to bypass whisperx's constructor
+            # 2. whisperx's __call__ expects str/ndarray, not dict
+            # 3. We need to pass waveform dict to avoid torchcodec dependency
             waveform_tensor = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
             audio_input = {"waveform": waveform_tensor, "sample_rate": 16000}
 
-            # return_embeddings=True gives us speaker voice fingerprints
-            # directly from pyannote — no need for a separate embedding model
-            diarize_result = diarize_model(
+            # Call the underlying pyannote pipeline directly
+            diarize_output = diarize_model.model(
                 audio_input, return_embeddings=True, **diarize_kwargs
             )
 
-            if isinstance(diarize_result, tuple):
-                diarize_segments, raw_embeddings = diarize_result
-                # raw_embeddings: dict[str, list[float]]
+            # pyannote returns (Annotation, embeddings) or just Annotation
+            import pandas as pd
+            if isinstance(diarize_output, tuple):
+                annotation, raw_embeddings = diarize_output
                 if raw_embeddings:
                     speaker_embeddings = {
                         k: v if isinstance(v, list) else v.tolist()
                         for k, v in raw_embeddings.items()
                     }
             else:
-                diarize_segments = diarize_result
+                annotation = diarize_output
+
+            # Convert pyannote Annotation to DataFrame for whisperx
+            diarize_segments = pd.DataFrame(
+                [
+                    {"start": turn.start, "end": turn.end, "speaker": speaker}
+                    for turn, _, speaker in annotation.itertracks(yield_label=True)
+                ]
+            )
 
             result = whisperx.assign_word_speakers(
                 diarize_segments, result, fill_nearest=True
