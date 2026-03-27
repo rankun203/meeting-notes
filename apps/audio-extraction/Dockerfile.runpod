@@ -19,13 +19,11 @@ RUN pip freeze | grep -iE '^(torch|torchaudio|torchvision)==' > /tmp/torch-const
       --constraint /tmp/torch-constraints.txt \
       .
 
-# Copy source code (changes here don't invalidate dependency cache)
-COPY src/ src/
-RUN uv pip install --system --no-deps -e .
-
 # ---------------------------------------------------------------------------
 # Pre-download ALL models at build time so cold starts are near-instant.
 # GPU is not available during docker build, so we load on CPU.
+# These layers are ~5 GB and rarely change — placed BEFORE COPY src/
+# so code changes don't trigger multi-GB re-downloads.
 # ---------------------------------------------------------------------------
 
 ARG WHISPER_MODEL_SIZE=large-v2
@@ -57,9 +55,13 @@ print('Embedding model cached')
 PYEOF
 
 # ---------------------------------------------------------------------------
-# Runtime configuration (override via RunPod env vars)
+# Copy source code last — code changes only rebuild this layer (~KB)
 # ---------------------------------------------------------------------------
 
+COPY src/ src/
+RUN uv pip install --system --no-deps -e .
+
+# Runtime configuration (override via RunPod env vars)
 ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
 ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE_TYPE=float16
