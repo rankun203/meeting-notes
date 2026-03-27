@@ -37,7 +37,7 @@ def log_system_info():
         if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 props = torch.cuda.get_device_properties(i)
-                logger.info("GPU %d: %s (%.1f GB)", i, props.name, props.total_mem / 1e9)
+                logger.info("GPU %d: %s (%.1f GB)", i, props.name, props.total_memory / 1e9)
         else:
             logger.info("GPU: CUDA not available")
     except ImportError:
