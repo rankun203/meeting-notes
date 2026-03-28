@@ -75,14 +75,17 @@ def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
     return track_name, source_type, audio_path, audio, duration
 
 
-def _truncate_for_log(obj, max_str_len=128):
-    """Recursively truncate long strings for logging."""
+def _truncate_for_log(obj, max_str_len=128, max_list_len=5):
+    """Recursively truncate long strings and lists for logging."""
     if isinstance(obj, str):
         return obj[:max_str_len] + "..." if len(obj) > max_str_len else obj
     elif isinstance(obj, dict):
-        return {k: _truncate_for_log(v, max_str_len) for k, v in obj.items()}
+        return {k: _truncate_for_log(v, max_str_len, max_list_len) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
-        return [_truncate_for_log(v, max_str_len) for v in obj]
+        truncated = [_truncate_for_log(v, max_str_len, max_list_len) for v in obj[:max_list_len]]
+        if len(obj) > max_list_len:
+            truncated.append(f"... +{len(obj) - max_list_len} more")
+        return truncated
     return obj
 
 
