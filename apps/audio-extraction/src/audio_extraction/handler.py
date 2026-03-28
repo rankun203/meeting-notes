@@ -75,8 +75,22 @@ def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
     return track_name, source_type, audio_path, audio, duration
 
 
+def _truncate_for_log(obj, max_str_len=128):
+    """Recursively truncate long strings for logging."""
+    if isinstance(obj, str):
+        return obj[:max_str_len] + "..." if len(obj) > max_str_len else obj
+    elif isinstance(obj, dict):
+        return {k: _truncate_for_log(v, max_str_len) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_truncate_for_log(v, max_str_len) for v in obj]
+    return obj
+
+
 def handler(event: dict) -> dict:
     """RunPod serverless handler."""
+    import json as _json
+    logger.info("Request body:\n%s", _json.dumps(_truncate_for_log(event), indent=2, ensure_ascii=False))
+
     inp = event["input"]
     tracks = inp["tracks"]
     language = inp.get("language", "en")
