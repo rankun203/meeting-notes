@@ -9,14 +9,13 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::{info, error};
+use tracing::{info, warn, error};
 
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
 use crate::session::session::SessionInfo;
 use crate::settings::SharedSettings;
-use crate::tunnel::TunnelManager;
 use crate::understanding::{ExtractionClient, TrackInput};
 
 /// Shared state for routes.
@@ -24,9 +23,7 @@ use crate::understanding::{ExtractionClient, TrackInput};
 pub struct AppState {
     pub session_manager: SessionManager,
     pub people_manager: PeopleManager,
-    pub tunnel_manager: TunnelManager,
     pub settings: SharedSettings,
-    pub daemon_port: u16,
 }
 
 pub fn session_routes() -> Router<AppState> {
@@ -608,6 +605,8 @@ async fn transcribe_session(
     }
     let extraction_url = settings.audio_extraction_url.clone().unwrap();
     let extraction_key = settings.audio_extraction_api_key.clone().unwrap();
+    let file_drop_url = settings.file_drop_url.clone();
+    let file_drop_api_key = settings.file_drop_api_key.clone();
     let people_recognition = settings.people_recognition;
     let match_threshold = settings.speaker_match_threshold;
     drop(settings);
@@ -638,8 +637,6 @@ async fn transcribe_session(
     // 5. Spawn background task
     let session_manager = state.session_manager.clone();
     let people_manager = state.people_manager.clone();
-    let tunnel_manager = state.tunnel_manager.clone();
-    let daemon_port = state.daemon_port;
     let session_id = id.clone();
 
     tokio::spawn(async move {
@@ -650,12 +647,12 @@ async fn transcribe_session(
             &source_meta,
             &extraction_url,
             &extraction_key,
+            &file_drop_url,
+            &file_drop_api_key,
             people_recognition,
             match_threshold,
             &session_manager,
             &people_manager,
-            &tunnel_manager,
-            daemon_port,
         )
         .await;
 
@@ -688,108 +685,83 @@ async fn run_transcription_pipeline(
     source_meta: &[crate::session::session::SourceMetadata],
     extraction_url: &str,
     extraction_key: &str,
+    file_drop_url: &str,
+    file_drop_api_key: &str,
     people_recognition: bool,
     match_threshold: f64,
     session_manager: &SessionManager,
     people_manager: &PeopleManager,
-    tunnel_manager: &TunnelManager,
-    daemon_port: u16,
 ) -> Result<u32, String> {
-    // Step 1: Start tunnel
+    // Step 1: Upload audio files to file-drop
     session_manager
-        .set_processing_state(session_id, Some("tunneling".to_string()))
+        .set_processing_state(session_id, Some("uploading".to_string()))
         .await;
-    info!("[{}] Starting tunnel for {}", session_id, session_dir.display());
 
-    let tunnel = tunnel_manager
-        .serve_and_tunnel(session_dir, daemon_port)
-        .await
-        .map_err(|e| format!("Failed to start tunnel: {e}"))?;
+    let http = reqwest::Client::new();
+    let mut tracks: Vec<TrackInput> = Vec::new();
+    let mut drop_urls: Vec<String> = Vec::new(); // for cleanup on error
 
-    // Ensure tunnel is shut down on any exit path
-    let result = run_extraction_and_matching(
-        session_id,
-        session_dir,
-        language,
-        source_meta,
-        extraction_url,
-        extraction_key,
-        people_recognition,
-        match_threshold,
-        session_manager,
-        people_manager,
-        &tunnel,
-    )
-    .await;
+    for meta in source_meta.iter().filter(|m| !m.filename.is_empty()) {
+        let file_path = session_dir.join(&meta.filename);
+        if !file_path.exists() {
+            warn!("[{}] Audio file not found: {}", session_id, file_path.display());
+            continue;
+        }
 
-    tunnel.shutdown().await;
-    result
-}
+        info!("[{}] Uploading {} to file-drop...", session_id, meta.filename);
+        let bytes = std::fs::read(&file_path)
+            .map_err(|e| format!("Failed to read {}: {e}", meta.filename))?;
+        let file_size = bytes.len();
 
-/// Inner extraction + matching logic (tunnel already running).
-async fn run_extraction_and_matching(
-    session_id: &str,
-    session_dir: &std::path::Path,
-    language: &str,
-    source_meta: &[crate::session::session::SourceMetadata],
-    extraction_url: &str,
-    extraction_key: &str,
-    people_recognition: bool,
-    match_threshold: f64,
-    session_manager: &SessionManager,
-    people_manager: &PeopleManager,
-    tunnel: &crate::tunnel::EphemeralTunnel,
-) -> Result<u32, String> {
-    // Step 2: Build track inputs
-    let tracks: Vec<TrackInput> = source_meta
-        .iter()
-        .filter(|m| !m.filename.is_empty())
-        .map(|m| {
-            let source_type = match m.source_type {
-                crate::audio::source::SourceType::Mic => "mic",
-                crate::audio::source::SourceType::SystemMix => "system_mix",
-                _ => "unknown",
-            };
-            TrackInput {
-                audio_url: tunnel.file_url(&m.filename),
-                track_name: m.filename.split('.').next().unwrap_or(&m.filename).to_string(),
-                source_type: source_type.to_string(),
-                channels: m.channels,
-            }
-        })
-        .collect();
+        let upload_url = format!(
+            "{}/upload?filename={}", file_drop_url, meta.filename
+        );
+        let resp = http
+            .post(&upload_url)
+            .header("Authorization", format!("Bearer {}", file_drop_api_key))
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to upload {} to file-drop: {e}", meta.filename))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("file-drop upload failed for {} ({}): {}", meta.filename, status, body));
+        }
+
+        let upload_result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse file-drop response: {e}"))?;
+
+        let download_path = upload_result["url"]
+            .as_str()
+            .ok_or_else(|| "file-drop response missing 'url' field".to_string())?;
+        let download_url = format!("{}{}", file_drop_url, download_path);
+        drop_urls.push(download_url.clone());
+
+        let source_type = match meta.source_type {
+            crate::audio::source::SourceType::Mic => "mic",
+            crate::audio::source::SourceType::SystemMix => "system_mix",
+            _ => "unknown",
+        };
+
+        info!(
+            "[{}] Uploaded {} ({} bytes) -> {}",
+            session_id, meta.filename, file_size, download_url
+        );
+
+        tracks.push(TrackInput {
+            audio_url: download_url,
+            track_name: meta.filename.split('.').next().unwrap_or(&meta.filename).to_string(),
+            source_type: source_type.to_string(),
+            channels: meta.channels,
+        });
+    }
 
     if tracks.is_empty() {
         return Err("No audio tracks to transcribe".to_string());
-    }
-
-    // Verify tunnel is accessible before submitting to RunPod.
-    // Quick Tunnels need time to propagate across Cloudflare's edge network.
-    info!("[{}] Verifying tunnel is accessible...", session_id);
-    let check_url = tunnel.file_url("metadata.json");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .unwrap();
-    let mut tunnel_ready = false;
-    for attempt in 1..=20 {
-        match client.get(&check_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                info!("[{}] Tunnel ready after {} attempts", session_id, attempt);
-                tunnel_ready = true;
-                break;
-            }
-            Ok(resp) => {
-                info!("[{}] Tunnel check attempt {}: HTTP {}", session_id, attempt, resp.status());
-            }
-            Err(e) => {
-                info!("[{}] Tunnel check attempt {}: {}", session_id, attempt, e);
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-    if !tunnel_ready {
-        return Err("Tunnel failed to become accessible after 40s. Check cloudflared logs.".to_string());
     }
 
     info!("[{}] Submitting {} tracks to RunPod", session_id, tracks.len());

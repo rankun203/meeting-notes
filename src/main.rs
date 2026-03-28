@@ -7,7 +7,6 @@ use meeting_notes_daemon::people::PeopleManager;
 use meeting_notes_daemon::server;
 use meeting_notes_daemon::session::SessionManager;
 use meeting_notes_daemon::settings::AppSettings;
-use meeting_notes_daemon::tunnel::TunnelManager;
 
 fn install_signal_handlers() {
     unsafe {
@@ -26,9 +25,7 @@ extern "C" fn crash_handler(sig: libc::c_int) {
     };
     eprintln!("\n=== FATAL: {} (signal {}) ===", name, sig);
     eprintln!("Set RUST_BACKTRACE=1 for a backtrace.");
-    // Print backtrace if available
     eprintln!("{:?}", std::backtrace::Backtrace::force_capture());
-    // Re-raise with default handler to get the proper exit status
     unsafe {
         libc::signal(sig, libc::SIG_DFL);
         libc::raise(sig);
@@ -104,21 +101,11 @@ async fn main() {
             let people_manager = PeopleManager::new(&data_dir);
             people_manager.load_from_disk().await;
 
-            // Load or create settings
             let settings = AppSettings::load_or_create(&data_dir);
             let shared_settings = std::sync::Arc::new(tokio::sync::RwLock::new(settings));
 
-            // Download cloudflared in background (non-blocking)
-            let tunnel_manager = TunnelManager::new(&data_dir);
-            let tunnel_bg = tunnel_manager.clone();
-            tokio::spawn(async move {
-                if let Err(e) = tunnel_bg.ensure_cloudflared().await {
-                    tracing::warn!("Failed to download cloudflared: {}", e);
-                }
-            });
-
             let app = server::create_router(
-                manager, people_manager, tunnel_manager, shared_settings, port, web_ui,
+                manager, people_manager, shared_settings, web_ui,
             );
 
             let addr = format!("{}:{}", host, port);

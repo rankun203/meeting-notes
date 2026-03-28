@@ -22,6 +22,14 @@ pub struct AppSettings {
     #[serde(default)]
     pub audio_extraction_api_key: Option<String>,
 
+    /// file-drop server URL for temporary audio file parking.
+    #[serde(default = "default_file_drop_url")]
+    pub file_drop_url: String,
+
+    /// file-drop API key for uploads.
+    #[serde(default = "default_file_drop_api_key")]
+    pub file_drop_api_key: String,
+
     /// Whether to run speaker recognition against the People library after diarization.
     #[serde(default = "default_true")]
     pub people_recognition: bool,
@@ -33,6 +41,14 @@ pub struct AppSettings {
     /// Path to the settings file (not serialized).
     #[serde(skip)]
     settings_path: PathBuf,
+}
+
+fn default_file_drop_url() -> String {
+    "https://file-drop.dsync.net".to_string()
+}
+
+fn default_file_drop_api_key() -> String {
+    "fd_XXabLowAonHJCvc8uj6ydMv3PsRuYUig8bfuYTcatR".to_string()
 }
 
 fn default_true() -> bool {
@@ -48,6 +64,8 @@ impl Default for AppSettings {
         Self {
             audio_extraction_url: None,
             audio_extraction_api_key: None,
+            file_drop_url: default_file_drop_url(),
+            file_drop_api_key: default_file_drop_api_key(),
             people_recognition: true,
             speaker_match_threshold: 0.75,
             settings_path: PathBuf::new(),
@@ -108,6 +126,16 @@ impl AppSettings {
         if let Some(v) = update.get("audio_extraction_api_key") {
             self.audio_extraction_api_key = v.as_str().map(|s| s.to_string());
         }
+        if let Some(v) = update.get("file_drop_url") {
+            if let Some(s) = v.as_str() {
+                self.file_drop_url = s.to_string();
+            }
+        }
+        if let Some(v) = update.get("file_drop_api_key") {
+            if let Some(s) = v.as_str() {
+                self.file_drop_api_key = s.to_string();
+            }
+        }
         if let Some(v) = update.get("people_recognition") {
             if let Some(b) = v.as_bool() {
                 self.people_recognition = b;
@@ -134,9 +162,21 @@ impl AppSettings {
             }
         };
 
+        let mask_str = |s: &str| -> serde_json::Value {
+            if s.is_empty() {
+                serde_json::Value::String(String::new())
+            } else if s.len() > 8 {
+                serde_json::Value::String(format!("{}...{}", &s[..4], &s[s.len() - 4..]))
+            } else {
+                serde_json::Value::String("****".to_string())
+            }
+        };
+
         serde_json::json!({
             "audio_extraction_url": self.audio_extraction_url,
             "audio_extraction_api_key": mask(&self.audio_extraction_api_key),
+            "file_drop_url": self.file_drop_url,
+            "file_drop_api_key": mask_str(&self.file_drop_api_key),
             "people_recognition": self.people_recognition,
             "speaker_match_threshold": self.speaker_match_threshold,
         })
@@ -144,6 +184,9 @@ impl AppSettings {
 
     /// Check if audio extraction is configured (both URL and key present).
     pub fn is_extraction_configured(&self) -> bool {
-        self.audio_extraction_url.is_some() && self.audio_extraction_api_key.is_some()
+        self.audio_extraction_url.is_some()
+            && self.audio_extraction_api_key.is_some()
+            && !self.file_drop_url.is_empty()
+            && !self.file_drop_api_key.is_empty()
     }
 }
