@@ -236,7 +236,7 @@ print('DOWNLOAD_OK')
         waveform = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
         audio_input = {"waveform": waveform, "sample_rate": 16000}
         diarize_output = diarize_model.model(
-            audio_input, hook=_progress_hook, **kwargs
+            audio_input, return_embeddings=True, hook=_progress_hook, **kwargs
         )
 
         # Extract annotation and embeddings
