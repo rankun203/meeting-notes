@@ -94,15 +94,11 @@ impl TunnelManager {
     ) -> Result<EphemeralTunnel, String> {
         let cloudflared = self.ensure_cloudflared().await?;
 
-        // Find an available port starting from daemon_port + 1
-        let temp_port = find_available_port(daemon_port + 1)
-            .ok_or_else(|| "could not find an available port for file server".to_string())?;
-
-        // Start a minimal file server using a background tokio task
+        // Start a minimal file server on an available port
         let session_dir = session_dir.to_path_buf();
-        let server_handle = start_file_server(session_dir.clone(), temp_port).await?;
+        let (server_handle, temp_port) = start_file_server(session_dir.clone(), daemon_port + 1).await?;
 
-        // Start cloudflared tunnel pointing to the temp server
+        // Start cloudflared tunnel pointing to the file server
         let (tunnel_process, tunnel_url) =
             start_tunnel(&cloudflared, temp_port).await?;
 
@@ -144,20 +140,36 @@ impl EphemeralTunnel {
     }
 }
 
-/// Start a minimal file server on the given port that serves files from `dir`.
+/// Start a minimal file server, bind to an available port starting from `start_port`.
+/// Returns the handle and the actual port bound.
 async fn start_file_server(
     dir: PathBuf,
-    port: u16,
-) -> Result<tokio::task::JoinHandle<()>, String> {
+    start_port: u16,
+) -> Result<(tokio::task::JoinHandle<()>, u16), String> {
     use axum::Router;
     use tower_http::services::ServeDir;
 
     let app = Router::new().fallback_service(ServeDir::new(&dir));
 
-    let addr = format!("127.0.0.1:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .map_err(|e| format!("failed to bind file server on {}: {e}", addr))?;
+    // Try ports sequentially using async bind (no race condition)
+    let mut port = start_port;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+            Ok(l) => break l,
+            Err(_) if port < start_port.saturating_add(100) => {
+                port += 1;
+            }
+            Err(e) => {
+                return Err(format!("failed to bind file server (tried ports {}-{}): {e}", start_port, port));
+            }
+        }
+    };
+
+    let bound_port = listener.local_addr()
+        .map_err(|e| format!("failed to get bound address: {e}"))?
+        .port();
+
+    info!("File server bound to 127.0.0.1:{} (serving {})", bound_port, dir.display());
 
     let handle = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -165,7 +177,15 @@ async fn start_file_server(
         }
     });
 
-    Ok(handle)
+    // Verify the server is actually responding
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let check = reqwest::get(format!("http://127.0.0.1:{}/", bound_port)).await;
+    match check {
+        Ok(resp) => info!("File server verified: HTTP {}", resp.status()),
+        Err(e) => warn!("File server check failed (may still work): {}", e),
+    }
+
+    Ok((handle, bound_port))
 }
 
 /// Start cloudflared quick tunnel and parse the public URL from its output.
@@ -211,16 +231,6 @@ fn extract_tunnel_url(line: &str) -> Option<String> {
             if url.starts_with("https://") {
                 return Some(url.to_string());
             }
-        }
-    }
-    None
-}
-
-/// Find an available TCP port starting from `start`.
-fn find_available_port(start: u16) -> Option<u16> {
-    for port in start..=start.saturating_add(100) {
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return Some(port);
         }
     }
     None

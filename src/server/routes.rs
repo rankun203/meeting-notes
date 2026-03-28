@@ -763,11 +763,34 @@ async fn run_extraction_and_matching(
         return Err("No audio tracks to transcribe".to_string());
     }
 
-    // Wait for Cloudflare Quick Tunnel to propagate globally.
-    // Quick Tunnels are free but unreliable — they need 5-15 seconds to propagate
-    // to all Cloudflare edge locations before cross-region requests work.
-    info!("[{}] Waiting 10s for tunnel propagation...", session_id);
-    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    // Verify tunnel is accessible before submitting to RunPod.
+    // Quick Tunnels need time to propagate across Cloudflare's edge network.
+    info!("[{}] Verifying tunnel is accessible...", session_id);
+    let check_url = tunnel.file_url("metadata.json");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .unwrap();
+    let mut tunnel_ready = false;
+    for attempt in 1..=20 {
+        match client.get(&check_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                info!("[{}] Tunnel ready after {} attempts", session_id, attempt);
+                tunnel_ready = true;
+                break;
+            }
+            Ok(resp) => {
+                info!("[{}] Tunnel check attempt {}: HTTP {}", session_id, attempt, resp.status());
+            }
+            Err(e) => {
+                info!("[{}] Tunnel check attempt {}: {}", session_id, attempt, e);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    if !tunnel_ready {
+        return Err("Tunnel failed to become accessible after 40s. Check cloudflared logs.".to_string());
+    }
 
     info!("[{}] Submitting {} tracks to RunPod", session_id, tracks.len());
 
