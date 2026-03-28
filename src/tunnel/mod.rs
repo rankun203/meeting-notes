@@ -15,12 +15,14 @@ use tracing::{info, warn, error};
 #[derive(Clone)]
 pub struct TunnelManager {
     tools_dir: PathBuf,
+    logs_dir: PathBuf,
 }
 
 impl TunnelManager {
     pub fn new(data_dir: &Path) -> Self {
         let tools_dir = data_dir.join("tools");
-        Self { tools_dir }
+        let logs_dir = data_dir.join("logs");
+        Self { tools_dir, logs_dir }
     }
 
     /// Find cloudflared binary: check system PATH first, then downloaded copy.
@@ -99,8 +101,12 @@ impl TunnelManager {
         let (server_handle, temp_port) = start_file_server(session_dir.clone(), daemon_port + 1).await?;
 
         // Start cloudflared tunnel pointing to the file server
+        std::fs::create_dir_all(&self.logs_dir)
+            .map_err(|e| format!("failed to create logs dir: {e}"))?;
+        let log_path = self.logs_dir.join("cloudflared.log");
         let (tunnel_process, tunnel_url) =
-            start_tunnel(&cloudflared, temp_port).await?;
+            start_tunnel(&cloudflared, temp_port, &log_path).await?;
+        info!("Cloudflared log: {}", log_path.display());
 
         info!(
             "Tunnel active: {} -> 127.0.0.1:{} (serving {})",
@@ -190,9 +196,11 @@ async fn start_file_server(
 }
 
 /// Start cloudflared quick tunnel and parse the public URL from its output.
+/// Saves full cloudflared output to `log_path` for debugging.
 async fn start_tunnel(
     cloudflared_path: &Path,
     local_port: u16,
+    log_path: &Path,
 ) -> Result<(Child, String), String> {
     let mut child = Command::new(cloudflared_path)
         .args(["tunnel", "--url", &format!("http://127.0.0.1:{}", local_port)])
@@ -207,10 +215,24 @@ async fn start_tunnel(
         .ok_or_else(|| "could not capture cloudflared stderr".to_string())?;
 
     let mut reader = tokio::io::BufReader::new(stderr).lines();
+
+    // Open log file for writing
+    let log_file = std::fs::File::create(log_path)
+        .map_err(|e| format!("failed to create cloudflared log at {}: {e}", log_path.display()))?;
+    let log_file = std::sync::Arc::new(std::sync::Mutex::new(std::io::BufWriter::new(log_file)));
+
+    // Parse tunnel URL from stderr, writing all lines to log file
+    let log_for_parse = log_file.clone();
     let tunnel_url = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while let Ok(Some(line)) = reader.next_line().await {
-            // cloudflared prints a line like:
-            // "... https://xxx-yyy-zzz.trycloudflare.com ..."
+            // Write to log file
+            {
+                use std::io::Write;
+                if let Ok(mut f) = log_for_parse.lock() {
+                    let _ = writeln!(f, "{}", line);
+                    let _ = f.flush();
+                }
+            }
             if let Some(url) = extract_tunnel_url(&line) {
                 return Ok(url);
             }
@@ -219,6 +241,18 @@ async fn start_tunnel(
     })
     .await
     .map_err(|_| "timed out waiting for cloudflared tunnel URL (30s)".to_string())??;
+
+    // Continue reading stderr in background (so cloudflared doesn't block on pipe)
+    let log_for_bg = log_file.clone();
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = reader.next_line().await {
+            use std::io::Write;
+            if let Ok(mut f) = log_for_bg.lock() {
+                let _ = writeln!(f, "{}", line);
+                let _ = f.flush();
+            }
+        }
+    });
 
     Ok((child, tunnel_url))
 }
