@@ -1011,18 +1011,9 @@
       if (!hasEmbeddings && segmentSpeakers.length === 0) {
         return jsx('div', {
           className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
-          children: jsxs('div', { className: 'text-sm text-gray-400 dark:text-gray-500', children: [
-            'No speakers identified. ',
-            jsx('button', {
-              onClick: async () => {
-                await api(`/sessions/${sessionId}/transcript`, { method: 'DELETE' });
-                if (onUpdate) onUpdate();
-              },
-              className: 'text-blue-500 hover:text-blue-700 underline',
-              children: 'Re-transcribe with diarization',
-            }),
-            ' to identify speakers.',
-          ]}),
+          children: jsx('p', { className: 'text-sm text-gray-400 dark:text-gray-500',
+            children: 'No speakers identified in this recording.',
+          }),
         });
       }
 
