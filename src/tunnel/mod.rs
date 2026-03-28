@@ -177,12 +177,13 @@ async fn start_file_server(
         }
     });
 
-    // Verify the server is actually responding
+    // Verify the server is actually responding with a known file
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let check = reqwest::get(format!("http://127.0.0.1:{}/", bound_port)).await;
+    let check = reqwest::get(format!("http://127.0.0.1:{}/metadata.json", bound_port)).await;
     match check {
-        Ok(resp) => info!("File server verified: HTTP {}", resp.status()),
-        Err(e) => warn!("File server check failed (may still work): {}", e),
+        Ok(resp) if resp.status().is_success() => info!("File server verified: HTTP {}", resp.status()),
+        Ok(resp) => warn!("File server check returned HTTP {} — expected 200", resp.status()),
+        Err(e) => return Err(format!("File server failed to respond on port {}: {}", bound_port, e)),
     }
 
     Ok((handle, bound_port))
