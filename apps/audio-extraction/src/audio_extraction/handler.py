@@ -65,7 +65,9 @@ def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
     source_type = track["source_type"]
 
     path = audio_url.split("?")[0].split("#")[0]
-    suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ".audio"
+    if "." not in path.rsplit("/", 1)[-1]:
+        raise ValueError(f"Cannot determine file extension from URL: {audio_url}")
+    suffix = "." + path.rsplit(".", 1)[-1]
     audio_path = download_audio(audio_url, suffix=suffix)
 
     # Pre-decode audio (CPU-bound ffmpeg work) so it's ready for GPU
