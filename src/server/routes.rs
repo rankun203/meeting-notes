@@ -1,23 +1,32 @@
+use std::collections::HashMap;
+
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tracing::{info, error};
 
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
 use crate::session::session::SessionInfo;
+use crate::settings::SharedSettings;
+use crate::tunnel::TunnelManager;
+use crate::understanding::{ExtractionClient, TrackInput};
 
-/// Shared state for routes that need both managers.
+/// Shared state for routes.
 #[derive(Clone)]
 pub struct AppState {
     pub session_manager: SessionManager,
     pub people_manager: PeopleManager,
+    pub tunnel_manager: TunnelManager,
+    pub settings: SharedSettings,
+    pub daemon_port: u16,
 }
 
 pub fn session_routes() -> Router<AppState> {
@@ -35,11 +44,14 @@ pub fn session_routes() -> Router<AppState> {
         .route("/sessions/{id}/transcript", delete(delete_transcript))
         .route("/sessions/{id}/attribution", get(get_attribution))
         .route("/sessions/{id}/attribution", post(update_attribution))
+        .route("/sessions/{id}/transcribe", post(transcribe_session))
         .route("/people", get(list_people))
         .route("/people", post(create_person))
         .route("/people/{id}", get(get_person))
         .route("/people/{id}", patch(update_person))
         .route("/people/{id}", delete(delete_person))
+        .route("/settings", get(get_settings))
+        .route("/settings", put(update_settings))
         .route("/config", get(get_config))
 }
 
@@ -557,5 +569,348 @@ async fn delete_person(
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+}
+
+// --- Settings routes ---
+
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let settings = state.settings.read().await;
+    Json(settings.to_masked_json())
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut settings = state.settings.write().await;
+    settings
+        .merge_and_save(&body)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    info!("Settings updated");
+    Ok(Json(settings.to_masked_json()))
+}
+
+// --- Transcribe route ---
+
+async fn transcribe_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    // 1. Check settings
+    let settings = state.settings.read().await;
+    if !settings.is_extraction_configured() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Audio extraction not configured. Set audio_extraction_url and audio_extraction_api_key in settings."})),
+        ));
+    }
+    let extraction_url = settings.audio_extraction_url.clone().unwrap();
+    let extraction_key = settings.audio_extraction_api_key.clone().unwrap();
+    let people_recognition = settings.people_recognition;
+    let match_threshold = settings.speaker_match_threshold;
+    drop(settings);
+
+    // 2. Check session
+    let (session_dir, language, source_meta) = state
+        .session_manager
+        .get_session_extraction_info(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+
+    // 3. Prevent double-submit
+    if let Some(info) = state.session_manager.get_session(&id).await {
+        if info.processing_state.is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(json!({"error": "Transcription already in progress"})),
+            ));
+        }
+    }
+
+    // 4. Set state and return 202
+    state
+        .session_manager
+        .set_processing_state(&id, Some("starting".to_string()))
+        .await;
+
+    // 5. Spawn background task
+    let session_manager = state.session_manager.clone();
+    let people_manager = state.people_manager.clone();
+    let tunnel_manager = state.tunnel_manager.clone();
+    let daemon_port = state.daemon_port;
+    let session_id = id.clone();
+
+    tokio::spawn(async move {
+        let result = run_transcription_pipeline(
+            &session_id,
+            &session_dir,
+            &language,
+            &source_meta,
+            &extraction_url,
+            &extraction_key,
+            people_recognition,
+            match_threshold,
+            &session_manager,
+            &people_manager,
+            &tunnel_manager,
+            daemon_port,
+        )
+        .await;
+
+        match result {
+            Ok(unconfirmed) => {
+                session_manager
+                    .set_processing_state(&session_id, None)
+                    .await;
+                session_manager.emit_transcription_completed(&session_id, unconfirmed);
+                info!("Transcription completed for session {}", session_id);
+            }
+            Err(e) => {
+                error!("Transcription failed for session {}: {}", session_id, e);
+                session_manager
+                    .set_processing_state(&session_id, None)
+                    .await;
+                session_manager.emit_transcription_failed(&session_id, &e);
+            }
+        }
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(json!({"status": "processing"}))))
+}
+
+/// Run the full transcription pipeline in a background task.
+async fn run_transcription_pipeline(
+    session_id: &str,
+    session_dir: &std::path::Path,
+    language: &str,
+    source_meta: &[crate::session::session::SourceMetadata],
+    extraction_url: &str,
+    extraction_key: &str,
+    people_recognition: bool,
+    match_threshold: f64,
+    session_manager: &SessionManager,
+    people_manager: &PeopleManager,
+    tunnel_manager: &TunnelManager,
+    daemon_port: u16,
+) -> Result<u32, String> {
+    // Step 1: Start tunnel
+    session_manager
+        .set_processing_state(session_id, Some("tunneling".to_string()))
+        .await;
+    info!("[{}] Starting tunnel for {}", session_id, session_dir.display());
+
+    let tunnel = tunnel_manager
+        .serve_and_tunnel(session_dir, daemon_port)
+        .await
+        .map_err(|e| format!("Failed to start tunnel: {e}"))?;
+
+    // Ensure tunnel is shut down on any exit path
+    let result = run_extraction_and_matching(
+        session_id,
+        session_dir,
+        language,
+        source_meta,
+        extraction_url,
+        extraction_key,
+        people_recognition,
+        match_threshold,
+        session_manager,
+        people_manager,
+        &tunnel,
+    )
+    .await;
+
+    tunnel.shutdown().await;
+    result
+}
+
+/// Inner extraction + matching logic (tunnel already running).
+async fn run_extraction_and_matching(
+    session_id: &str,
+    session_dir: &std::path::Path,
+    language: &str,
+    source_meta: &[crate::session::session::SourceMetadata],
+    extraction_url: &str,
+    extraction_key: &str,
+    people_recognition: bool,
+    match_threshold: f64,
+    session_manager: &SessionManager,
+    people_manager: &PeopleManager,
+    tunnel: &crate::tunnel::EphemeralTunnel,
+) -> Result<u32, String> {
+    // Step 2: Build track inputs
+    let tracks: Vec<TrackInput> = source_meta
+        .iter()
+        .filter(|m| !m.filename.is_empty())
+        .map(|m| {
+            let source_type = match m.source_type {
+                crate::audio::source::SourceType::Mic => "mic",
+                crate::audio::source::SourceType::SystemMix => "system_mix",
+                _ => "unknown",
+            };
+            TrackInput {
+                audio_url: tunnel.file_url(&m.filename),
+                track_name: m.filename.split('.').next().unwrap_or(&m.filename).to_string(),
+                source_type: source_type.to_string(),
+                channels: m.channels,
+            }
+        })
+        .collect();
+
+    if tracks.is_empty() {
+        return Err("No audio tracks to transcribe".to_string());
+    }
+
+    // Wait for Cloudflare Quick Tunnel to propagate globally.
+    // Quick Tunnels are free but unreliable — they need 5-15 seconds to propagate
+    // to all Cloudflare edge locations before cross-region requests work.
+    info!("[{}] Waiting 10s for tunnel propagation...", session_id);
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+    info!("[{}] Submitting {} tracks to RunPod", session_id, tracks.len());
+
+    // Step 3: Submit and poll
+    session_manager
+        .set_processing_state(session_id, Some("extracting".to_string()))
+        .await;
+
+    let client = ExtractionClient::new(extraction_url.to_string(), extraction_key.to_string());
+
+    let job_id = client
+        .submit_job(tracks, language, true, None, None)
+        .await?;
+
+    info!("[{}] RunPod job submitted: {}", session_id, job_id);
+
+    // Poll with progress events
+    let mut delay = std::time::Duration::from_secs(2);
+    let max_delay = std::time::Duration::from_secs(15);
+    let timeout = std::time::Duration::from_secs(600);
+    let start = std::time::Instant::now();
+
+    let output = loop {
+        if start.elapsed() > timeout {
+            return Err("Extraction timed out after 10 minutes".to_string());
+        }
+
+        tokio::time::sleep(delay).await;
+
+        match client.poll_status(&job_id).await? {
+            Some(output) => break output,
+            None => {
+                session_manager.emit_transcription_progress(session_id, "extracting");
+                delay = (delay * 2).min(max_delay);
+            }
+        }
+    };
+
+    info!("[{}] Extraction complete, {} tracks returned", session_id, output.tracks.len());
+
+    // Save raw extraction output
+    let raw_path = session_dir.join("extraction_raw.json");
+    let raw_json = serde_json::to_string_pretty(&output)
+        .map_err(|e| format!("Failed to serialize raw output: {e}"))?;
+    std::fs::write(&raw_path, raw_json)
+        .map_err(|e| format!("Failed to write extraction_raw.json: {e}"))?;
+
+    // Step 4: Merge segments from all tracks, sorted by start time
+    let mut all_segments: Vec<Value> = Vec::new();
+    let mut all_embeddings: HashMap<String, Vec<f64>> = HashMap::new();
+
+    for (track_name, track_result) in &output.tracks {
+        for seg in &track_result.segments {
+            let mut seg_json = serde_json::to_value(seg)
+                .map_err(|e| format!("Failed to serialize segment: {e}"))?;
+            seg_json["track"] = json!(track_name);
+            all_segments.push(seg_json);
+        }
+        for (speaker, emb) in &track_result.speaker_embeddings {
+            all_embeddings.insert(speaker.clone(), emb.clone());
+        }
+    }
+
+    // Sort by start time
+    all_segments.sort_by(|a, b| {
+        let a_start = a.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let b_start = b.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        a_start.partial_cmp(&b_start).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Step 5: People matching
+    session_manager
+        .set_processing_state(session_id, Some("matching".to_string()))
+        .await;
+
+    let mut speaker_info: HashMap<String, Value> = HashMap::new();
+    let mut unconfirmed: u32 = 0;
+
+    if people_recognition && !all_embeddings.is_empty() {
+        info!("[{}] Matching {} speakers against People library", session_id, all_embeddings.len());
+
+        let embeddings_f64: HashMap<String, Vec<f64>> = all_embeddings
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let attributions = people_manager
+            .match_speakers(&embeddings_f64, match_threshold)
+            .await;
+
+        for attr in &attributions {
+            if attr.person_id.is_none() {
+                unconfirmed += 1;
+            }
+            speaker_info.insert(attr.speaker.clone(), json!({
+                "embedding": attr.embedding,
+                "person_id": attr.person_id,
+                "person_name": attr.person_name,
+                "confidence": attr.confidence,
+            }));
+
+            // Update segment attributions
+            for seg in &mut all_segments {
+                if seg.get("speaker").and_then(|s| s.as_str()) == Some(&attr.speaker) {
+                    seg["person_id"] = json!(attr.person_id);
+                    seg["person_name"] = json!(attr.person_name);
+                    seg["attribution_confidence"] = json!(attr.confidence);
+                }
+            }
+        }
+
+        info!("[{}] Matched speakers: {} confirmed, {} unconfirmed",
+              session_id, attributions.len() - unconfirmed as usize, unconfirmed);
+    } else {
+        // No people recognition — just store raw embeddings
+        for (speaker, emb) in &all_embeddings {
+            unconfirmed += 1;
+            speaker_info.insert(speaker.clone(), json!({
+                "embedding": emb,
+                "person_id": null,
+                "person_name": null,
+                "confidence": 0.0,
+            }));
+        }
+    }
+
+    // Step 6: Write enriched transcript.json
+    let transcript = json!({
+        "language": output.language,
+        "model": output.model,
+        "segments": all_segments,
+        "speaker_embeddings": speaker_info,
+    });
+
+    let transcript_path = session_dir.join("transcript.json");
+    let transcript_json = serde_json::to_string_pretty(&transcript)
+        .map_err(|e| format!("Failed to serialize transcript: {e}"))?;
+    std::fs::write(&transcript_path, transcript_json)
+        .map_err(|e| format!("Failed to write transcript.json: {e}"))?;
+
+    info!("[{}] Transcript saved: {} segments, {} speakers",
+          session_id, all_segments.len(), speaker_info.len());
+
+    Ok(unconfirmed)
 }
 

@@ -515,6 +515,27 @@ impl SessionManager {
         }
     }
 
+    pub fn emit_transcription_progress(&self, id: &str, status: &str) {
+        self.emit(ServerEvent::TranscriptionProgress {
+            id: id.to_string(),
+            status: status.to_string(),
+        });
+    }
+
+    pub fn emit_transcription_completed(&self, id: &str, unconfirmed_speakers: u32) {
+        self.emit(ServerEvent::TranscriptionCompleted {
+            id: id.to_string(),
+            unconfirmed_speakers,
+        });
+    }
+
+    pub fn emit_transcription_failed(&self, id: &str, error: &str) {
+        self.emit(ServerEvent::TranscriptionFailed {
+            id: id.to_string(),
+            error: error.to_string(),
+        });
+    }
+
     /// Get the session directory path, session language, and source metadata.
     pub async fn get_session_extraction_info(
         &self,

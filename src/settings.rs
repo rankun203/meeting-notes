@@ -1,0 +1,149 @@
+//! Application settings persisted to `{data-dir}/settings.json`.
+//!
+//! Created with defaults on first daemon startup if the file doesn't exist.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+use tracing::{info, warn};
+
+/// Shared settings handle used across handlers.
+pub type SharedSettings = Arc<RwLock<AppSettings>>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    /// RunPod serverless endpoint URL (e.g. "https://api.runpod.ai/v2/ENDPOINT_ID").
+    #[serde(default)]
+    pub audio_extraction_url: Option<String>,
+
+    /// RunPod API key for the audio-extraction endpoint.
+    #[serde(default)]
+    pub audio_extraction_api_key: Option<String>,
+
+    /// Whether to run speaker recognition against the People library after diarization.
+    #[serde(default = "default_true")]
+    pub people_recognition: bool,
+
+    /// Cosine similarity threshold for auto-matching speakers to known people.
+    #[serde(default = "default_threshold")]
+    pub speaker_match_threshold: f64,
+
+    /// Path to the settings file (not serialized).
+    #[serde(skip)]
+    settings_path: PathBuf,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_threshold() -> f64 {
+    0.75
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            audio_extraction_url: None,
+            audio_extraction_api_key: None,
+            people_recognition: true,
+            speaker_match_threshold: 0.75,
+            settings_path: PathBuf::new(),
+        }
+    }
+}
+
+impl AppSettings {
+    /// Load settings from `{data_dir}/settings.json`, creating the file with
+    /// defaults if it doesn't exist.
+    pub fn load_or_create(data_dir: &Path) -> Self {
+        let path = data_dir.join("settings.json");
+
+        if path.exists() {
+            match std::fs::read_to_string(&path) {
+                Ok(json) => match serde_json::from_str::<AppSettings>(&json) {
+                    Ok(mut settings) => {
+                        settings.settings_path = path;
+                        info!("Loaded settings from {}", settings.settings_path.display());
+                        return settings;
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse settings.json: {}. Using defaults.", e);
+                    }
+                },
+                Err(e) => {
+                    warn!("Failed to read settings.json: {}. Using defaults.", e);
+                }
+            }
+        }
+
+        let mut settings = AppSettings::default();
+        settings.settings_path = path;
+
+        if let Err(e) = settings.save() {
+            warn!("Failed to write default settings.json: {}", e);
+        } else {
+            info!("Created default settings at {}", settings.settings_path.display());
+        }
+
+        settings
+    }
+
+    /// Save current settings to disk.
+    pub fn save(&self) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize settings: {e}"))?;
+        std::fs::write(&self.settings_path, json)
+            .map_err(|e| format!("Failed to write settings: {e}"))?;
+        Ok(())
+    }
+
+    /// Merge a partial JSON update into current settings and save.
+    pub fn merge_and_save(&mut self, update: &serde_json::Value) -> Result<(), String> {
+        if let Some(v) = update.get("audio_extraction_url") {
+            self.audio_extraction_url = v.as_str().map(|s| s.to_string());
+        }
+        if let Some(v) = update.get("audio_extraction_api_key") {
+            self.audio_extraction_api_key = v.as_str().map(|s| s.to_string());
+        }
+        if let Some(v) = update.get("people_recognition") {
+            if let Some(b) = v.as_bool() {
+                self.people_recognition = b;
+            }
+        }
+        if let Some(v) = update.get("speaker_match_threshold") {
+            if let Some(n) = v.as_f64() {
+                self.speaker_match_threshold = n;
+            }
+        }
+        self.save()
+    }
+
+    /// Return a masked copy for API responses (hides API keys).
+    pub fn to_masked_json(&self) -> serde_json::Value {
+        let mask = |s: &Option<String>| -> serde_json::Value {
+            match s {
+                Some(key) if key.len() > 4 => {
+                    let masked = format!("{}...{}", &key[..4], &key[key.len() - 4..]);
+                    serde_json::Value::String(masked)
+                }
+                Some(_) => serde_json::Value::String("****".to_string()),
+                None => serde_json::Value::Null,
+            }
+        };
+
+        serde_json::json!({
+            "audio_extraction_url": self.audio_extraction_url,
+            "audio_extraction_api_key": mask(&self.audio_extraction_api_key),
+            "people_recognition": self.people_recognition,
+            "speaker_match_threshold": self.speaker_match_threshold,
+        })
+    }
+
+    /// Check if audio extraction is configured (both URL and key present).
+    pub fn is_extraction_configured(&self) -> bool {
+        self.audio_extraction_url.is_some() && self.audio_extraction_api_key.is_some()
+    }
+}

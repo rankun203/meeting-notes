@@ -12,6 +12,7 @@ use tokio::process::{Child, Command};
 use tracing::{info, warn, error};
 
 /// Manages cloudflared binary download and ephemeral tunnel lifecycle.
+#[derive(Clone)]
 pub struct TunnelManager {
     tools_dir: PathBuf,
 }
@@ -22,8 +23,22 @@ impl TunnelManager {
         Self { tools_dir }
     }
 
-    /// Download cloudflared binary if not already present. Call from a background task.
+    /// Find cloudflared binary: check system PATH first, then downloaded copy.
     pub async fn ensure_cloudflared(&self) -> Result<PathBuf, String> {
+        // Check system PATH first (e.g., installed via brew)
+        if let Ok(output) = std::process::Command::new("which")
+            .arg("cloudflared")
+            .output()
+        {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    info!("Using system cloudflared: {}", path);
+                    return Ok(PathBuf::from(path));
+                }
+            }
+        }
+
         let binary_name = if cfg!(target_os = "windows") {
             "cloudflared.exe"
         } else {
