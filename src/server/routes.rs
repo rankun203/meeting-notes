@@ -97,15 +97,23 @@ async fn rename_session(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
-    let name = body.get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+        state.session_manager
+            .rename_session(&id, name.to_string())
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
+    if let Some(lang) = body.get("language").and_then(|v| v.as_str()) {
+        state.session_manager
+            .update_session_language(&id, lang.to_string())
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
     state.session_manager
-        .rename_session(&id, name)
+        .get_session(&id)
         .await
         .map(Json)
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))
 }
 
 async fn delete_session(
@@ -607,6 +615,7 @@ async fn transcribe_session(
     let extraction_key = settings.audio_extraction_api_key.clone().unwrap();
     let file_drop_url = settings.file_drop_url.clone();
     let file_drop_api_key = settings.file_drop_api_key.clone();
+    let diarize = settings.diarize;
     let people_recognition = settings.people_recognition;
     let match_threshold = settings.speaker_match_threshold;
     drop(settings);
@@ -649,6 +658,7 @@ async fn transcribe_session(
             &extraction_key,
             &file_drop_url,
             &file_drop_api_key,
+            diarize,
             people_recognition,
             match_threshold,
             &session_manager,
@@ -687,6 +697,7 @@ async fn run_transcription_pipeline(
     extraction_key: &str,
     file_drop_url: &str,
     file_drop_api_key: &str,
+    diarize: bool,
     people_recognition: bool,
     match_threshold: f64,
     session_manager: &SessionManager,
@@ -774,7 +785,7 @@ async fn run_transcription_pipeline(
     let client = ExtractionClient::new(extraction_url.to_string(), extraction_key.to_string());
 
     let job_id = client
-        .submit_job(tracks, language, true, None, None)
+        .submit_job(tracks, language, diarize, None, None)
         .await?;
 
     info!("[{}] RunPod job submitted: {}", session_id, job_id);

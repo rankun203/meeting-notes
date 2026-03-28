@@ -30,6 +30,10 @@ pub struct AppSettings {
     #[serde(default = "default_file_drop_api_key")]
     pub file_drop_api_key: String,
 
+    /// Whether to run speaker diarization (identify who spoke when).
+    #[serde(default = "default_true")]
+    pub diarize: bool,
+
     /// Whether to run speaker recognition against the People library after diarization.
     #[serde(default = "default_true")]
     pub people_recognition: bool,
@@ -66,6 +70,7 @@ impl Default for AppSettings {
             audio_extraction_api_key: None,
             file_drop_url: default_file_drop_url(),
             file_drop_api_key: default_file_drop_api_key(),
+            diarize: true,
             people_recognition: true,
             speaker_match_threshold: 0.75,
             settings_path: PathBuf::new(),
@@ -136,6 +141,11 @@ impl AppSettings {
                 self.file_drop_api_key = s.to_string();
             }
         }
+        if let Some(v) = update.get("diarize") {
+            if let Some(b) = v.as_bool() {
+                self.diarize = b;
+            }
+        }
         if let Some(v) = update.get("people_recognition") {
             if let Some(b) = v.as_bool() {
                 self.people_recognition = b;
@@ -177,6 +187,7 @@ impl AppSettings {
             "audio_extraction_api_key": mask(&self.audio_extraction_api_key),
             "file_drop_url": self.file_drop_url,
             "file_drop_api_key": mask_str(&self.file_drop_api_key),
+            "diarize": self.diarize,
             "people_recognition": self.people_recognition,
             "speaker_match_threshold": self.speaker_match_threshold,
         })

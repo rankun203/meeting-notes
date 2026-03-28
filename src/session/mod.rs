@@ -333,6 +333,19 @@ impl SessionManager {
         Ok(info)
     }
 
+    pub async fn update_session_language(&self, id: &str, language: String) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        session.config.language = language;
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata on language update: {}", e);
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionUpdated(info.clone()));
+        Ok(info)
+    }
+
     pub async fn delete_session(&self, id: &str) -> Result<(), String> {
         // Extract recorder under lock, then stop outside lock
         let mut recorder_to_stop = None;

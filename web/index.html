@@ -1150,7 +1150,24 @@
                   children: [
                     jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Language' }),
-                      jsx('p', { className: 'text-sm font-medium', children: (fields?.language?.options?.find(o => o.value === s.language)?.label) || s.language }),
+                      s.state === 'stopped'
+                        ? jsx('select', {
+                            value: s.language,
+                            onChange: async (e) => {
+                              try {
+                                await api(`/sessions/${s.id}`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify({ language: e.target.value }),
+                                });
+                                await onRefresh();
+                              } catch (err) { setError(err.message); }
+                            },
+                            className: 'text-sm font-medium bg-transparent border border-gray-200 dark:border-gray-700 rounded px-1 py-0.5 cursor-pointer hover:border-blue-400 transition-colors',
+                            children: (fields?.language?.options || []).map(o =>
+                              jsx('option', { key: o.value, value: o.value, children: o.label })
+                            ),
+                          })
+                        : jsx('p', { className: 'text-sm font-medium', children: (fields?.language?.options?.find(o => o.value === s.language)?.label) || s.language }),
                     ]}),
                     jsxs('div', { children: [
                       jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Format' }),
