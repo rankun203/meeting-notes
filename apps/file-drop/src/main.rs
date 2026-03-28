@@ -409,9 +409,6 @@ async fn handle_health(State(state): State<AppState>) -> (StatusCode, Json<serde
     let status = if available { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (status, Json(json!({
         "status": if available { "available" } else { "unavailable" },
-        "free_space_bytes": free,
-        "free_space_human": free.map(format_size),
-        "min_free_bytes": min_free,
     })))
 }
 
