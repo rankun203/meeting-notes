@@ -59,7 +59,12 @@ class TranscriptionPipeline:
 
     def _get_diarize_model(self) -> DiarizationPipeline | None:
         """Load diarization model on first use. Requires HF_TOKEN."""
-        if self._diarize_model is None and self.hf_token:
+        if self._diarize_model is None and not self.hf_token:
+            logger.warning("Diarization requested but HF_TOKEN is not set. "
+                           "Set HF_TOKEN env var in RunPod endpoint settings. "
+                           "Skipping diarization.")
+            return None
+        if self._diarize_model is None:
             logger.info("Loading diarization pipeline")
 
             os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -207,6 +212,7 @@ print('DOWNLOAD_OK')
         """Run speaker diarization. Returns (annotation, speaker_embeddings)."""
         diarize_model = self._get_diarize_model()
         if diarize_model is None:
+            logger.warning("Diarization model not available, returning empty result")
             return None, {}
 
         logger.info("Diarizing %.1fs of audio...", len(audio) / 16000)
@@ -287,10 +293,13 @@ print('DOWNLOAD_OK')
         # Step 3: Diarize (speaker labels + embeddings)
         speaker_embeddings = {}
         if diarize:
+            logger.info("Diarization requested")
             annotation, speaker_embeddings = self._diarize(
                 audio, min_speakers, max_speakers
             )
-            if annotation is not None:
+            if annotation is None:
+                logger.warning("Diarization returned no annotation — speakers will not be assigned")
+            else:
                 diarize_segments = pd.DataFrame(
                     [
                         {"start": turn.start, "end": turn.end, "speaker": speaker}

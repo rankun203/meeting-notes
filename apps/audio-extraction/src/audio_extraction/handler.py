@@ -102,6 +102,8 @@ def handler(event: dict) -> dict:
     max_speakers = inp.get("max_speakers")
 
     logger.info("Job started: %d tracks, language=%s, diarize=%s", len(tracks), language, diarize)
+    if diarize and not os.environ.get("HF_TOKEN"):
+        logger.error("diarize=true but HF_TOKEN env var is not set! Diarization will be skipped.")
     job_t0 = time.time()
 
     pipeline = get_pipeline()
