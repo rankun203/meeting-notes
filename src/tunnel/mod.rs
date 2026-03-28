@@ -11,6 +11,10 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, Command};
 use tracing::{info, warn, error};
 
+mod cloudflared;
+
+use crate::utils::log_file::LogFile;
+
 /// Manages cloudflared binary download and ephemeral tunnel lifecycle.
 #[derive(Clone)]
 pub struct TunnelManager {
@@ -25,66 +29,9 @@ impl TunnelManager {
         Self { tools_dir, logs_dir }
     }
 
-    /// Find cloudflared binary: check system PATH first, then downloaded copy.
+    /// Ensure cloudflared is available (system PATH or downloaded).
     pub async fn ensure_cloudflared(&self) -> Result<PathBuf, String> {
-        // Check system PATH first (e.g., installed via brew)
-        if let Ok(output) = std::process::Command::new("which")
-            .arg("cloudflared")
-            .output()
-        {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() {
-                    info!("Using system cloudflared: {}", path);
-                    return Ok(PathBuf::from(path));
-                }
-            }
-        }
-
-        let binary_name = if cfg!(target_os = "windows") {
-            "cloudflared.exe"
-        } else {
-            "cloudflared"
-        };
-        let binary_path = self.tools_dir.join(binary_name);
-
-        if binary_path.exists() {
-            return Ok(binary_path);
-        }
-
-        let url = cloudflared_download_url()
-            .ok_or_else(|| "unsupported platform for cloudflared".to_string())?;
-
-        info!("Downloading cloudflared from {}", url);
-        std::fs::create_dir_all(&self.tools_dir)
-            .map_err(|e| format!("failed to create tools dir: {e}"))?;
-
-        let resp = reqwest::get(url)
-            .await
-            .map_err(|e| format!("failed to download cloudflared: {e}"))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("cloudflared download failed: HTTP {}", resp.status()));
-        }
-
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("failed to read cloudflared bytes: {e}"))?;
-
-        std::fs::write(&binary_path, &bytes)
-            .map_err(|e| format!("failed to write cloudflared binary: {e}"))?;
-
-        // Make executable on unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755))
-                .map_err(|e| format!("failed to chmod cloudflared: {e}"))?;
-        }
-
-        info!("cloudflared downloaded to {}", binary_path.display());
-        Ok(binary_path)
+        cloudflared::ensure_binary(&self.tools_dir).await
     }
 
     /// Start a temporary file server + cloudflare tunnel to expose session files.
@@ -110,9 +57,7 @@ impl TunnelManager {
 
         info!(
             "Tunnel active: {} -> 127.0.0.1:{} (serving {})",
-            tunnel_url,
-            temp_port,
-            session_dir.display()
+            tunnel_url, temp_port, session_dir.display()
         );
 
         Ok(EphemeralTunnel {
@@ -146,8 +91,11 @@ impl EphemeralTunnel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
 /// Start a minimal file server, bind to an available port starting from `start_port`.
-/// Returns the handle and the actual port bound.
 async fn start_file_server(
     dir: PathBuf,
     start_port: u16,
@@ -157,14 +105,11 @@ async fn start_file_server(
 
     let app = Router::new().fallback_service(ServeDir::new(&dir));
 
-    // Try ports sequentially using async bind (no race condition)
     let mut port = start_port;
     let listener = loop {
         match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
             Ok(l) => break l,
-            Err(_) if port < start_port.saturating_add(100) => {
-                port += 1;
-            }
+            Err(_) if port < start_port.saturating_add(100) => { port += 1; }
             Err(e) => {
                 return Err(format!("failed to bind file server (tried ports {}-{}): {e}", start_port, port));
             }
@@ -183,7 +128,7 @@ async fn start_file_server(
         }
     });
 
-    // Verify the server is actually responding with a known file
+    // Verify the server is actually responding
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let check = reqwest::get(format!("http://127.0.0.1:{}/metadata.json", bound_port)).await;
     match check {
@@ -195,8 +140,7 @@ async fn start_file_server(
     Ok((handle, bound_port))
 }
 
-/// Start cloudflared quick tunnel and parse the public URL from its output.
-/// Saves full cloudflared output to `log_path` for debugging.
+/// Start cloudflared quick tunnel, parse the URL, and log output to file.
 async fn start_tunnel(
     cloudflared_path: &Path,
     local_port: u16,
@@ -210,29 +154,17 @@ async fn start_tunnel(
         .spawn()
         .map_err(|e| format!("failed to start cloudflared: {e}"))?;
 
-    // cloudflared prints the tunnel URL to stderr
     let stderr = child.stderr.take()
         .ok_or_else(|| "could not capture cloudflared stderr".to_string())?;
 
     let mut reader = tokio::io::BufReader::new(stderr).lines();
-
-    // Open log file for writing
-    let log_file = std::fs::File::create(log_path)
-        .map_err(|e| format!("failed to create cloudflared log at {}: {e}", log_path.display()))?;
-    let log_file = std::sync::Arc::new(std::sync::Mutex::new(std::io::BufWriter::new(log_file)));
+    let log = LogFile::create(log_path)?;
 
     // Parse tunnel URL from stderr, writing all lines to log file
-    let log_for_parse = log_file.clone();
+    let log_for_parse = log.clone();
     let tunnel_url = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while let Ok(Some(line)) = reader.next_line().await {
-            // Write to log file
-            {
-                use std::io::Write;
-                if let Ok(mut f) = log_for_parse.lock() {
-                    let _ = writeln!(f, "{}", line);
-                    let _ = f.flush();
-                }
-            }
+            log_for_parse.write_line(&line);
             if let Some(url) = extract_tunnel_url(&line) {
                 return Ok(url);
             }
@@ -242,24 +174,14 @@ async fn start_tunnel(
     .await
     .map_err(|_| "timed out waiting for cloudflared tunnel URL (30s)".to_string())??;
 
-    // Continue reading stderr in background (so cloudflared doesn't block on pipe)
-    let log_for_bg = log_file.clone();
-    tokio::spawn(async move {
-        while let Ok(Some(line)) = reader.next_line().await {
-            use std::io::Write;
-            if let Ok(mut f) = log_for_bg.lock() {
-                let _ = writeln!(f, "{}", line);
-                let _ = f.flush();
-            }
-        }
-    });
+    // Continue reading stderr in background so cloudflared doesn't block on pipe
+    log.spawn_reader(reader);
 
     Ok((child, tunnel_url))
 }
 
 /// Extract a trycloudflare.com URL from a cloudflared log line.
 fn extract_tunnel_url(line: &str) -> Option<String> {
-    // Look for https://*.trycloudflare.com
     for word in line.split_whitespace() {
         if word.contains(".trycloudflare.com") {
             let url = word.trim_matches(|c: char| !c.is_alphanumeric() && c != ':' && c != '/' && c != '.' && c != '-');
@@ -269,20 +191,4 @@ fn extract_tunnel_url(line: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn cloudflared_download_url() -> Option<&'static str> {
-    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
-        Some("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz")
-    } else if cfg!(target_os = "macos") {
-        Some("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz")
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
-        Some("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64")
-    } else if cfg!(target_os = "linux") {
-        Some("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64")
-    } else if cfg!(target_os = "windows") {
-        Some("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe")
-    } else {
-        None
-    }
 }
