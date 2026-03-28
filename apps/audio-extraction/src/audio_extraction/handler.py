@@ -155,8 +155,13 @@ def handler(event: dict) -> dict:
     total_elapsed = time.time() - job_t0
     logger.info("Job completed: %d tracks in %.1fs", len(results), total_elapsed)
 
-    return {
+    response = {
         "tracks": results,
         "language": language,
         "model": pipeline.model_size,
     }
+
+    import json as _json
+    logger.info("Response body:\n%s", _json.dumps(_truncate_for_log(response), indent=2, ensure_ascii=False))
+
+    return response
