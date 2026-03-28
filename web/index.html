@@ -1483,52 +1483,66 @@
 
       const sidebarChildren = [header];
 
-      // New session form
-      if (showNew) {
+      if (currentView === 'sessions') {
+        // New session form
+        if (showNew) {
+          sidebarChildren.push(jsx('div', {
+            key: 'new-form',
+            className: 'px-3 py-3 border-b border-gray-100 dark:border-gray-800',
+            children: jsx(NewSessionPanel, {
+              sources, fields,
+              onCreated: async () => { await onCreated(); },
+              onSelect: (id) => { setShowNew(false); onSelect(id); },
+            }),
+          }));
+        }
+
+        // Sessions list
         sidebarChildren.push(jsx('div', {
-          key: 'new-form',
-          className: 'px-3 py-3 border-b border-gray-100 dark:border-gray-800',
-          children: jsx(NewSessionPanel, {
-            sources, fields,
-            onCreated: async () => { await onCreated(); },
-            onSelect: (id) => { setShowNew(false); onSelect(id); },
-          }),
+          key: 'list',
+          className: 'flex-1 overflow-y-auto sidebar-scroll px-2 py-2 space-y-0.5',
+          children: sessions.length === 0
+            ? jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-600 text-center py-8', children: 'No sessions yet' })
+            : sessions.map(s => jsx(SidebarItem, {
+                key: s.id, session: s,
+                selected: s.id === selectedId,
+                onClick: () => onSelect(s.id),
+              })),
         }));
-      }
 
-      // Sessions list
-      sidebarChildren.push(jsx('div', {
-        key: 'list',
-        className: 'flex-1 overflow-y-auto sidebar-scroll px-2 py-2 space-y-0.5',
-        children: sessions.length === 0
-          ? jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-600 text-center py-8', children: 'No sessions yet' })
-          : sessions.map(s => jsx(SidebarItem, {
-              key: s.id, session: s,
-              selected: s.id === selectedId,
-              onClick: () => onSelect(s.id),
-            })),
-      }));
-
-      // Pagination
-      if (total > PAGE_SIZE) {
-        sidebarChildren.push(jsxs('div', {
-          key: 'pagination',
-          className: 'flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-100 dark:border-gray-800 text-[11px] text-gray-400 dark:text-gray-500',
-          children: [
-            jsx('button', {
-              disabled: offset === 0,
-              onClick: () => onPageChange(Math.max(0, offset - PAGE_SIZE)),
-              className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
-              children: 'Prev',
-            }),
-            jsx('span', { children: `${Math.floor(offset / PAGE_SIZE) + 1} / ${Math.ceil(total / PAGE_SIZE)}` }),
-            jsx('button', {
-              disabled: offset + PAGE_SIZE >= total,
-              onClick: () => onPageChange(offset + PAGE_SIZE),
-              className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
-              children: 'Next',
-            }),
-          ],
+        // Pagination
+        if (total > PAGE_SIZE) {
+          sidebarChildren.push(jsxs('div', {
+            key: 'pagination',
+            className: 'flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-100 dark:border-gray-800 text-[11px] text-gray-400 dark:text-gray-500',
+            children: [
+              jsx('button', {
+                disabled: offset === 0,
+                onClick: () => onPageChange(Math.max(0, offset - PAGE_SIZE)),
+                className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
+                children: 'Prev',
+              }),
+              jsx('span', { children: `${Math.floor(offset / PAGE_SIZE) + 1} / ${Math.ceil(total / PAGE_SIZE)}` }),
+              jsx('button', {
+                disabled: offset + PAGE_SIZE >= total,
+                onClick: () => onPageChange(offset + PAGE_SIZE),
+                className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
+                children: 'Next',
+              }),
+            ],
+          }));
+        }
+      } else {
+        // Non-session views show their content in the sidebar on mobile,
+        // or as a placeholder on desktop (content shown in main panel)
+        sidebarChildren.push(jsx('div', {
+          key: 'view-content',
+          className: 'flex-1 overflow-y-auto',
+          children: currentView === 'people'
+            ? jsx(PeoplePage, {})
+            : currentView === 'settings'
+              ? jsx(SettingsPage, {})
+              : null,
         }));
       }
 
