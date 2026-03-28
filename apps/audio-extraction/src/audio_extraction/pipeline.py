@@ -98,7 +98,7 @@ class TranscriptionPipeline:
             logger.info("Loaded from cache in %.1fs", time.time() - t0)
             return pipeline
         except Exception as e:
-            logger.info("Cache miss (%.1fs): %s", time.time() - t0, e)
+            logger.info("Cache miss (%.1fs): %s: %s", time.time() - t0, type(e).__name__, e)
         finally:
             os.environ.pop("HF_HUB_OFFLINE", None)
 
@@ -123,17 +123,18 @@ class TranscriptionPipeline:
         """Download pyannote models in a subprocess to avoid hangs."""
         logger.info("Downloading models via subprocess...")
         t0 = time.time()
-        download_script = f"""
+        download_script = """
 import os
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 from pyannote.audio import Pipeline
-pipeline = Pipeline.from_pretrained('{model_name}', token='{self.hf_token}')
+pipeline = Pipeline.from_pretrained(os.environ["_MODEL"], token=os.environ["_TOKEN"])
 print('DOWNLOAD_OK')
 """
+        env = {**os.environ, "_MODEL": model_name, "_TOKEN": self.hf_token}
         result = subprocess.run(
             [sys.executable, "-c", download_script],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, timeout=180, env=env,
         )
         if "DOWNLOAD_OK" not in result.stdout:
             logger.error("Subprocess stdout: %s", result.stdout[-500:] if result.stdout else "(empty)")
@@ -335,13 +336,16 @@ def _parse_diarize_output(output) -> tuple[any, dict[str, list[float]]]:
         # pyannote-audio 4.x
         annotation = output.speaker_diarization
         raw = output.speaker_embeddings
-        if raw is not None:
+        if raw is not None and hasattr(raw, 'shape') and raw.shape[0] > 0:
             labels = annotation.labels()
             speaker_embeddings = {
                 label: raw[i].tolist()
                 for i, label in enumerate(labels)
                 if i < raw.shape[0]
             }
+            logger.info("Parsed DiarizeOutput: %d speakers, embedding shape %s", len(labels), raw.shape)
+        else:
+            logger.warning("DiarizeOutput has no speaker embeddings (raw=%s)", type(raw).__name__)
     elif isinstance(output, tuple):
         # Legacy: tuple of (Annotation, embeddings_dict)
         annotation, raw = output
@@ -350,7 +354,11 @@ def _parse_diarize_output(output) -> tuple[any, dict[str, list[float]]]:
                 k: v if isinstance(v, list) else v.tolist()
                 for k, v in raw.items()
             }
+            logger.info("Parsed tuple output: %d speakers", len(speaker_embeddings))
+        else:
+            logger.warning("Diarize tuple output has empty embeddings")
     else:
+        logger.warning("Unexpected diarize output type: %s — treating as Annotation", type(output).__name__)
         annotation = output
 
     return annotation, speaker_embeddings

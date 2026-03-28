@@ -151,8 +151,8 @@ def handler(event: dict) -> dict:
         for path in downloaded_files:
             try:
                 os.unlink(path)
-            except OSError:
-                pass
+            except OSError as e:
+                logger.warning("Failed to clean up temp file %s: %s", path, e)
 
     total_elapsed = time.time() - job_t0
     logger.info("Job completed: %d tracks in %.1fs", len(results), total_elapsed)
