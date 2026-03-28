@@ -1,0 +1,20 @@
+services:
+  file-drop:
+    build: .
+    ports:
+      - "8199:8199"
+    environment:
+      - API_KEY=${API_KEY:-changeme}
+    command:
+      - "--api-key"
+      - "${API_KEY:-changeme}"
+      - "--storage-dir"
+      - "/data/storage"
+      - "--port"
+      - "8199"
+    volumes:
+      - file-drop-data:/data/storage
+    restart: unless-stopped
+
+volumes:
+  file-drop-data:
