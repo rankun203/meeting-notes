@@ -307,7 +307,7 @@ async fn handle_upload(
     }
 
     // Register in store
-    let download_url = format!("/d/{}", id);
+    let download_url = format!("/d/{}.{}", id, ext);
     {
         let mut files = state.files.write().await;
         files.insert(id.clone(), FileEntry {
@@ -339,8 +339,10 @@ async fn handle_upload(
 
 async fn handle_download(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id_with_ext): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    // Strip extension if present (e.g., "uuid.opus" -> "uuid")
+    let id = id_with_ext.split('.').next().unwrap_or(&id_with_ext).to_string();
     let (path, original_name) = {
         let mut files = state.files.write().await;
         let entry = files.get_mut(&id).ok_or_else(|| {
