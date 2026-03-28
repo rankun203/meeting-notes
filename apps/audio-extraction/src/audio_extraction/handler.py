@@ -4,6 +4,7 @@ Accepts multiple audio tracks, runs WhisperX transcription + alignment + diariza
 on each, extracts speaker embeddings, and returns per-track results.
 """
 
+import json
 import logging
 import os
 import tempfile
@@ -91,8 +92,7 @@ def _truncate_for_log(obj, max_str_len=128, max_list_len=5):
 
 def handler(event: dict) -> dict:
     """RunPod serverless handler."""
-    import json as _json
-    logger.info("Request body:\n%s", _json.dumps(_truncate_for_log(event), indent=2, ensure_ascii=False))
+    logger.info("Request body:\n%s", json.dumps(_truncate_for_log(event), indent=2, ensure_ascii=False))
 
     inp = event["input"]
     tracks = inp["tracks"]
@@ -161,7 +161,6 @@ def handler(event: dict) -> dict:
         "model": pipeline.model_size,
     }
 
-    import json as _json
-    logger.info("Response body:\n%s", _json.dumps(_truncate_for_log(response), indent=2, ensure_ascii=False))
+    logger.info("Response body:\n%s", json.dumps(_truncate_for_log(response), indent=2, ensure_ascii=False))
 
     return response
