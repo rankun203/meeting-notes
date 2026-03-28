@@ -36,12 +36,16 @@ class TranscriptionPipeline:
         compute_type: str = "float16",
         batch_size: int = 16,
         hf_token: str | None = None,
+        segmentation_batch_size: int = 32,
+        embedding_batch_size: int = 4,
     ):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.batch_size = batch_size
         self.hf_token = hf_token
+        self.segmentation_batch_size = segmentation_batch_size
+        self.embedding_batch_size = embedding_batch_size
 
         logger.info(
             "Loading WhisperX model: %s on %s (%s)", model_size, device, compute_type
@@ -73,6 +77,11 @@ class TranscriptionPipeline:
 
             model_name = "pyannote/speaker-diarization-community-1"
             pipeline = self._load_pyannote_pipeline(model_name)
+
+            pipeline.segmentation_batch_size = self.segmentation_batch_size
+            pipeline.embedding_batch_size = self.embedding_batch_size
+            logger.info("Diarization batch sizes: segmentation=%d, embedding=%d",
+                        self.segmentation_batch_size, self.embedding_batch_size)
 
             logger.info("Moving diarization pipeline to %s...", self.device)
             t0 = time.time()

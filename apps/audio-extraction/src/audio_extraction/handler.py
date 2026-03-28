@@ -33,6 +33,8 @@ def get_pipeline() -> TranscriptionPipeline:
             compute_type=os.environ.get("WHISPER_COMPUTE_TYPE", "float16"),
             batch_size=int(os.environ.get("WHISPER_BATCH_SIZE", "16")),
             hf_token=os.environ.get("HF_TOKEN"),
+            segmentation_batch_size=int(os.environ.get("SEGMENTATION_BATCH_SIZE", "32")),
+            embedding_batch_size=int(os.environ.get("EMBEDDING_BATCH_SIZE", "4")),
         )
         logger.info("Pipeline initialized in %.1fs", time.time() - t0)
     return _pipeline

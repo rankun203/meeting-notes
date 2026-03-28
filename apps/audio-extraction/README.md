@@ -110,6 +110,8 @@ docker push YOUR_DOCKERHUB/audio-extraction:v0.1.0
 | `WHISPER_COMPUTE_TYPE` | `float16` | Compute type (`float16` for GPU, `int8` for CPU) |
 | `WHISPER_DEVICE` | `cuda` | Device (`cuda` or `cpu`) |
 | `HF_TOKEN` | — | HuggingFace token (required for pyannote diarization) |
+| `SEGMENTATION_BATCH_SIZE` | `32` | Batch size for pyannote speaker segmentation (see [tuning](#batch-size-tuning)) |
+| `EMBEDDING_BATCH_SIZE` | `4` | Batch size for pyannote speaker embedding extraction (see [tuning](#batch-size-tuning)) |
 
 ### HuggingFace gated models
 
@@ -154,53 +156,62 @@ docker build -f Dockerfile.runpod \
 
 ### 2. Serve test audio files
 
-The container downloads audio from URLs. To test with local files, run a file server and expose it with a tunnel so the container can reach it.
+The container downloads audio from URLs. To test with local files, run a file server. With `--network host` the container shares the host network, so no tunnel is needed.
 
 ```bash
-# Serve a directory containing audio files (e.g. .opus, .wav, .mp3)
-cd /path/to/recordings
+# Serve the directory containing session audio files
+cd /path/to/recordings   # e.g. target/sources/
 python3 -m http.server 8199 &
-
-# Expose via cloudflared (or ngrok, etc.) so Docker can reach it
-cloudflared tunnel --url http://localhost:8199
-# Note the https://*.trycloudflare.com URL
 ```
 
-### 3. Create test_input.json
+### 3. Run the container as an API server
 
-```json
-{
-  "input": {
-    "tracks": [
-      {
-        "audio_url": "https://YOUR-TUNNEL-URL/session_id/system_microphone.opus",
-        "track_name": "system_microphone",
-        "source_type": "mic",
-        "channels": 1
-      },
-      {
-        "audio_url": "https://YOUR-TUNNEL-URL/session_id/system_audio.opus",
-        "track_name": "system_audio",
-        "source_type": "system_mix",
-        "channels": 2
-      }
-    ],
-    "language": "en",
-    "diarize": true
-  }
-}
-```
-
-### 4. Run the container
+The `--rp_serve_api` flag starts a local HTTP server instead of the default one-shot `test_input.json` mode.
 
 ```bash
 docker run --rm --gpus all \
+  --network host \
   -e HF_TOKEN="$HF_TOKEN" \
-  -v /path/to/test_input.json:/app/test_input.json:ro \
-  meeting-notes-extraction
+  meeting-notes-extraction \
+  python -m audio_extraction --rp_serve_api --rp_api_host 0.0.0.0
 ```
 
-RunPod's worker detects `test_input.json`, processes it as a local job, prints the full result to stdout, and exits. No network API needed.
+The server listens on port 8000 and exposes the same endpoints as RunPod's API.
+
+### 4. Send a request
+
+```bash
+curl -X POST http://localhost:8000/runsync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "tracks": [
+        {
+          "audio_url": "http://localhost:8199/SESSION_ID/system_microphone.opus",
+          "track_name": "system_microphone",
+          "source_type": "mic",
+          "channels": 1
+        },
+        {
+          "audio_url": "http://localhost:8199/SESSION_ID/system_audio.opus",
+          "track_name": "system_audio",
+          "source_type": "system_mix",
+          "channels": 2
+        }
+      ],
+      "language": "en",
+      "diarize": true
+    }
+  }'
+```
+
+Available endpoints:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/runsync` | Synchronous — blocks until processing completes, returns result |
+| POST | `/run` | Async — returns a job ID immediately |
+| POST | `/status/{job_id}` | Poll job status (use with `/run`) |
 
 ### What to look for
 
@@ -251,14 +262,87 @@ Peak VRAM is ~5.5 GiB regardless of audio length. Any GPU with 8+ GB works.
 
 This workload is memory-bandwidth bound (inference, not training), so the 4090 outperforms the L40S despite lower FP16 TFLOPS. The 48 GB on A40/L40S is unused headroom — 24 GB is more than enough.
 
+### Batch size tuning
+
+Benchmarked on L40S (46 GB GDDR6, 864 GB/s), 51 min Chinese audio, 1 mic track. Each parameter swept independently; others held at defaults (whisper=16, seg=32, emb=32).
+
+#### WHISPER_BATCH_SIZE (transcription)
+
+Controls how many VAD segments are batched through the Whisper model. Affects transcription only; alignment, segmentation, and embeddings are unchanged.
+
+| Batch | Transcribe | Align | Seg | Emb | Total | VRAM |
+|------:|-----------:|------:|----:|----:|------:|-----:|
+| 1 | 41.6s | 21.3s | 1.5s | 26.2s | 91.1s | 8.8 GiB |
+| 4 | 24.3s | 22.3s | 1.5s | 26.6s | 75.2s | 8.8 GiB |
+| 8 | 19.2s | 21.5s | 1.5s | 26.6s | 69.3s | 8.8 GiB |
+| **16** | **17.3s** | 21.6s | 1.7s | 27.1s | **68.2s** | **8.8 GiB** |
+| 24 | 16.4s | 22.2s | 1.5s | 26.7s | 67.3s | 8.8 GiB |
+| 32 | 16.0s | 23.9s | 1.5s | 26.8s | 68.7s | 8.8 GiB |
+| 48 | 15.7s | 22.0s | 1.5s | 26.6s | 66.3s | 8.8 GiB |
+| 64 | 14.9s | 21.5s | 1.5s | 26.6s | 65.0s | 8.8 GiB |
+
+Big gains 1→16 (41.6→17.3s). Diminishing returns after 16; VRAM flat at ~8.8 GiB regardless.
+
+#### SEGMENTATION_BATCH_SIZE (diarization — speaker activity detection)
+
+Controls batching of the sliding-window segmentation model. Large impact on segmentation time; indirectly affects embedding time because the segmentation step feeds into embeddings.
+
+| Batch | Transcribe | Align | Seg | Emb | Total | VRAM |
+|------:|-----------:|------:|----:|----:|------:|-----:|
+| 1 | 17.3s | 22.2s | 30.1s | 55.5s | 125.6s | 8.7 GiB |
+| 4 | 17.2s | 21.7s | 8.0s | 33.3s | 80.7s | 8.7 GiB |
+| 8 | 17.2s | 21.2s | 4.2s | 29.4s | 72.5s | 8.7 GiB |
+| 16 | 17.2s | 21.5s | 2.4s | 27.6s | 69.2s | 9.0 GiB |
+| 24 | 17.3s | 22.0s | 1.8s | 27.1s | 68.7s | 9.0 GiB |
+| **32** | 17.3s | 21.7s | **1.5s** | 26.8s | **67.8s** | **8.8 GiB** |
+| 48 | 17.3s | 21.7s | 1.3s | 26.7s | 67.5s | 9.4 GiB |
+| 64 | 17.3s | 21.5s | 1.2s | 26.3s | 66.8s | 8.8 GiB |
+
+Massive 1→16 (30.1→2.4s). Plateaus at 32; VRAM stays ~8.8-9.4 GiB.
+
+#### EMBEDDING_BATCH_SIZE (diarization — speaker voice fingerprinting)
+
+Controls batching of speaker embedding extraction (WeSpeaker model). This is the most VRAM-sensitive parameter and has a surprising non-monotonic speed curve.
+
+| Batch | Transcribe | Align | Seg | Emb | Total | VRAM |
+|------:|-----------:|------:|----:|----:|------:|-----:|
+| 1 | 17.3s | 21.7s | 1.5s | 43.5s | 84.5s | 7.5 GiB |
+| **4** | 17.1s | 21.5s | 1.5s | **21.3s** | **61.9s** | **7.5 GiB** |
+| 8 | 17.2s | 21.5s | 1.5s | 22.0s | 62.7s | 7.5 GiB |
+| 16 | 17.2s | 21.1s | 1.5s | 24.8s | 65.1s | 7.5 GiB |
+| 24 | 17.2s | 22.4s | 1.5s | 25.9s | 67.5s | 8.5 GiB |
+| 32 | 17.2s | 21.7s | 1.5s | 26.6s | 67.5s | 8.8 GiB |
+| 48 | 17.2s | 22.5s | 1.5s | 27.1s | 68.8s | 9.9 GiB |
+| 64 | 17.2s | 21.7s | 1.5s | 28.4s | 69.3s | 10.7 GiB |
+
+Fastest at batch=4 (21.3s), then **gets slower** as batch increases — GPU↔CPU transfer overhead grows faster than compute gains (see [pyannote-audio#1566](https://github.com/pyannote/pyannote-audio/issues/1566)). VRAM climbs significantly: 7.5 GiB at 4 → 10.7 GiB at 64.
+
+#### Recommended settings by GPU VRAM
+
+Each processing step loads different models and consumes VRAM independently. The table below gives optimum batch sizes that maximize speed without exceeding the VRAM budget. GPUs with faster HBM memory bandwidth (A100, H100) may sustain higher embedding batch sizes before hitting the transfer bottleneck. GPUs with more CUDA cores benefit from higher whisper/segmentation batch sizes.
+
+| VRAM | Whisper | Seg | Emb | Est. total | Notes |
+|-----:|--------:|----:|----:|-----------:|-------|
+| 8 GB | 8 | 16 | 4 | ~67s | Consumer GPUs (RTX 3070/4060). Tight — lower whisper batch if OOM. |
+| 10 GB | 16 | 32 | 4 | ~62s | RTX 3080/4070. Sweet spot for cost/performance. |
+| 12 GB | 16 | 32 | 4 | ~62s | RTX 4070 Ti. Same settings, extra headroom. |
+| 16 GB | 16 | 32 | 4 | ~62s | RTX 4080/5080, A4000. No speed gain from more VRAM. |
+| 24 GB | 16 | 32 | 4 | ~62s | RTX 4090/5090, A5000. Headroom for longer audio. |
+| 48 GB | 16 | 32 | 4 | ~62s | A40, L40S. Excess VRAM unused. |
+| 80 GB | 16 | 32 | 4 | ~55s\* | A100 (2 TB/s HBM2e), H100 (3.4 TB/s HBM3). \*Higher memory bandwidth may allow emb=8-16 without slowdown — benchmark on target hardware. |
+
+\*HBM GPUs (A100/H100) have 2-4x the memory bandwidth of GDDR6 GPUs. The embedding batch bottleneck is GPU↔CPU transfer, so HBM may shift the optimal embedding batch size higher. The whisper and segmentation steps are compute-bound and scale with CUDA core count / tensor core throughput instead.
+
 ### Troubleshooting
 
 - **"Pyannote model pre-cache skipped"** at build time: `HF_TOKEN` wasn't passed as a build arg. Models download at runtime instead (~14s on first request).
 - **"Access denied to pyannote/..."**: Accept the model licenses on HuggingFace (see [gated models](#huggingface-gated-models) above).
 - **OOM / CUDA out of memory**: Lower `WHISPER_BATCH_SIZE` (e.g. `-e WHISPER_BATCH_SIZE=8`).
-- **"test_input.json not found, exiting"**: Mount the file with `-v /path/to/test_input.json:/app/test_input.json:ro`.
+- **"test_input.json not found, exiting"**: You're running without `--rp_serve_api`. Either add that flag for API server mode, or mount a test input file with `-v /path/to/test_input.json:/app/test_input.json:ro`.
 
 ## Local development (without Docker)
+
+This is a [uv](https://docs.astral.sh/uv/)-managed project. See `pyproject.toml` for dependencies and project configuration.
 
 ```bash
 uv sync
