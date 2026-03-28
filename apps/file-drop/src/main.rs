@@ -402,8 +402,17 @@ async fn handle_download(
     ))
 }
 
-async fn handle_health() -> Json<serde_json::Value> {
-    Json(json!({"status": "ok"}))
+async fn handle_health(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    let min_free: u64 = 1024 * 1024 * 1024; // 1 GB
+    let free = fs_free_space(&state.config.storage_dir);
+    let available = free.map_or(true, |f| f > min_free);
+    let status = if available { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, Json(json!({
+        "status": if available { "available" } else { "unavailable" },
+        "free_space_bytes": free,
+        "free_space_human": free.map(format_size),
+        "min_free_bytes": min_free,
+    })))
 }
 
 /// Background task: expire files older than config.expiry
