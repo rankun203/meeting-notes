@@ -858,6 +858,7 @@ async fn run_transcription_pipeline(
             let mut seg_json = serde_json::to_value(seg)
                 .map_err(|e| format!("Failed to serialize segment: {e}"))?;
             seg_json["track"] = json!(track_name);
+            seg_json["source_type"] = json!(&track_result.source_type);
             all_segments.push(seg_json);
         }
         for (speaker, emb) in &track_result.speaker_embeddings {

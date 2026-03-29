@@ -207,6 +207,8 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const renameRef = useRef(null);
+  const playerRef = useRef(null);
+  const [playbackTime, setPlaybackTime] = useState(0);
 
   if (!session) {
     return jsx('div', {
@@ -442,10 +444,17 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
             children: jsxs(Fragment, { children: [
               jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3', children: 'Recordings' }),
               jsx(SyncedPlayer, {
+                ref: playerRef,
                 sessionId: s.id,
+                onTimeUpdate: setPlaybackTime,
                 files: audioFiles.map(f => {
                   const ext = f.split('.').pop();
-                  return { name: f, label: f.replace(`.${ext}`, '').replace(/_/g, ' ') };
+                  const meta = (s.source_meta || []).find(src => src.filename === f);
+                  return {
+                    name: f,
+                    label: meta?.source_label || f.replace(`.${ext}`, '').replace(/_/g, ' '),
+                    sourceType: meta?.source_type || null,
+                  };
                 }),
               }),
             ]}),
@@ -492,9 +501,9 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
               ]}),
               jsx(TranscriptViewer, {
                 sessionId: s.id,
+                currentTime: playbackTime,
                 onSeek: (t) => {
-                  const audios = document.querySelectorAll(`audio[src*="/sessions/${s.id}/"]`);
-                  audios.forEach(a => { a.currentTime = t; });
+                  if (playerRef.current) playerRef.current.seekTo(t);
                 },
                 onSpeakerUpdate: onRefresh,
               }),

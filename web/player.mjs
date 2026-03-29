@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { jsx, jsxs, Fragment, API, fmtTime } from './utils.mjs';
+import { SourceIcon } from './icons.mjs';
 
 // ── Waveform Display ──
 
@@ -118,7 +119,7 @@ function WaveformTrack({ sessionId, file, duration, currentTime, muted, onSeek }
 
 // ── Synced Audio Player ──
 
-export function SyncedPlayer({ files, sessionId }) {
+export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId, onTimeUpdate }, ref) {
   const audioRefs = useRef([]);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -126,6 +127,11 @@ export function SyncedPlayer({ files, sessionId }) {
   const [mutedTracks, setMutedTracks] = useState({});
   const rafRef = useRef(null);
   const playingRef = useRef(false);
+
+  // Expose seekTo for external callers (e.g. transcript click)
+  useImperativeHandle(ref, () => ({
+    seekTo,
+  }), []);
 
   // Keep refs array sized to files
   useEffect(() => {
@@ -148,7 +154,9 @@ export function SyncedPlayer({ files, sessionId }) {
   function updateTime() {
     const audios = getAudios();
     if (audios.length > 0) {
-      setCurrentTime(audios[0].currentTime || 0);
+      const t = audios[0].currentTime || 0;
+      setCurrentTime(t);
+      if (onTimeUpdate) onTimeUpdate(t);
     }
     if (playingRef.current) rafRef.current = requestAnimationFrame(updateTime);
   }
@@ -172,6 +180,7 @@ export function SyncedPlayer({ files, sessionId }) {
   function seekTo(t) {
     setCurrentTime(t);
     getAudios().forEach(a => { a.currentTime = t; });
+    if (onTimeUpdate) onTimeUpdate(t);
   }
 
   function onSeekInput(e) {
@@ -286,17 +295,11 @@ export function SyncedPlayer({ files, sessionId }) {
         className: `flex items-center gap-1 px-1 py-0.5 w-full rounded transition-colors cursor-pointer ${mutedTracks[i] ? 'text-red-400 hover:text-red-500' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
         children: jsxs(Fragment, { children: [
           jsx('span', { className: 'w-6 h-6 flex items-center justify-center flex-shrink-0', children:
-            mutedTracks[i]
-              ? jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-                  children: jsx('path', { d: 'M9.547 3.062A.75.75 0 0110.75 3.75v12.5a.75.75 0 01-1.203.596L5.203 13.5H3.75A.75.75 0 013 12.75v-5.5a.75.75 0 01.75-.75h1.453L9.547 3.062zM13.78 7.22a.75.75 0 10-1.06 1.06L14.44 10l-1.72 1.72a.75.75 0 001.06 1.06L15.5 11.06l1.72 1.72a.75.75 0 101.06-1.06L16.56 10l1.72-1.72a.75.75 0 00-1.06-1.06L15.5 8.94l-1.72-1.72z' }),
-                })
-              : jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-                  children: jsx('path', { d: 'M10.5 3.75a.75.75 0 00-1.264-.546L5.203 6.5H3.75A.75.75 0 003 7.25v5.5c0 .414.336.75.75.75h1.453l4.033 3.296A.75.75 0 0010.5 16.25V3.75zM14.329 7.172a.75.75 0 011.06 0A4.476 4.476 0 0116.75 10a4.476 4.476 0 01-1.361 2.828.75.75 0 11-1.06-1.06A2.976 2.976 0 0015.25 10a2.976 2.976 0 00-.921-1.768.75.75 0 010-1.06z' }),
-                }),
+            jsx(SourceIcon, { sourceType: f.sourceType, className: 'w-4 h-4' }),
           }),
           jsx('span', { className: `text-xs capitalize flex-1 text-left ${mutedTracks[i] ? 'text-gray-300 dark:text-gray-600 line-through' : 'text-gray-600 dark:text-gray-400'}`, children: f.label }),
         ]}),
       })),
     }),
   ]});
-}
+});

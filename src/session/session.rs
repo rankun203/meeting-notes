@@ -89,6 +89,8 @@ pub struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processing_state: Option<String>,
     pub unconfirmed_speakers: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_meta: Vec<SourceMetadata>,
 }
 
 /// Written to metadata.json in the session folder.
@@ -274,6 +276,7 @@ impl Session {
             summary_available,
             processing_state: self.processing_state.clone(),
             unconfirmed_speakers,
+            source_meta: self.source_meta.clone(),
         }
     }
 

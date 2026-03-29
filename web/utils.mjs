@@ -172,57 +172,8 @@ export function speakerColor(speaker) {
   return SPEAKER_COLORS[Math.abs(hash) % SPEAKER_COLORS.length];
 }
 
-// ── Icons ──
-
-export function ChevronIcon({ open }) {
-  return jsx('svg', {
-    xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
-    className: `w-3.5 h-3.5 transition-transform ${open ? 'rotate-90' : ''}`,
-    children: jsx('path', {
-      fillRule: 'evenodd', clipRule: 'evenodd',
-      d: 'M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z',
-    }),
-  });
-}
-
-export const PlusIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-  children: jsx('path', { d: 'M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z' }),
-});
-
-export const CloseIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-  children: jsx('path', { d: 'M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z' }),
-});
-
-export const MenuIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-5 h-5',
-  children: jsx('path', {
-    fillRule: 'evenodd', clipRule: 'evenodd',
-    d: 'M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zm0 5A.75.75 0 012.75 9h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 9.75zm0 5a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75z',
-  }),
-});
-
-export const BackIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-5 h-5',
-  children: jsx('path', {
-    fillRule: 'evenodd', clipRule: 'evenodd',
-    d: 'M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 011.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z',
-  }),
-});
-
-export const PlayIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-  children: jsx('path', { d: 'M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z' }),
-});
-
-export const StopIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-  children: jsx('path', {
-    fillRule: 'evenodd', clipRule: 'evenodd',
-    d: 'M2 10a8 8 0 1116 0 8 8 0 01-16 0zm5-2.25A.75.75 0 017.75 7h4.5a.75.75 0 01.75.75v4.5a.75.75 0 01-.75.75h-4.5a.75.75 0 01-.75-.75v-4.5z',
-  }),
-});
+// ── Icons (re-exported from icons.mjs) ──
+export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon } from './icons.mjs';
 
 // ── Shared components ──
 
