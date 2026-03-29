@@ -31,7 +31,7 @@ export { Fragment };
 
 // ── Constants ──
 
-export const API = window.location.origin;
+export const API = window.location.origin + '/api';
 export const PAGE_SIZE = 50;
 
 export const INPUT_CLS = 'w-full rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors';
@@ -92,7 +92,7 @@ export function useWebSocket(onEvent) {
   useEffect(() => {
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+      const ws = new WebSocket(`${protocol}//${location.host}/api/ws`);
       wsRef.current = ws;
       ws.onmessage = (e) => {
         try { onEventRef.current(JSON.parse(e.data)); } catch {}

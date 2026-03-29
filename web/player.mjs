@@ -95,22 +95,21 @@ function WaveformTrack({ sessionId, file, duration, currentTime, muted, onSeek }
     if (onSeek) onSeek(Math.max(0, Math.min(t, duration)));
   }
 
-  return jsx('div', {
-    ref: containerRef,
-    onClick: handleClick,
-    className: `relative cursor-pointer rounded overflow-hidden ${muted ? 'opacity-40' : ''}`,
-    style: { height: '48px' },
+  return jsxs('div', {
+    className: `cursor-pointer ${muted ? 'opacity-40' : ''}`,
     children: [
-      jsx('canvas', {
-        ref: canvasRef,
-        className: 'absolute inset-0',
+      jsx('span', {
+        className: `text-[10px] font-medium px-1 ${muted ? 'text-gray-400 dark:text-gray-600 line-through' : 'text-gray-500 dark:text-gray-400'}`,
+        children: file.label,
       }),
-      // Track label overlay
       jsx('div', {
-        className: 'absolute inset-0 flex items-end px-1.5 pb-0.5 pointer-events-none',
-        children: jsx('span', {
-          className: `text-[10px] font-medium ${muted ? 'text-gray-400 dark:text-gray-600 line-through' : 'text-gray-500 dark:text-gray-400'}`,
-          children: file.label,
+        ref: containerRef,
+        onClick: handleClick,
+        className: 'relative rounded overflow-hidden',
+        style: { height: '48px' },
+        children: jsx('canvas', {
+          ref: canvasRef,
+          className: 'absolute inset-0',
         }),
       }),
     ],
@@ -292,7 +291,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
         key: f.name,
         onClick: () => toggleMute(i),
         title: mutedTracks[i] ? `Unmute ${f.label}` : `Mute ${f.label}`,
-        className: `flex items-center gap-1 px-1 py-0.5 w-full rounded transition-colors cursor-pointer ${mutedTracks[i] ? 'text-red-400 hover:text-red-500' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
+        className: `flex items-center gap-1 px-1 py-0.5 w-full rounded transition-colors cursor-pointer ${mutedTracks[i] ? 'text-gray-300 dark:text-gray-600' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
         children: jsxs(Fragment, { children: [
           jsx('span', { className: 'w-6 h-6 flex items-center justify-center flex-shrink-0', children:
             jsx(SourceIcon, { sourceType: f.sourceType, className: 'w-4 h-4' }),

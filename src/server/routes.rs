@@ -609,48 +609,58 @@ async fn get_person_sessions(
     State(state): State<AppState>,
     Path(person_id): Path<String>,
 ) -> Json<Value> {
-    // Scan sessions that have transcripts for this person_id
     let (sessions, _) = state.session_manager.list_sessions(1000, 0).await;
-    let mut result: Vec<Value> = Vec::new();
 
-    for session in &sessions {
-        if !session.transcript_available { continue; }
-        let transcript_path = state.session_manager.session_dir(&session.id).join("transcript.json");
-        let json_str = match std::fs::read_to_string(&transcript_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let transcript: Value = match serde_json::from_str(&json_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    // Collect candidates: (session_info, transcript_path) for sessions with transcripts
+    let candidates: Vec<_> = sessions.iter()
+        .filter(|s| s.transcript_available)
+        .map(|s| {
+            let path = state.session_manager.session_dir(&s.id).join("transcript.json");
+            (s.clone(), path)
+        })
+        .collect();
 
-        // Check speaker_embeddings for this person_id
-        let found = transcript.get("speaker_embeddings")
-            .and_then(|e| e.as_object())
-            .map(|embs| embs.values().any(|v| {
-                v.get("person_id").and_then(|p| p.as_str()) == Some(&person_id)
-            }))
-            .unwrap_or(false);
+    // Do all file I/O on a blocking thread
+    let result = tokio::task::spawn_blocking(move || {
+        let mut matched: Vec<Value> = Vec::new();
+        for (session, path) in &candidates {
+            // Quick string search before full JSON parse — skip files that
+            // don't even contain the person_id string.
+            let content = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if !content.contains(&person_id) { continue; }
 
-        if found {
-            result.push(json!({
-                "id": session.id,
-                "name": session.name,
-                "state": session.state,
-                "created_at": session.created_at,
-                "updated_at": session.updated_at,
-                "duration_secs": session.duration_secs,
-            }));
+            let transcript: Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let found = transcript.get("speaker_embeddings")
+                .and_then(|e| e.as_object())
+                .map(|embs| embs.values().any(|v| {
+                    v.get("person_id").and_then(|p| p.as_str()) == Some(&person_id)
+                }))
+                .unwrap_or(false);
+
+            if found {
+                matched.push(json!({
+                    "id": session.id,
+                    "name": session.name,
+                    "state": session.state,
+                    "created_at": session.created_at,
+                    "updated_at": session.updated_at,
+                    "duration_secs": session.duration_secs,
+                }));
+            }
         }
-    }
-
-    // Sort by updated_at descending (already sorted from list_sessions, but ensure)
-    result.sort_by(|a, b| {
-        let a_t = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        let b_t = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        b_t.cmp(a_t)
-    });
+        matched.sort_by(|a, b| {
+            let a_t = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+            let b_t = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+            b_t.cmp(a_t)
+        });
+        matched
+    }).await.unwrap_or_default();
 
     Json(json!({ "sessions": result }))
 }

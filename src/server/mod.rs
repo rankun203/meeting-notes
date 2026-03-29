@@ -23,9 +23,13 @@ pub fn create_router(
         settings,
     };
 
-    let mut app = Router::new()
+    // All API routes (REST + WebSocket) under /api
+    let api_routes = Router::new()
         .merge(routes::session_routes())
-        .merge(ws::ws_routes())
+        .merge(ws::ws_routes());
+
+    let mut app = Router::new()
+        .nest("/api", api_routes)
         .layer(CorsLayer::permissive())
         .with_state(state);
 

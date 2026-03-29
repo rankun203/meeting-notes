@@ -201,7 +201,7 @@ export function SidebarItem({ session, selected, onClick }) {
 
 // ── Session Detail ──
 
-export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields }) {
+export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, onSelectPerson }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [renaming, setRenaming] = useState(false);
@@ -514,6 +514,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
           s.transcript_available && jsx(SpeakerAttributionWrapper, {
             sessionId: s.id,
             onUpdate: onRefresh,
+            onSelectPerson,
           }),
 
           // All files

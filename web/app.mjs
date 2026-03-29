@@ -1,27 +1,65 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsx, jsxs, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
+import { parseRoute, buildPath } from './router.mjs';
 import { SessionDetail } from './session.mjs';
 import { PersonDetail } from './people.mjs';
 import { SettingsPage } from './settings.mjs';
 import { Sidebar } from './sidebar.mjs';
 
 function App() {
+  // Initialize state from URL
+  const initialRoute = parseRoute(window.location.pathname);
+
   const [sessions, setSessions] = useState([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [sources, setSources] = useState([]);
   const [fields, setFields] = useState({});
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(initialRoute.selectedId ?? null);
   const [showNew, setShowNew] = useState(false);
-  const [mobileView, setMobileView] = useState('list');
-  const [currentView, setCurrentView] = useState('sessions');
-  const [settingsCategory, setSettingsCategory] = useState('services');
+  const [mobileView, setMobileView] = useState(initialRoute.selectedId ? 'detail' : 'list');
+  const [currentView, setCurrentView] = useState(initialRoute.view);
+  const [settingsCategory, setSettingsCategory] = useState(initialRoute.settingsCategory ?? 'services');
   const [people, setPeople] = useState([]);
-  const [selectedPersonId, setSelectedPersonId] = useState(null);
+  const [selectedPersonId, setSelectedPersonId] = useState(initialRoute.selectedPersonId ?? null);
   const isMobile = useIsMobile();
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
+  // Track whether the URL already had a session ID on load (suppress auto-select)
+  const hadInitialId = useRef(!!initialRoute.selectedId);
+
+  // Central navigation function — updates state + pushes URL
+  function navigateTo(path, replace) {
+    if (replace) {
+      history.replaceState(null, '', path);
+    } else {
+      history.pushState(null, '', path);
+    }
+    const r = parseRoute(path);
+    setCurrentView(r.view);
+    setSelectedId(r.selectedId ?? null);
+    setSelectedPersonId(r.selectedPersonId ?? null);
+    setSettingsCategory(r.settingsCategory ?? 'services');
+    // Mobile view
+    if (r.view === 'sessions' && r.selectedId) setMobileView('detail');
+    else if (r.view === 'sessions') setMobileView('list');
+  }
+
+  // Handle browser back/forward
+  useEffect(() => {
+    function onPopState() {
+      const r = parseRoute(window.location.pathname);
+      setCurrentView(r.view);
+      setSelectedId(r.selectedId ?? null);
+      setSelectedPersonId(r.selectedPersonId ?? null);
+      setSettingsCategory(r.settingsCategory ?? 'services');
+      if (r.view === 'sessions' && r.selectedId) setMobileView('detail');
+      else if (r.view === 'sessions') setMobileView('list');
+    }
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   function handleWsEvent(event) {
     switch (event.type) {
@@ -39,7 +77,7 @@ function App() {
       case 'session_deleted':
         setSessions(prev => prev.filter(s => s.id !== event.data.id));
         setTotal(prev => Math.max(0, prev - 1));
-        if (selectedIdRef.current === event.data.id) setSelectedId(null);
+        if (selectedIdRef.current === event.data.id) navigateTo('/sessions');
         break;
       case 'file_sizes':
         setSessions(prev => prev.map(s =>
@@ -106,20 +144,22 @@ function App() {
     } catch (e) { /* ignore */ }
   }, [offset]);
 
+  // Auto-select first session only if URL didn't specify one
   useEffect(() => {
-    if (sessions.length > 0 && !selectedId) {
+    if (currentView === 'sessions' && sessions.length > 0 && !selectedId && !hadInitialId.current) {
       const recording = sessions.find(s => s.state === 'recording');
-      setSelectedId(recording ? recording.id : sessions[0].id);
+      const autoId = recording ? recording.id : sessions[0].id;
+      navigateTo(buildPath('sessions', autoId), true); // replaceState, not pushState
     }
+    hadInitialId.current = false; // only suppress once
   }, [sessions]);
 
   function handleSelect(id) {
-    setSelectedId(id);
-    if (isMobile) setMobileView('detail');
+    navigateTo(buildPath('sessions', id));
   }
 
   function handleBack() {
-    setMobileView('list');
+    navigateTo(buildPath('sessions'));
   }
 
   function handlePageChange(newOffset) {
@@ -128,8 +168,7 @@ function App() {
   }
 
   function handleDeleted() {
-    setSelectedId(null);
-    if (isMobile) setMobileView('list');
+    navigateTo(buildPath('sessions'));
   }
 
   const selectedSession = sessions.find(s => s.id === selectedId) || null;
@@ -143,9 +182,13 @@ function App() {
     onCreated: async () => { setOffset(0); await refresh(0); },
     showNew, setShowNew,
     currentView,
-    onViewChange: (v) => { setCurrentView(v); if (v !== 'sessions') setSelectedId(null); },
-    people, selectedPersonId, setSelectedPersonId, refreshPeople,
-    settingsCategory, setSettingsCategory,
+    onViewChange: (v) => navigateTo(buildPath(v)),
+    people,
+    selectedPersonId,
+    setSelectedPersonId: (id) => navigateTo(buildPath('people', id)),
+    refreshPeople,
+    settingsCategory,
+    setSettingsCategory: (cat) => navigateTo(buildPath('settings', cat)),
   };
 
   function mainContent() {
@@ -154,8 +197,8 @@ function App() {
       const selectedPerson = people.find(p => p.id === selectedPersonId) || people[0] || null;
       return jsx(PersonDetail, {
         person: selectedPerson,
-        onRefresh: () => { refreshPeople(); setSelectedPersonId(null); },
-        onSelectSession: (id) => { setCurrentView('sessions'); setSelectedId(id); },
+        onRefresh: () => { refreshPeople(); navigateTo(buildPath('people')); },
+        onSelectSession: (id) => navigateTo(buildPath('sessions', id)),
       });
     }
     return jsx(SessionDetail, {
@@ -164,6 +207,7 @@ function App() {
       onDeleted: handleDeleted,
       onBack: handleBack,
       isMobile: isMobile,
+      onSelectPerson: (personId) => navigateTo(buildPath('people', personId)),
       fields,
     });
   }
