@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
+use meeting_notes_daemon::filesdb::FilesDb;
 use meeting_notes_daemon::people::PeopleManager;
 use meeting_notes_daemon::server;
 use meeting_notes_daemon::session::SessionManager;
@@ -86,6 +87,7 @@ async fn main() {
 
     match cli.command {
         Commands::Serve { port, host, data_dir, web_ui } => {
+            info!("Meeting Notes daemon starting...");
             let data_dir = data_dir.unwrap_or_else(default_data_dir);
             let recordings_dir = data_dir.join("recordings");
             std::fs::create_dir_all(&recordings_dir)
@@ -101,11 +103,13 @@ async fn main() {
             let people_manager = PeopleManager::new(&data_dir);
             people_manager.load_from_disk().await;
 
+            let files_db = FilesDb::load_from_disk(&recordings_dir).await;
+
             let settings = AppSettings::load_or_create(&data_dir);
             let shared_settings = std::sync::Arc::new(tokio::sync::RwLock::new(settings));
 
             let app = server::create_router(
-                manager, people_manager, shared_settings, web_ui,
+                manager, people_manager, shared_settings, files_db, web_ui,
             );
 
             let addr = format!("{}:{}", host, port);

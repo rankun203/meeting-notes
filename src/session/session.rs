@@ -247,13 +247,8 @@ impl Session {
         let duration_secs = Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps);
         let transcript_available = self.config.output_dir.join("transcript.json").exists();
         let summary_available = self.config.output_dir.join("summary.json").exists();
-
-        // Count unconfirmed speakers from transcript.json if it exists
-        let unconfirmed_speakers = if transcript_available {
-            count_unconfirmed_speakers(&self.config.output_dir.join("transcript.json"))
-        } else {
-            0
-        };
+        // unconfirmed_speakers is set to 0 here; enriched from FilesDb by the caller if needed.
+        let unconfirmed_speakers = 0;
 
         SessionInfo {
             id: self.id.clone(),
@@ -370,22 +365,3 @@ fn ogg_opus_duration(path: &std::path::Path) -> Option<f64> {
     granule_pos.map(|gp| (gp.saturating_sub(pre_skip)) as f64 / 48000.0)
 }
 
-/// Count speakers in transcript.json that have no person_id assigned.
-fn count_unconfirmed_speakers(transcript_path: &std::path::Path) -> u32 {
-    let json = match std::fs::read_to_string(transcript_path) {
-        Ok(j) => j,
-        Err(_) => return 0,
-    };
-    let value: serde_json::Value = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(_) => return 0,
-    };
-    // Count entries in speaker_embeddings where person_id is null
-    if let Some(embs) = value.get("speaker_embeddings").and_then(|v| v.as_object()) {
-        embs.values()
-            .filter(|v| v.get("person_id").map_or(true, |p| p.is_null()))
-            .count() as u32
-    } else {
-        0
-    }
-}

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod filesdb;
 pub mod people;
 pub mod server;
 pub mod session;

@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{info, warn, error};
 
+use crate::filesdb::FilesDb;
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
@@ -24,6 +25,7 @@ pub struct AppState {
     pub session_manager: SessionManager,
     pub people_manager: PeopleManager,
     pub settings: SharedSettings,
+    pub files_db: FilesDb,
 }
 
 pub fn session_routes() -> Router<AppState> {
@@ -74,7 +76,11 @@ async fn list_sessions(
 ) -> Json<Value> {
     let limit = params.limit.unwrap_or(20);
     let offset = params.offset.unwrap_or(0);
-    let (sessions, total) = state.session_manager.list_sessions(limit, offset).await;
+    let (mut sessions, total) = state.session_manager.list_sessions(limit, offset).await;
+    // Enrich with unconfirmed speaker counts from cache
+    for s in &mut sessions {
+        s.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&s.id).await;
+    }
     Json(json!({
         "sessions": sessions,
         "total": total,
@@ -87,11 +93,12 @@ async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
-    state.session_manager
+    let mut info = state.session_manager
         .get_session(&id)
         .await
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
+    info.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&id).await;
+    Ok(Json(info))
 }
 
 async fn rename_session(
@@ -122,6 +129,9 @@ async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    // Remove transcript from cache before deleting session files
+    state.files_db.remove_transcript(&id).await;
+
     state.session_manager
         .delete_session(&id)
         .await
@@ -353,22 +363,20 @@ async fn get_transcript(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let session_dir = state.session_manager.session_dir(&id);
-    let path = session_dir.join("transcript.json");
-    if !path.exists() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))));
+    match state.files_db.get_transcript(&id).await {
+        Some(data) => Ok(Json(data)),
+        None => Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"})))),
     }
-    let json_str = std::fs::read_to_string(&path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    let value: Value = serde_json::from_str(&json_str)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    Ok(Json(value))
 }
 
 async fn delete_transcript(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    // Remove from cache + index
+    state.files_db.remove_transcript(&id).await;
+
+    // Remove files from disk
     let session_dir = state.session_manager.session_dir(&id);
     for filename in &["transcript.json", "extraction_raw.json"] {
         let path = session_dir.join(filename);
@@ -386,18 +394,13 @@ async fn get_attribution(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let session_dir = state.session_manager.session_dir(&id);
-    let path = session_dir.join("transcript.json");
-    if !path.exists() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))));
+    match state.files_db.get_transcript(&id).await {
+        Some(data) => {
+            let embs = data.get("speaker_embeddings").cloned().unwrap_or(json!({}));
+            Ok(Json(embs))
+        }
+        None => Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"})))),
     }
-    let json_str = std::fs::read_to_string(&path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    let value: Value = serde_json::from_str(&json_str)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    // Return just the speaker_embeddings section with attribution info
-    let embs = value.get("speaker_embeddings").cloned().unwrap_or(json!({}));
-    Ok(Json(embs))
 }
 
 #[derive(Deserialize)]
@@ -420,17 +423,9 @@ async fn update_attribution(
     Path(id): Path<String>,
     Json(body): Json<AttributionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let session_dir = state.session_manager.session_dir(&id);
-    let transcript_path = session_dir.join("transcript.json");
-    if !transcript_path.exists() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))));
-    }
-
-    // Read current transcript
-    let json_str = std::fs::read_to_string(&transcript_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    let mut transcript: Value = serde_json::from_str(&json_str)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    // Read transcript from cache
+    let mut transcript = state.files_db.get_transcript(&id).await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))))?;
 
     for action in &body.attributions {
         // Get the speaker's embedding from the transcript
@@ -506,11 +501,9 @@ async fn update_attribution(
         }
     }
 
-    // Write updated transcript
-    let updated = serde_json::to_string_pretty(&transcript)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    std::fs::write(&transcript_path, updated)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    // Write through cache (updates memory + disk + indexes)
+    state.files_db.put_transcript(&id, transcript).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
     Ok(Json(json!({"status": "ok"})))
 }
@@ -609,58 +602,28 @@ async fn get_person_sessions(
     State(state): State<AppState>,
     Path(person_id): Path<String>,
 ) -> Json<Value> {
-    let (sessions, _) = state.session_manager.list_sessions(1000, 0).await;
+    // Instant index lookup — no file I/O
+    let session_ids = state.files_db.get_person_session_ids(&person_id).await;
 
-    // Collect candidates: (session_info, transcript_path) for sessions with transcripts
-    let candidates: Vec<_> = sessions.iter()
-        .filter(|s| s.transcript_available)
-        .map(|s| {
-            let path = state.session_manager.session_dir(&s.id).join("transcript.json");
-            (s.clone(), path)
-        })
-        .collect();
-
-    // Do all file I/O on a blocking thread
-    let result = tokio::task::spawn_blocking(move || {
-        let mut matched: Vec<Value> = Vec::new();
-        for (session, path) in &candidates {
-            // Quick string search before full JSON parse — skip files that
-            // don't even contain the person_id string.
-            let content = match std::fs::read_to_string(path) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if !content.contains(&person_id) { continue; }
-
-            let transcript: Value = match serde_json::from_str(&content) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let found = transcript.get("speaker_embeddings")
-                .and_then(|e| e.as_object())
-                .map(|embs| embs.values().any(|v| {
-                    v.get("person_id").and_then(|p| p.as_str()) == Some(&person_id)
-                }))
-                .unwrap_or(false);
-
-            if found {
-                matched.push(json!({
-                    "id": session.id,
-                    "name": session.name,
-                    "state": session.state,
-                    "created_at": session.created_at,
-                    "updated_at": session.updated_at,
-                    "duration_secs": session.duration_secs,
-                }));
-            }
+    let mut result: Vec<Value> = Vec::new();
+    for sid in &session_ids {
+        if let Some(info) = state.session_manager.get_session(sid).await {
+            result.push(json!({
+                "id": info.id,
+                "name": info.name,
+                "state": info.state,
+                "created_at": info.created_at,
+                "updated_at": info.updated_at,
+                "duration_secs": info.duration_secs,
+            }));
         }
-        matched.sort_by(|a, b| {
-            let a_t = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-            let b_t = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-            b_t.cmp(a_t)
-        });
-        matched
-    }).await.unwrap_or_default();
+    }
+
+    result.sort_by(|a, b| {
+        let a_t = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        let b_t = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        b_t.cmp(a_t)
+    });
 
     Json(json!({ "sessions": result }))
 }
@@ -735,6 +698,7 @@ async fn transcribe_session(
     // 5. Spawn background task
     let session_manager = state.session_manager.clone();
     let people_manager = state.people_manager.clone();
+    let files_db = state.files_db.clone();
     let session_id = id.clone();
 
     tokio::spawn(async move {
@@ -752,6 +716,7 @@ async fn transcribe_session(
             match_threshold,
             &session_manager,
             &people_manager,
+            &files_db,
         )
         .await;
 
@@ -791,6 +756,7 @@ async fn run_transcription_pipeline(
     match_threshold: f64,
     session_manager: &SessionManager,
     people_manager: &PeopleManager,
+    files_db: &FilesDb,
 ) -> Result<u32, String> {
     // Step 1: Upload audio files to file-drop
     session_manager
@@ -990,7 +956,7 @@ async fn run_transcription_pipeline(
         }
     }
 
-    // Step 6: Write enriched transcript.json
+    // Step 6: Write enriched transcript via FilesDb (cache + disk + indexes)
     let transcript = json!({
         "language": output.language,
         "model": output.model,
@@ -998,11 +964,7 @@ async fn run_transcription_pipeline(
         "speaker_embeddings": speaker_info,
     });
 
-    let transcript_path = session_dir.join("transcript.json");
-    let transcript_json = serde_json::to_string_pretty(&transcript)
-        .map_err(|e| format!("Failed to serialize transcript: {e}"))?;
-    std::fs::write(&transcript_path, transcript_json)
-        .map_err(|e| format!("Failed to write transcript.json: {e}"))?;
+    files_db.put_transcript(session_id, transcript).await?;
 
     info!("[{}] Transcript saved: {} segments, {} speakers",
           session_id, all_segments.len(), speaker_info.len());

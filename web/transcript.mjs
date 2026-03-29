@@ -160,7 +160,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
       className: 'overflow-y-auto scroll-smooth',
       style: { maxHeight: '400px' },
       children: jsx('div', {
-        className: 'grid gap-x-2 py-2 items-baseline',
+        className: 'grid py-2 items-baseline',
         style: { gridTemplateColumns: 'auto auto 1fr' },
         children:
           segments.map((seg, i) => {
@@ -171,33 +171,32 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
             const isEditing = editingSpeaker === `${i}-${seg.speaker}`;
             const isActive = activeSet.has(i);
 
-            // Row wrapper uses display:contents so children participate in parent grid
+            // Row uses subgrid to inherit parent column sizing while allowing a single row background
             return jsxs('div', {
               key: i,
               ref: i === firstActiveIdx ? activeRef : undefined,
               className: [
-                'contents cursor-pointer group',
+                'grid col-span-3 items-baseline cursor-pointer rounded-lg transition-all duration-200',
+                isActive
+                  ? 'bg-blue-50 dark:bg-blue-900/20'
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-800/30 opacity-60',
               ].join(' '),
+              style: { gridTemplateColumns: 'subgrid' },
               onClick: () => onSeek && onSeek(seg.start),
               children: [
                 // Col 1: timestamp
                 jsx('span', {
                   className: [
-                    'text-[11px] font-mono text-right py-1.5 pr-1 rounded-l-lg transition-all duration-200',
+                    'text-[11px] font-mono text-right py-1.5 pl-2 pr-2',
                     isActive
-                      ? 'text-blue-600 dark:text-blue-400 font-semibold bg-blue-50 dark:bg-blue-900/20'
-                      : 'text-gray-400 dark:text-gray-500 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/30 opacity-60',
+                      ? 'text-blue-600 dark:text-blue-400 font-semibold'
+                      : 'text-gray-400 dark:text-gray-500',
                   ].join(' '),
                   children: fmtTimestamp(seg.start),
                 }),
                 // Col 2: speaker badge
                 jsx('div', {
-                  className: [
-                    'py-1.5 transition-all duration-200',
-                    isActive
-                      ? 'bg-blue-50 dark:bg-blue-900/20'
-                      : 'group-hover:bg-gray-50 dark:group-hover:bg-gray-800/30 opacity-60',
-                  ].join(' '),
+                  className: 'py-1.5 pr-2',
                   children: isEditing
                     ? jsxs('div', {
                         className: 'flex flex-wrap items-center gap-1',
@@ -242,10 +241,10 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
                 // Col 3: text
                 jsx('span', {
                   className: [
-                    'text-sm min-w-0 py-1.5 pr-2 rounded-r-lg transition-all duration-200',
+                    'text-sm min-w-0 py-1.5 pr-2',
                     isActive
-                      ? 'text-gray-900 dark:text-gray-100 font-medium bg-blue-50 dark:bg-blue-900/20'
-                      : 'text-gray-500 dark:text-gray-400 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/30 opacity-60',
+                      ? 'text-gray-900 dark:text-gray-100 font-medium'
+                      : 'text-gray-500 dark:text-gray-400',
                   ].join(' '),
                   children: seg.text,
                 }),

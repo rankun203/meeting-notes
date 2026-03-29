@@ -5,6 +5,7 @@ pub mod ws;
 use axum::Router;
 use tower_http::cors::CorsLayer;
 
+use crate::filesdb::FilesDb;
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::settings::SharedSettings;
@@ -15,12 +16,14 @@ pub fn create_router(
     session_manager: SessionManager,
     people_manager: PeopleManager,
     settings: SharedSettings,
+    files_db: FilesDb,
     enable_web_ui: bool,
 ) -> Router {
     let state = AppState {
         session_manager,
         people_manager,
         settings,
+        files_db,
     };
 
     // All API routes (REST + WebSocket) under /api
