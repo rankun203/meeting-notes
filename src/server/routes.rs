@@ -42,6 +42,7 @@ pub fn session_routes() -> Router<AppState> {
         .route("/sessions/{id}/attribution", get(get_attribution))
         .route("/sessions/{id}/attribution", post(update_attribution))
         .route("/sessions/{id}/transcribe", post(transcribe_session))
+        .route("/sessions/{id}/waveform/{filename}", get(get_waveform))
         .route("/people", get(list_people))
         .route("/people", post(create_person))
         .route("/people/{id}", get(get_person))
@@ -188,6 +189,33 @@ async fn serve_file(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{}", e)}))))?;
     Ok(result)
+}
+
+async fn get_waveform(
+    State(state): State<AppState>,
+    Path((id, filename)): Path<(String, String)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Verify session exists and file belongs to it
+    let files = state.session_manager
+        .get_files(&id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+
+    if !files.contains(&filename) {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "file not found"}))));
+    }
+
+    let session_dir = state.session_manager.session_dir(&id);
+
+    // Generate waveform on a blocking thread (decoding is CPU-intensive)
+    let waveform = tokio::task::spawn_blocking(move || {
+        crate::waveform::get_or_generate_waveform(&session_dir, &filename)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("join: {}", e)}))))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    Ok(Json(serde_json::to_value(waveform).unwrap()))
 }
 
 async fn get_config() -> Json<Value> {
