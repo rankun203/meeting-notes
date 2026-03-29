@@ -48,6 +48,7 @@ pub fn session_routes() -> Router<AppState> {
         .route("/people/{id}", get(get_person))
         .route("/people/{id}", patch(update_person))
         .route("/people/{id}", delete(delete_person))
+        .route("/people/{id}/sessions", get(get_person_sessions))
         .route("/settings", get(get_settings))
         .route("/settings", put(update_settings))
         .route("/config", get(get_config))
@@ -602,6 +603,56 @@ async fn delete_person(
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+}
+
+async fn get_person_sessions(
+    State(state): State<AppState>,
+    Path(person_id): Path<String>,
+) -> Json<Value> {
+    // Scan sessions that have transcripts for this person_id
+    let (sessions, _) = state.session_manager.list_sessions(1000, 0).await;
+    let mut result: Vec<Value> = Vec::new();
+
+    for session in &sessions {
+        if !session.transcript_available { continue; }
+        let transcript_path = state.session_manager.session_dir(&session.id).join("transcript.json");
+        let json_str = match std::fs::read_to_string(&transcript_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let transcript: Value = match serde_json::from_str(&json_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Check speaker_embeddings for this person_id
+        let found = transcript.get("speaker_embeddings")
+            .and_then(|e| e.as_object())
+            .map(|embs| embs.values().any(|v| {
+                v.get("person_id").and_then(|p| p.as_str()) == Some(&person_id)
+            }))
+            .unwrap_or(false);
+
+        if found {
+            result.push(json!({
+                "id": session.id,
+                "name": session.name,
+                "state": session.state,
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+                "duration_secs": session.duration_secs,
+            }));
+        }
+    }
+
+    // Sort by updated_at descending (already sorted from list_sessions, but ensure)
+    result.sort_by(|a, b| {
+        let a_t = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        let b_t = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        b_t.cmp(a_t)
+    });
+
+    Json(json!({ "sessions": result }))
 }
 
 // --- Settings routes ---

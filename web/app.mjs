@@ -152,7 +152,11 @@ function App() {
     if (currentView === 'settings') return jsx(SettingsPage, { category: settingsCategory });
     if (currentView === 'people') {
       const selectedPerson = people.find(p => p.id === selectedPersonId) || people[0] || null;
-      return jsx(PersonDetail, { person: selectedPerson, onRefresh: () => { refreshPeople(); setSelectedPersonId(null); } });
+      return jsx(PersonDetail, {
+        person: selectedPerson,
+        onRefresh: () => { refreshPeople(); setSelectedPersonId(null); },
+        onSelectSession: (id) => { setCurrentView('sessions'); setSelectedId(id); },
+      });
     }
     return jsx(SessionDetail, {
       session: selectedSession,

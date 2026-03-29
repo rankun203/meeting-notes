@@ -188,46 +188,49 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
               ].join(' '),
               children: fmtTimestamp(seg.start),
             }),
-            isEditing
-              ? jsxs('div', {
-                  className: 'flex flex-wrap items-center gap-1 flex-shrink-0',
-                  onClick: e => e.stopPropagation(),
-                  children: [
-                    jsx('input', {
-                      type: 'text', placeholder: 'New name...', value: newName, autoFocus: true,
-                      onChange: e => setNewName(e.target.value),
-                      onKeyDown: e => {
-                        if (e.key === 'Enter' && newName.trim()) assignSpeaker(seg.speaker, 'create', null, newName.trim());
-                        if (e.key === 'Escape') setEditingSpeaker(null);
-                      },
-                      className: 'text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 w-24',
-                    }),
-                    newName.trim() && jsx('button', {
-                      onClick: () => assignSpeaker(seg.speaker, 'create', null, newName.trim()),
-                      className: 'text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 hover:bg-blue-200',
-                      children: 'Create',
-                    }),
-                    people.length > 0 && jsx('select', {
-                      onChange: e => { if (e.target.value) assignSpeaker(seg.speaker, 'correct', e.target.value); },
-                      className: 'text-[10px] px-1 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800',
-                      children: [
-                        jsx('option', { key: '', value: '', children: 'Assign...' }),
-                        ...people.map(p => jsx('option', { key: p.id, value: p.id, children: p.name })),
-                      ],
-                    }),
-                    jsx('button', {
-                      onClick: () => setEditingSpeaker(null),
-                      className: 'text-[10px] text-gray-400 hover:text-gray-600',
-                      children: 'Cancel',
-                    }),
-                  ],
-                })
-              : jsx('button', {
-                  onClick: (e) => { e.stopPropagation(); setEditingSpeaker(`${i}-${seg.speaker}`); setNewName(''); },
-                  className: `text-[10px] font-medium px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all ${speakerColor(seg.speaker)} ${isUnconfirmed ? 'border border-dashed border-current' : ''}`,
-                  title: `Click to assign: ${seg.speaker || 'unknown'}`,
-                  children: speaker.length > 15 ? speaker.slice(0, 15) + '...' : speaker,
-                }),
+            jsx('div', {
+              className: 'w-28 flex-shrink-0',
+              children: isEditing
+                ? jsxs('div', {
+                    className: 'flex flex-wrap items-center gap-1',
+                    onClick: e => e.stopPropagation(),
+                    children: [
+                      jsx('input', {
+                        type: 'text', placeholder: 'New name...', value: newName, autoFocus: true,
+                        onChange: e => setNewName(e.target.value),
+                        onKeyDown: e => {
+                          if (e.key === 'Enter' && newName.trim()) assignSpeaker(seg.speaker, 'create', null, newName.trim());
+                          if (e.key === 'Escape') setEditingSpeaker(null);
+                        },
+                        className: 'text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 w-24',
+                      }),
+                      newName.trim() && jsx('button', {
+                        onClick: () => assignSpeaker(seg.speaker, 'create', null, newName.trim()),
+                        className: 'text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 hover:bg-blue-200',
+                        children: 'Create',
+                      }),
+                      people.length > 0 && jsx('select', {
+                        onChange: e => { if (e.target.value) assignSpeaker(seg.speaker, 'correct', e.target.value); },
+                        className: 'text-[10px] px-1 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800',
+                        children: [
+                          jsx('option', { key: '', value: '', children: 'Assign...' }),
+                          ...people.map(p => jsx('option', { key: p.id, value: p.id, children: p.name })),
+                        ],
+                      }),
+                      jsx('button', {
+                        onClick: () => setEditingSpeaker(null),
+                        className: 'text-[10px] text-gray-400 hover:text-gray-600',
+                        children: 'Cancel',
+                      }),
+                    ],
+                  })
+                : jsx('button', {
+                    onClick: (e) => { e.stopPropagation(); setEditingSpeaker(`${i}-${seg.speaker}`); setNewName(''); },
+                    className: `text-[10px] font-medium px-1.5 py-0.5 rounded-full cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all truncate max-w-full ${speakerColor(seg.speaker)} ${isUnconfirmed ? 'border border-dashed border-current' : ''}`,
+                    title: `Click to assign: ${seg.speaker || 'unknown'}`,
+                    children: speaker.length > 15 ? speaker.slice(0, 15) + '...' : speaker,
+                  }),
+            }),
             jsx('span', {
               className: [
                 'text-sm flex-1 min-w-0 transition-all duration-200',

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { jsx, jsxs, api, formatTime } from './utils.mjs';
+import { useState, useEffect } from 'react';
+import { jsx, jsxs, api, formatTime, formatDuration } from './utils.mjs';
 
 // ── People sidebar list ──
 
@@ -53,7 +53,19 @@ export function PeopleSidebar({ selectedId, onSelect, people, onRefresh }) {
 
 // ── Person detail panel ──
 
-export function PersonDetail({ person, onRefresh }) {
+export function PersonDetail({ person, onRefresh, onSelectSession }) {
+  const [sessions, setSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+
+  useEffect(() => {
+    if (!person) { setSessions([]); return; }
+    setLoadingSessions(true);
+    api(`/people/${person.id}/sessions`)
+      .then(d => setSessions(d.sessions || []))
+      .catch(() => setSessions([]))
+      .finally(() => setLoadingSessions(false));
+  }, [person?.id]);
+
   if (!person) {
     return jsx('div', {
       className: 'h-full flex items-center justify-center',
@@ -95,6 +107,41 @@ export function PersonDetail({ person, onRefresh }) {
             jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'ID' }),
             jsx('p', { className: 'text-xs font-mono text-gray-500', children: person.id }),
           ]}),
+        ]}),
+      }),
+
+      // Recent sessions
+      jsx('div', {
+        className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4',
+        children: jsxs('div', { className: 'space-y-2', children: [
+          jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Recent Sessions' }),
+          loadingSessions
+            ? jsx('p', { className: 'text-xs text-gray-400 py-2', children: 'Loading...' })
+            : sessions.length === 0
+              ? jsx('p', { className: 'text-xs text-gray-400 py-2', children: 'No sessions found' })
+              : jsx('div', { className: 'space-y-1', children:
+                  sessions.map(s => jsx('button', {
+                    key: s.id,
+                    onClick: () => onSelectSession && onSelectSession(s.id),
+                    className: 'w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors',
+                    children: jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
+                      jsxs('div', { className: 'min-w-0 flex-1', children: [
+                        jsx('p', {
+                          className: 'text-xs font-medium text-gray-700 dark:text-gray-300 truncate',
+                          children: s.name || s.id,
+                        }),
+                        jsx('p', {
+                          className: 'text-[10px] text-gray-400 mt-0.5',
+                          children: formatTime(s.updated_at || s.created_at),
+                        }),
+                      ]}),
+                      s.duration_secs != null && jsx('span', {
+                        className: 'text-[10px] text-gray-400 flex-shrink-0',
+                        children: formatDuration(s.duration_secs),
+                      }),
+                    ]}),
+                  })),
+                }),
         ]}),
       }),
     ]}),
