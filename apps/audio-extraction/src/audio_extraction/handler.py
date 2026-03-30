@@ -11,6 +11,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
 import requests
 import whisperx
 
@@ -58,6 +59,15 @@ def download_audio(url: str, suffix: str = ".audio") -> str:
     return tmp.name
 
 
+def right_trim_silence(audio: np.ndarray, sr: int = 16000, threshold: float = 0.001, tail: float = 0.5) -> np.ndarray:
+    """Remove trailing silence from audio array. Keep `tail` seconds after last non-silent sample."""
+    indices = np.nonzero(np.abs(audio) > threshold)[0]
+    if len(indices) == 0:
+        return audio
+    end = min(indices[-1] + int(tail * sr), len(audio))
+    return audio[:end]
+
+
 def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
     """Download and decode audio for a track (CPU-bound). Returns (track_name, source_type, audio_path, audio_array, duration)."""
     audio_url = track["audio_url"]
@@ -74,8 +84,13 @@ def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
     logger.info("Decoding %s", track_name)
     t0 = time.time()
     audio = whisperx.load_audio(audio_path)
+    raw_duration = len(audio) / 16000
+    audio = right_trim_silence(audio)
     duration = len(audio) / 16000
-    logger.info("Decoded %s: %.1fs audio in %.1fs", track_name, duration, time.time() - t0)
+    if duration < raw_duration:
+        logger.info("Decoded %s: %.1fs audio (trimmed from %.1fs) in %.1fs", track_name, duration, raw_duration, time.time() - t0)
+    else:
+        logger.info("Decoded %s: %.1fs audio in %.1fs", track_name, duration, time.time() - t0)
 
     return track_name, source_type, audio_path, audio, duration
 
