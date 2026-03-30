@@ -120,26 +120,60 @@ export function PersonDetail({ person, onRefresh, onSelectSession }) {
             : sessions.length === 0
               ? jsx('p', { className: 'text-xs text-gray-400 py-2', children: 'No sessions found' })
               : jsx('div', { className: 'space-y-1', children:
-                  sessions.map(s => jsx('button', {
+                  sessions.map(s => jsxs('div', {
                     key: s.id,
-                    onClick: () => onSelectSession && onSelectSession(s.id),
-                    className: 'w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors',
-                    children: jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
-                      jsxs('div', { className: 'min-w-0 flex-1', children: [
-                        jsx('p', {
-                          className: 'text-xs font-medium text-gray-700 dark:text-gray-300 truncate',
-                          children: s.name || s.id,
-                        }),
-                        jsx('p', {
-                          className: 'text-[10px] text-gray-400 mt-0.5',
-                          children: formatTime(s.updated_at || s.created_at),
-                        }),
-                      ]}),
-                      s.duration_secs != null && jsx('span', {
-                        className: 'text-[10px] text-gray-400 flex-shrink-0',
-                        children: formatDuration(s.duration_secs),
+                    className: 'px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors',
+                    children: [
+                      jsx('button', {
+                        onClick: () => onSelectSession && onSelectSession(s.id),
+                        className: 'w-full text-left',
+                        children: jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
+                          jsxs('div', { className: 'min-w-0 flex-1', children: [
+                            jsx('p', {
+                              className: 'text-xs font-medium text-gray-700 dark:text-gray-300 truncate',
+                              children: s.name || s.id,
+                            }),
+                            jsx('p', {
+                              className: 'text-[10px] text-gray-400 mt-0.5',
+                              children: formatTime(s.created_at),
+                            }),
+                          ]}),
+                          s.duration_secs != null && jsx('span', {
+                            className: 'text-[10px] text-gray-400 flex-shrink-0',
+                            children: formatDuration(s.duration_secs),
+                          }),
+                        ]}),
                       }),
-                    ]}),
+                      (s.matched_speakers && s.matched_speakers.length > 0) && jsx('div', {
+                        className: 'flex flex-wrap gap-1 mt-1.5',
+                        children: s.matched_speakers.map(ms => jsxs('span', {
+                          key: ms.speaker,
+                          className: 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-400',
+                          children: [
+                            ms.speaker,
+                            jsx('span', { className: 'text-violet-400 dark:text-violet-500', children: `${Math.round(ms.confidence * 100)}%` }),
+                            jsx('button', {
+                              onClick: async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await api(`/sessions/${s.id}/attribution`, {
+                                    method: 'POST',
+                                    body: JSON.stringify({ attributions: [{ speaker: ms.speaker, action: 'reject' }] }),
+                                  });
+                                  // Refresh sessions list
+                                  const d = await api(`/people/${person.id}/sessions`);
+                                  setSessions(d.sessions || []);
+                                  onRefresh();
+                                } catch (err) { alert(err.message); }
+                              },
+                              title: `Disconnect ${ms.speaker} from ${person.name}`,
+                              className: 'ml-0.5 text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-400 transition-colors',
+                              children: '\u00d7',
+                            }),
+                          ],
+                        })),
+                      }),
+                    ],
                   })),
                 }),
         ]}),

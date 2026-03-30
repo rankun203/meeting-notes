@@ -600,6 +600,21 @@ async fn get_person_sessions(
     let mut result: Vec<Value> = Vec::new();
     for sid in &session_ids {
         if let Some(info) = state.session_manager.get_session(sid).await {
+            // Find which speakers in this session matched this person
+            let mut matched_speakers: Vec<Value> = Vec::new();
+            if let Some(transcript) = state.files_db.get_transcript(sid).await {
+                if let Some(embs) = transcript.get("speaker_embeddings").and_then(|v| v.as_object()) {
+                    for (speaker_key, entry) in embs {
+                        if entry.get("person_id").and_then(|v| v.as_str()) == Some(&person_id) {
+                            matched_speakers.push(json!({
+                                "speaker": speaker_key,
+                                "confidence": entry.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            }));
+                        }
+                    }
+                }
+            }
+
             result.push(json!({
                 "id": info.id,
                 "name": info.name,
@@ -607,13 +622,14 @@ async fn get_person_sessions(
                 "created_at": info.created_at,
                 "updated_at": info.updated_at,
                 "duration_secs": info.duration_secs,
+                "matched_speakers": matched_speakers,
             }));
         }
     }
 
     result.sort_by(|a, b| {
-        let a_t = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        let b_t = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+        let a_t = a.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        let b_t = b.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         b_t.cmp(a_t)
     });
 

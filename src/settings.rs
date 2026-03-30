@@ -42,6 +42,10 @@ pub struct AppSettings {
     #[serde(default = "default_threshold")]
     pub speaker_match_threshold: f64,
 
+    /// Default summarization prompt prepended to ChatGPT transcript exports.
+    #[serde(default)]
+    pub summarization_prompt: Option<String>,
+
     /// Path to the settings file (not serialized).
     #[serde(skip)]
     settings_path: PathBuf,
@@ -73,6 +77,7 @@ impl Default for AppSettings {
             diarize: true,
             people_recognition: true,
             speaker_match_threshold: 0.75,
+            summarization_prompt: None,
             settings_path: PathBuf::new(),
         }
     }
@@ -156,6 +161,9 @@ impl AppSettings {
                 self.speaker_match_threshold = n;
             }
         }
+        if let Some(v) = update.get("summarization_prompt") {
+            self.summarization_prompt = v.as_str().map(|s| s.to_string());
+        }
         self.save()
     }
 
@@ -190,6 +198,7 @@ impl AppSettings {
             "diarize": self.diarize,
             "people_recognition": self.people_recognition,
             "speaker_match_threshold": self.speaker_match_threshold,
+            "summarization_prompt": self.summarization_prompt,
         })
     }
 

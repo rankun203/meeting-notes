@@ -3,8 +3,7 @@ import { jsx, jsxs, api, INPUT_CLS, LABEL_CLS } from './utils.mjs';
 
 const SETTINGS_CATEGORIES = [
   { id: 'services', label: 'Services' },
-  { id: 'recognition', label: 'Recognition' },
-  { id: 'file_drop', label: 'File Transfer' },
+  { id: 'pipeline', label: 'Pipeline' },
 ];
 
 export function SettingsSidebar({ selected, onSelect }) {
@@ -42,6 +41,7 @@ export function SettingsPage({ category }) {
         diarize: data.diarize ?? true,
         people_recognition: data.people_recognition ?? true,
         speaker_match_threshold: data.speaker_match_threshold ?? 0.75,
+        summarization_prompt: data.summarization_prompt || '',
       });
       setLoading(false);
     }).catch(e => { setLoading(false); setMessage(`Error: ${e.message}`); });
@@ -66,6 +66,8 @@ export function SettingsPage({ category }) {
         update.people_recognition = form.people_recognition;
       if (form.speaker_match_threshold !== settings.speaker_match_threshold)
         update.speaker_match_threshold = parseFloat(form.speaker_match_threshold);
+      if (form.summarization_prompt !== (settings.summarization_prompt || ''))
+        update.summarization_prompt = form.summarization_prompt || null;
       if (Object.keys(update).length === 0) {
         setMessage('No changes to save');
         setSaving(false);
@@ -88,78 +90,98 @@ export function SettingsPage({ category }) {
   const title = SETTINGS_CATEGORIES.find(c => c.id === cat)?.label || 'Settings';
 
   const categoryContent = {
-    services: jsxs('div', { className: 'space-y-4', children: [
-      jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Audio Extraction (RunPod)' }),
-      jsxs('div', { children: [
-        jsx('label', { className: LABEL_CLS, children: 'Endpoint URL' }),
-        jsx('input', {
-          type: 'text', value: form.audio_extraction_url,
-          onChange: e => setForm(prev => ({ ...prev, audio_extraction_url: e.target.value })),
-          placeholder: 'https://api.runpod.ai/v2/ENDPOINT_ID',
-          className: INPUT_CLS,
-        }),
-      ]}),
-      jsxs('div', { children: [
-        jsx('label', { className: LABEL_CLS, children: 'API Key' }),
-        jsx('input', {
-          type: 'password', value: form.audio_extraction_api_key,
-          onChange: e => setForm(prev => ({ ...prev, audio_extraction_api_key: e.target.value })),
-          placeholder: settings?.audio_extraction_api_key ? `Current: ${settings.audio_extraction_api_key}` : 'Enter RunPod API key',
-          className: INPUT_CLS,
-        }),
-      ]}),
-    ]}),
-
-    recognition: jsxs('div', { className: 'space-y-4', children: [
-      jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [
-        jsx('input', {
-          type: 'checkbox', checked: form.diarize,
-          onChange: e => setForm(prev => ({ ...prev, diarize: e.target.checked })),
-          className: 'w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
-        }),
-        jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Enable speaker diarization (identify who spoke when)' }),
-      ]}),
-      jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [
-        jsx('input', {
-          type: 'checkbox', checked: form.people_recognition,
-          onChange: e => setForm(prev => ({ ...prev, people_recognition: e.target.checked })),
-          className: 'w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
-        }),
-        jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Auto-match speakers to known people after diarization' }),
-      ]}),
-      jsxs('div', { children: [
-        jsx('label', { className: LABEL_CLS, children: 'Match Threshold' }),
-        jsxs('div', { className: 'flex items-center gap-2', children: [
+    services: jsxs('div', { className: 'space-y-6', children: [
+      jsxs('div', { className: 'space-y-4', children: [
+        jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Audio Extraction (RunPod)' }),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Endpoint URL' }),
           jsx('input', {
-            type: 'range', min: 0.5, max: 0.95, step: 0.05, value: form.speaker_match_threshold,
-            onChange: e => setForm(prev => ({ ...prev, speaker_match_threshold: parseFloat(e.target.value) })),
-            className: 'flex-1',
+            type: 'text', value: form.audio_extraction_url,
+            onChange: e => setForm(prev => ({ ...prev, audio_extraction_url: e.target.value })),
+            placeholder: 'https://api.runpod.ai/v2/ENDPOINT_ID',
+            className: INPUT_CLS,
           }),
-          jsx('span', { className: 'text-sm font-mono text-gray-500 w-10', children: form.speaker_match_threshold }),
+        ]}),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'API Key' }),
+          jsx('input', {
+            type: 'password', value: form.audio_extraction_api_key,
+            onChange: e => setForm(prev => ({ ...prev, audio_extraction_api_key: e.target.value })),
+            placeholder: settings?.audio_extraction_api_key ? `Current: ${settings.audio_extraction_api_key}` : 'Enter RunPod API key',
+            className: INPUT_CLS,
+          }),
+        ]}),
+      ]}),
+      jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
+      jsxs('div', { className: 'space-y-4', children: [
+        jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'File Transfer' }),
+        jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Temporary file parking for audio uploads to GPU workers.' }),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Server URL' }),
+          jsx('input', {
+            type: 'text', value: form.file_drop_url,
+            onChange: e => setForm(prev => ({ ...prev, file_drop_url: e.target.value })),
+            placeholder: 'https://file-drop.dsync.net',
+            className: INPUT_CLS,
+          }),
+        ]}),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'API Key' }),
+          jsx('input', {
+            type: 'password', value: form.file_drop_api_key,
+            onChange: e => setForm(prev => ({ ...prev, file_drop_api_key: e.target.value })),
+            placeholder: settings?.file_drop_api_key ? `Current: ${settings.file_drop_api_key}` : 'Enter file-drop API key',
+            className: INPUT_CLS,
+          }),
         ]}),
       ]}),
     ]}),
 
-    file_drop: jsxs('div', { className: 'space-y-4', children: [
-      jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'File Transfer Server' }),
-      jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Temporary file parking for audio uploads to GPU workers.' }),
-      jsxs('div', { children: [
-        jsx('label', { className: LABEL_CLS, children: 'Server URL' }),
-        jsx('input', {
-          type: 'text', value: form.file_drop_url,
-          onChange: e => setForm(prev => ({ ...prev, file_drop_url: e.target.value })),
-          placeholder: 'https://file-drop.dsync.net',
-          className: INPUT_CLS,
-        }),
+    pipeline: jsxs('div', { className: 'space-y-6', children: [
+      jsxs('div', { className: 'space-y-4', children: [
+        jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Recognition' }),
+        jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [
+          jsx('input', {
+            type: 'checkbox', checked: form.diarize,
+            onChange: e => setForm(prev => ({ ...prev, diarize: e.target.checked })),
+            className: 'w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
+          }),
+          jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Enable speaker diarization (identify who spoke when)' }),
+        ]}),
+        jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [
+          jsx('input', {
+            type: 'checkbox', checked: form.people_recognition,
+            onChange: e => setForm(prev => ({ ...prev, people_recognition: e.target.checked })),
+            className: 'w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
+          }),
+          jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Auto-match speakers to known people after diarization' }),
+        ]}),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Match Threshold' }),
+          jsxs('div', { className: 'flex items-center gap-2', children: [
+            jsx('input', {
+              type: 'range', min: 0.5, max: 0.95, step: 0.05, value: form.speaker_match_threshold,
+              onChange: e => setForm(prev => ({ ...prev, speaker_match_threshold: parseFloat(e.target.value) })),
+              className: 'flex-1',
+            }),
+            jsx('span', { className: 'text-sm font-mono text-gray-500 w-10', children: form.speaker_match_threshold }),
+          ]}),
+        ]}),
       ]}),
-      jsxs('div', { children: [
-        jsx('label', { className: LABEL_CLS, children: 'API Key' }),
-        jsx('input', {
-          type: 'password', value: form.file_drop_api_key,
-          onChange: e => setForm(prev => ({ ...prev, file_drop_api_key: e.target.value })),
-          placeholder: settings?.file_drop_api_key ? `Current: ${settings.file_drop_api_key}` : 'Enter file-drop API key',
-          className: INPUT_CLS,
-        }),
+      jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
+      jsxs('div', { className: 'space-y-4', children: [
+        jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Summarization' }),
+        jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Used when exporting transcripts as ChatGPT messages. Automatic meeting summarization with different styles coming soon.' }),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Prompt' }),
+          jsx('textarea', {
+            value: form.summarization_prompt,
+            onChange: e => setForm(prev => ({ ...prev, summarization_prompt: e.target.value })),
+            placeholder: 'e.g. Summarize this meeting transcript, highlighting key decisions and action items.',
+            rows: 4,
+            className: INPUT_CLS + ' resize-y',
+          }),
+        ]}),
       ]}),
     ]}),
   };

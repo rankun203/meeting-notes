@@ -117,33 +117,46 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     return jsx('div', { className: 'text-sm text-gray-400 py-4 text-center', children: 'No transcript segments' });
   }
 
-  // Collect unique speakers for filter chips (with source_type from first occurrence)
-  const uniqueSpeakers = [...new Map(segments.map(seg => {
-    const key = seg.speaker || 'Unknown';
-    return [key, {
-      label: seg.person_name || seg.speaker || 'Unknown',
-      sourceType: seg.source_type || null,
-    }];
-  })).entries()];
+  // Collect unique speakers for filter chips, deduplicated by display name.
+  // Each entry maps a display label to the set of raw speaker IDs sharing that name.
+  const speakersByLabel = new Map();
+  for (const seg of segments) {
+    const label = seg.person_name || seg.speaker || 'Unknown';
+    const rawKey = seg.speaker || 'Unknown';
+    if (!speakersByLabel.has(label)) {
+      speakersByLabel.set(label, { keys: new Set(), sourceType: seg.source_type || null });
+    }
+    speakersByLabel.get(label).keys.add(rawKey);
+  }
+  const uniqueSpeakers = [...speakersByLabel.entries()];
 
-  function toggleSpeaker(speakerKey) {
-    setHiddenSpeakers(prev => ({ ...prev, [speakerKey]: !prev[speakerKey] }));
+  function toggleSpeaker(label) {
+    const entry = speakersByLabel.get(label);
+    if (!entry) return;
+    const keys = [...entry.keys];
+    const allHidden = keys.every(k => hiddenSpeakers[k]);
+    setHiddenSpeakers(prev => {
+      const next = { ...prev };
+      for (const k of keys) next[k] = !allHidden;
+      return next;
+    });
   }
 
   return jsxs('div', { className: 'space-y-2', children: [
     // Speaker filter chips
     jsx('div', {
       className: 'flex flex-wrap gap-1.5',
-      children: uniqueSpeakers.map(([key, { label, sourceType }]) => {
-        const hidden = !!hiddenSpeakers[key];
+      children: uniqueSpeakers.map(([label, { keys, sourceType }]) => {
+        const hidden = [...keys].every(k => hiddenSpeakers[k]);
+        const colorKey = [...keys][0];
         return jsxs('button', {
-          key,
-          onClick: () => toggleSpeaker(key),
+          key: label,
+          onClick: () => toggleSpeaker(label),
           className: [
             'text-[10px] font-medium px-2 py-0.5 rounded-full transition-all inline-flex items-center gap-1',
             hidden
               ? 'opacity-40 line-through bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500'
-              : speakerColor(key),
+              : speakerColor(colorKey),
           ].join(' '),
           title: hidden ? `Show ${label}` : `Hide ${label}`,
           children: [

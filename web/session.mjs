@@ -186,8 +186,8 @@ export function SidebarItem({ session, selected, onClick }) {
         jsx('p', {
           className: 'text-[11px] text-gray-400 dark:text-gray-500 mt-0.5',
           children: s.duration_secs != null
-            ? `${formatDuration(s.duration_secs)} · ${formatTime(s.updated_at || s.created_at)}`
-            : formatTime(s.updated_at || s.created_at),
+            ? `${formatDuration(s.duration_secs)} · ${formatTime(s.created_at)}`
+            : formatTime(s.created_at),
         }),
       ]}),
       s.state === 'recording' && jsx('span', {
@@ -207,6 +207,16 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const renameRef = useRef(null);
   const playerRef = useRef(null);
   const [playbackTime, setPlaybackTime] = useState(0);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef(null);
+
+  // Close export dropdown on outside click
+  useEffect(() => {
+    if (!exportOpen) return;
+    const handler = (e) => { if (exportRef.current && !exportRef.current.contains(e.target)) setExportOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [exportOpen]);
 
   if (!session) {
     return jsx('div', {
@@ -224,6 +234,57 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
     try { await fn(); await onRefresh(); }
     catch (e) { setError(e.message); }
     finally { setLoading(false); }
+  }
+
+  function downloadFile(filename, content, mime = 'text/plain') {
+    const blob = new Blob([content], { type: mime + ';charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function fmtLrcTime(secs) {
+    const m = Math.floor(secs / 60);
+    const s = (secs % 60).toFixed(2);
+    return `${m.toString().padStart(2, '0')}:${s.padStart(5, '0')}`;
+  }
+
+  async function exportLrc() {
+    setExportOpen(false);
+    const t = await api(`/sessions/${session.id}/transcript`);
+    const lines = (t.segments || []).map(seg => {
+      const speaker = seg.person_name || seg.speaker || '';
+      const time = fmtLrcTime(seg.start || 0);
+      return `[${time}] ${speaker}: ${seg.text}`;
+    });
+    downloadFile(`${session.name || session.id}.lrc`, lines.join('\n'));
+  }
+
+  function langName(code) {
+    const opts = fields?.language?.options || [];
+    const match = opts.find(o => o.value === code);
+    return match ? match.label : code;
+  }
+
+  async function exportChatGpt() {
+    setExportOpen(false);
+    const [t, settings] = await Promise.all([
+      api(`/sessions/${session.id}/transcript`),
+      api('/settings'),
+    ]);
+    const parts = [];
+    const prompt = settings.summarization_prompt || session.summarization_instruction;
+    if (prompt) { parts.push(prompt); parts.push('\n'); }
+    const lang = session.language || t.language || 'en';
+    parts.push(`Language: ${langName(lang)}\n---\n`);
+    for (const seg of (t.segments || [])) {
+      const speaker = seg.person_name || seg.speaker || 'Unknown Speaker';
+      const m = Math.floor((seg.start || 0) / 60);
+      const s = Math.floor((seg.start || 0) % 60);
+      parts.push(`${speaker} [${m}:${s.toString().padStart(2, '0')}]: ${seg.text}`);
+    }
+    downloadFile(`${session.name || session.id}.txt`, parts.join('\n'));
   }
 
   function startRename() {
@@ -487,13 +548,39 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
             children: jsxs(Fragment, { children: [
               jsxs('div', { className: 'flex items-center justify-between mb-3', children: [
                 jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Transcript' }),
-                jsx('button', {
-                  onClick: () => action(async () => {
-                    await api(`/sessions/${s.id}/transcript`, { method: 'DELETE' });
+                jsxs('div', { className: 'flex items-baseline gap-2', children: [
+                  jsxs('div', { ref: exportRef, className: 'relative inline-block', children: [
+                    jsx('button', {
+                      onClick: () => setExportOpen(v => !v),
+                      className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
+                      children: 'Export',
+                    }),
+                    exportOpen && jsx('div', {
+                      className: 'absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-10 min-w-[180px]',
+                      children: [
+                        jsx('button', {
+                          key: 'lrc',
+                          onClick: exportLrc,
+                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
+                          children: 'Lyrics .lrc',
+                        }),
+                        jsx('button', {
+                          key: 'chatgpt',
+                          onClick: exportChatGpt,
+                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
+                          children: 'ChatGPT messages .txt',
+                        }),
+                      ],
+                    }),
+                  ]}),
+                  jsx('button', {
+                    onClick: () => action(async () => {
+                      await api(`/sessions/${s.id}/transcript`, { method: 'DELETE' });
+                    }),
+                    className: 'text-[11px] text-gray-400 hover:text-red-500 transition-colors',
+                    children: 'Re-transcribe',
                   }),
-                  className: 'text-[11px] text-gray-400 hover:text-red-500 transition-colors',
-                  children: 'Re-transcribe',
-                }),
+                ]}),
               ]}),
               jsx(TranscriptViewer, {
                 sessionId: s.id,

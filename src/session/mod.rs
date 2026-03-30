@@ -315,7 +315,7 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         let total = sessions.len();
         let mut infos: Vec<SessionInfo> = sessions.values().map(|s| s.info()).collect();
-        infos.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         let page = infos.into_iter().skip(offset).take(limit).collect();
         (page, total)
     }

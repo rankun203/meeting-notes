@@ -137,9 +137,9 @@ export function formatTime(iso) {
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
   if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   }
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 export function fmtTime(s) {
