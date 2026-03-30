@@ -108,6 +108,12 @@ async fn main() {
             let settings = AppSettings::load_or_create(&data_dir);
             let shared_settings = std::sync::Arc::new(tokio::sync::RwLock::new(settings));
 
+            // Resume any pending extraction jobs from before restart
+            server::routes::resume_pending_extractions(
+                manager.clone(), people_manager.clone(),
+                files_db.clone(), shared_settings.clone(),
+            ).await;
+
             let app = server::create_router(
                 manager, people_manager, shared_settings, files_db, web_ui,
             );

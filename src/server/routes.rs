@@ -17,7 +17,7 @@ use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
 use crate::session::session::SessionInfo;
 use crate::settings::SharedSettings;
-use crate::understanding::{ExtractionClient, TrackInput};
+use crate::understanding::{ExtractionClient, ExtractionOutput, TrackInput};
 
 /// Shared state for routes.
 #[derive(Clone)]
@@ -344,14 +344,6 @@ async fn get_config() -> Json<Value> {
                     { "value": 7, "label": "7" },
                     { "value": 10, "label": "10 (best)" },
                 ],
-            },
-            "summarization_instruction": {
-                "type": "textarea",
-                "default": "",
-                "label": "Summary Prompt",
-                "description": "Custom instruction for meeting summarization",
-                "advanced": true,
-                "placeholder": "Custom summarization...",
             },
         },
     }))
@@ -845,30 +837,44 @@ async fn run_transcription_pipeline(
 
     info!("[{}] RunPod job submitted: {}", session_id, job_id);
 
-    // Poll with progress events
-    let mut delay = std::time::Duration::from_secs(2);
-    let max_delay = std::time::Duration::from_secs(15);
-    let timeout = std::time::Duration::from_secs(600);
-    let start = std::time::Instant::now();
-
-    let output = loop {
-        if start.elapsed() > timeout {
-            return Err("Extraction timed out after 10 minutes".to_string());
+    // Persist job info so it can be resumed if daemon restarts
+    session_manager.set_audio_extraction(session_id, Some(
+        crate::session::session::AudioExtractionJob {
+            job_id: job_id.clone(),
+            status: "in_progress".to_string(),
+            submitted_at: Some(chrono::Utc::now()),
+            extraction_url: Some(extraction_url.to_string()),
         }
+    )).await;
 
-        tokio::time::sleep(delay).await;
-
-        match client.poll_status(&job_id).await? {
-            Some(output) => break output,
-            None => {
-                session_manager.emit_transcription_progress(session_id, "extracting");
-                delay = (delay * 2).min(max_delay);
-            }
-        }
-    };
+    // Poll until completion — no timeout, keep checking forever
+    let output = poll_extraction_job(&client, &job_id, session_id, session_manager).await?;
 
     info!("[{}] Extraction complete, {} tracks returned", session_id, output.tracks.len());
 
+    // Process the extraction output (merge, match speakers, write transcript)
+    let result = process_extraction_output(
+        session_id, session_dir, source_meta,
+        output, people_recognition, match_threshold,
+        session_manager, people_manager, files_db,
+    ).await;
+
+    result
+}
+
+/// Process extraction output: save raw, merge segments, match speakers, write transcript.
+/// Used by both the initial pipeline and the resume-on-restart path.
+async fn process_extraction_output(
+    session_id: &str,
+    session_dir: &std::path::Path,
+    _source_meta: &[crate::session::session::SourceMetadata],
+    output: ExtractionOutput,
+    people_recognition: bool,
+    match_threshold: f64,
+    session_manager: &SessionManager,
+    people_manager: &PeopleManager,
+    files_db: &FilesDb,
+) -> Result<u32, String> {
     // Save raw extraction output
     let raw_path = session_dir.join("extraction_raw.json");
     let raw_json = serde_json::to_string_pretty(&output)
@@ -876,7 +882,7 @@ async fn run_transcription_pipeline(
     std::fs::write(&raw_path, raw_json)
         .map_err(|e| format!("Failed to write extraction_raw.json: {e}"))?;
 
-    // Step 4: Merge segments from all tracks, sorted by start time
+    // Merge segments from all tracks, sorted by start time
     let mut all_segments: Vec<Value> = Vec::new();
     let mut all_embeddings: HashMap<String, Vec<f64>> = HashMap::new();
 
@@ -893,14 +899,13 @@ async fn run_transcription_pipeline(
         }
     }
 
-    // Sort by start time
     all_segments.sort_by(|a, b| {
         let a_start = a.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let b_start = b.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
         a_start.partial_cmp(&b_start).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Step 5: People matching
+    // People matching
     session_manager
         .set_processing_state(session_id, Some("matching".to_string()))
         .await;
@@ -931,7 +936,6 @@ async fn run_transcription_pipeline(
                 "confidence": attr.confidence,
             }));
 
-            // Update segment attributions
             for seg in &mut all_segments {
                 if seg.get("speaker").and_then(|s| s.as_str()) == Some(&attr.speaker) {
                     seg["person_id"] = json!(attr.person_id);
@@ -944,7 +948,6 @@ async fn run_transcription_pipeline(
         info!("[{}] Matched speakers: {} confirmed, {} unconfirmed",
               session_id, attributions.len() - unconfirmed as usize, unconfirmed);
     } else {
-        // No people recognition — just store raw embeddings
         for (speaker, emb) in &all_embeddings {
             unconfirmed += 1;
             speaker_info.insert(speaker.clone(), json!({
@@ -956,7 +959,7 @@ async fn run_transcription_pipeline(
         }
     }
 
-    // Step 6: Write enriched transcript via FilesDb (cache + disk + indexes)
+    // Write enriched transcript via FilesDb
     let transcript = json!({
         "language": output.language,
         "model": output.model,
@@ -966,9 +969,142 @@ async fn run_transcription_pipeline(
 
     files_db.put_transcript(session_id, transcript).await?;
 
+    // Clear extraction job from metadata
+    session_manager.set_audio_extraction(session_id, None).await;
+
     info!("[{}] Transcript saved: {} segments, {} speakers",
           session_id, all_segments.len(), speaker_info.len());
 
     Ok(unconfirmed)
+}
+
+/// Poll an extraction job until completion. No timeout — keeps polling forever.
+async fn poll_extraction_job(
+    client: &ExtractionClient,
+    job_id: &str,
+    session_id: &str,
+    session_manager: &SessionManager,
+) -> Result<ExtractionOutput, String> {
+    let mut delay = std::time::Duration::from_secs(2);
+    let max_delay = std::time::Duration::from_secs(15);
+
+    loop {
+        tokio::time::sleep(delay).await;
+
+        match client.poll_status(job_id).await? {
+            Some(output) => return Ok(output),
+            None => {
+                session_manager.emit_transcription_progress(session_id, "extracting");
+                delay = (delay * 2).min(max_delay);
+            }
+        }
+    }
+}
+
+/// Resume polling for any sessions with in-progress extraction jobs.
+/// Called once on daemon startup.
+pub async fn resume_pending_extractions(
+    session_manager: SessionManager,
+    people_manager: PeopleManager,
+    files_db: FilesDb,
+    settings: SharedSettings,
+) {
+    let pending = session_manager.get_pending_extractions().await;
+    if pending.is_empty() { return; }
+
+    info!("Resuming {} pending extraction job(s)...", pending.len());
+
+    for (session_id, job) in pending {
+        let extraction_url = match &job.extraction_url {
+            Some(url) => url.clone(),
+            None => {
+                // Fall back to current settings
+                let s = settings.read().await;
+                match &s.audio_extraction_url {
+                    Some(url) => url.clone(),
+                    None => {
+                        warn!("No extraction URL for pending job {} (session {})", job.job_id, session_id);
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let extraction_key = {
+            let s = settings.read().await;
+            match &s.audio_extraction_api_key {
+                Some(key) => key.clone(),
+                None => {
+                    warn!("No extraction API key for pending job {} (session {})", job.job_id, session_id);
+                    continue;
+                }
+            }
+        };
+
+        let sm = session_manager.clone();
+        let pm = people_manager.clone();
+        let fdb = files_db.clone();
+        let stg = settings.clone();
+
+        info!("Resuming extraction job {} for session {}", job.job_id, session_id);
+
+        tokio::spawn(async move {
+            let client = ExtractionClient::new(extraction_url, extraction_key);
+
+            // Resume polling
+            let result = poll_extraction_job(&client, &job.job_id, &session_id, &sm).await;
+
+            match result {
+                Ok(output) => {
+                    info!("[{}] Resumed extraction completed, processing results...", session_id);
+
+                    // Get session info for the pipeline continuation
+                    let (session_dir, _language, source_meta) = match sm
+                        .get_session_extraction_info(&session_id)
+                        .await
+                    {
+                        Ok(info) => info,
+                        Err(e) => {
+                            error!("[{}] Failed to get session info for resumed job: {}", session_id, e);
+                            sm.set_audio_extraction(&session_id, None).await;
+                            return;
+                        }
+                    };
+
+                    let stg_r = stg.read().await;
+                    let people_recognition = stg_r.people_recognition;
+                    let match_threshold = stg_r.speaker_match_threshold;
+                    drop(stg_r);
+
+                    // Process the output (same as post-extraction in the pipeline)
+                    let result = process_extraction_output(
+                        &session_id, &session_dir, &source_meta,
+                        output, people_recognition, match_threshold,
+                        &sm, &pm, &fdb,
+                    ).await;
+
+                    match result {
+                        Ok(unconfirmed) => {
+                            sm.set_processing_state(&session_id, None).await;
+                            sm.emit_transcription_completed(&session_id, unconfirmed);
+                            info!("[{}] Resumed transcription completed", session_id);
+                        }
+                        Err(e) => {
+                            error!("[{}] Resumed transcription post-processing failed: {}", session_id, e);
+                            sm.set_processing_state(&session_id, None).await;
+                            sm.emit_transcription_failed(&session_id, &e);
+                            sm.set_audio_extraction(&session_id, None).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("[{}] Resumed extraction job failed: {}", session_id, e);
+                    sm.set_processing_state(&session_id, None).await;
+                    sm.emit_transcription_failed(&session_id, &e);
+                    sm.set_audio_extraction(&session_id, None).await;
+                }
+            }
+        });
+    }
 }
 

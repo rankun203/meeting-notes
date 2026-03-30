@@ -57,6 +57,8 @@ pub struct Session {
     pub notices: Vec<Notice>,
     /// Current processing state (transcribing, matching, completed, failed).
     pub processing_state: Option<String>,
+    /// Persisted audio extraction job info (for resume on restart).
+    pub audio_extraction: Option<AudioExtractionJob>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +95,17 @@ pub struct SessionInfo {
     pub source_meta: Vec<SourceMetadata>,
 }
 
+/// Persisted state of an audio extraction job (RunPod).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioExtractionJob {
+    pub job_id: String,
+    pub status: String,  // "in_progress", "completed", "failed", "cancelled"
+    #[serde(default)]
+    pub submitted_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub extraction_url: Option<String>,
+}
+
 /// Written to metadata.json in the session folder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -117,6 +130,8 @@ pub struct SessionMetadata {
     pub duration_secs: Option<f64>,
     #[serde(default)]
     pub sources: Vec<SourceMetadata>,
+    #[serde(default)]
+    pub audio_extraction: Option<AudioExtractionJob>,
 }
 
 fn default_stopped_state() -> SessionState {
@@ -153,6 +168,7 @@ impl Session {
             source_meta: Vec::new(),
             notices: Vec::new(),
             processing_state: None,
+            audio_extraction: None,
         }
     }
 
@@ -189,7 +205,12 @@ impl Session {
             files,
             source_meta: meta.sources.clone(),
             notices: Vec::new(),
-            processing_state: None,
+            processing_state: if meta.audio_extraction.as_ref().map_or(false, |j| j.status == "in_progress") {
+                Some("extracting".to_string())
+            } else {
+                None
+            },
+            audio_extraction: meta.audio_extraction.clone(),
         }
     }
 
@@ -213,6 +234,7 @@ impl Session {
             started_at: self.started_at,
             duration_secs,
             sources: self.source_meta.clone(),
+            audio_extraction: self.audio_extraction.clone(),
         }
     }
 

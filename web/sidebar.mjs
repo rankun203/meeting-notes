@@ -1,4 +1,4 @@
-import { jsx, jsxs, Fragment, PAGE_SIZE, CloseIcon } from './utils.mjs';
+import { jsx, jsxs, Fragment, PAGE_SIZE, CloseIcon, RecordIcon } from './utils.mjs';
 import { NewSessionPanel, SidebarItem } from './session.mjs';
 import { PeopleSidebar } from './people.mjs';
 import { SettingsSidebar } from './settings.mjs';
@@ -18,10 +18,7 @@ export function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageC
           title: showNew ? 'Close' : 'Record',
           children: showNew
             ? jsx(CloseIcon, {})
-            : jsx('svg', {
-                xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'currentColor', className: 'w-4 h-4',
-                children: jsx('circle', { cx: '12', cy: '12', r: '8' }),
-              }),
+            : jsx(RecordIcon, {}),
         }),
       ]}),
       // Nav tabs

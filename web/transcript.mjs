@@ -171,10 +171,30 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
             const isEditing = editingSpeaker === `${i}-${seg.speaker}`;
             const isActive = activeSet.has(i);
 
+            // Compute average word score if words are available
+            const words = seg.words || [];
+            const wordScores = words.map(w => w.score).filter(s => s != null);
+            const avgScore = wordScores.length > 0
+              ? (wordScores.reduce((a, b) => a + b, 0) / wordScores.length)
+              : null;
+
+            // Build hover tooltip with segment details
+            const tooltipParts = [
+              `${fmtTimestamp(seg.start)} – ${fmtTimestamp(seg.end)}`,
+              `Speaker: ${speaker} (${seg.speaker || 'unknown'})`,
+              seg.track ? `Track: ${seg.track}` : null,
+              seg.source_type ? `Source: ${seg.source_type}` : null,
+              avgScore != null ? `Transcription score: ${Math.round(avgScore * 100)}%` : null,
+              seg.attribution_confidence != null && seg.person_id ? `Attribution confidence: ${Math.round(seg.attribution_confidence * 100)}%` : null,
+              seg.person_id ? `Person: ${seg.person_name || seg.person_id}` : 'Unconfirmed speaker',
+              `Click to seek · Click badge to assign`,
+            ].filter(Boolean).join('\n');
+
             // Row uses subgrid to inherit parent column sizing while allowing a single row background
             return jsxs('div', {
               key: i,
               ref: i === firstActiveIdx ? activeRef : undefined,
+              title: tooltipParts,
               className: [
                 'grid col-span-3 items-baseline cursor-pointer rounded-lg transition-all duration-200',
                 isActive
@@ -234,7 +254,6 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
                     : jsx('button', {
                         onClick: (e) => { e.stopPropagation(); setEditingSpeaker(`${i}-${seg.speaker}`); setNewName(''); },
                         className: `text-[10px] font-medium px-1.5 py-0.5 rounded-full cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all whitespace-nowrap ${speakerColor(seg.speaker)} ${isUnconfirmed ? 'border border-dashed border-current' : ''}`,
-                        title: `Click to assign: ${seg.speaker || 'unknown'}`,
                         children: speaker.length > 15 ? speaker.slice(0, 15) + '...' : speaker,
                       }),
                 }),

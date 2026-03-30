@@ -549,6 +549,30 @@ impl SessionManager {
         });
     }
 
+    /// Set the audio extraction job info and persist to metadata.json.
+    pub async fn set_audio_extraction(&self, id: &str, job: Option<session::AudioExtractionJob>) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(id) {
+            session.audio_extraction = job;
+            session.touch();
+            if let Err(e) = Self::write_metadata(session) {
+                tracing::warn!("Failed to write metadata for {}: {}", id, e);
+            }
+        }
+    }
+
+    /// Get all sessions with in-progress extraction jobs (for resume on startup).
+    pub async fn get_pending_extractions(&self) -> Vec<(String, session::AudioExtractionJob)> {
+        let sessions = self.sessions.read().await;
+        sessions.values()
+            .filter_map(|s| {
+                s.audio_extraction.as_ref()
+                    .filter(|j| j.status == "in_progress")
+                    .map(|j| (s.id.clone(), j.clone()))
+            })
+            .collect()
+    }
+
     /// Get the session directory path, session language, and source metadata.
     pub async fn get_session_extraction_info(
         &self,

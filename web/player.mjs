@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { jsx, jsxs, Fragment, API, fmtTime } from './utils.mjs';
-import { SourceIcon } from './icons.mjs';
+import { SourceIcon, PlayIcon, PauseIcon, StopSquareIcon, FastForwardIcon } from './icons.mjs';
 
 // ── Waveform Display ──
 
@@ -124,8 +124,11 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [mutedTracks, setMutedTracks] = useState({});
+  const [speed, setSpeed] = useState(1);
   const rafRef = useRef(null);
   const playingRef = useRef(false);
+
+  const SPEED_STEPS = [1, 1.25, 1.5, 2, 4];
 
   // Expose seekTo and play for external callers (e.g. transcript click)
   useImperativeHandle(ref, () => ({
@@ -155,6 +158,17 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     return audioRefs.current.filter(Boolean);
   }
 
+  function applySpeed(rate) {
+    getAudios().forEach(a => { a.playbackRate = rate; });
+  }
+
+  function cycleSpeed() {
+    const idx = SPEED_STEPS.indexOf(speed);
+    const next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.length];
+    setSpeed(next);
+    applySpeed(next);
+  }
+
   function onLoadedMetadata() {
     const maxDur = Math.max(...getAudios().map(a => a.duration || 0));
     if (maxDur > 0) setDuration(maxDur);
@@ -173,13 +187,15 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   function togglePlay() {
     const audios = getAudios();
     if (playing) {
-      audios.forEach(a => a.pause());
+      audios.forEach(a => { a.pause(); a.playbackRate = 1; });
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       setPlaying(false);
       playingRef.current = false;
+      setSpeed(1);
+      if (onTimeUpdate) onTimeUpdate(audios[0]?.currentTime || 0);
     } else {
       const t = audios[0]?.currentTime || 0;
-      audios.forEach(a => { a.currentTime = t; a.play(); });
+      audios.forEach(a => { a.playbackRate = speed; a.currentTime = t; a.play(); });
       setPlaying(true);
       playingRef.current = true;
       rafRef.current = requestAnimationFrame(updateTime);
@@ -198,11 +214,13 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
 
   function stopAll() {
     const audios = getAudios();
-    audios.forEach(a => { a.pause(); a.currentTime = 0; });
+    audios.forEach(a => { a.pause(); a.currentTime = 0; a.playbackRate = 1; });
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     setPlaying(false);
     playingRef.current = false;
     setCurrentTime(0);
+    setSpeed(1);
+    if (onTimeUpdate) onTimeUpdate(0);
   }
 
   function toggleMute(idx) {
@@ -268,21 +286,28 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
         className: 'w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-colors flex-shrink-0',
         title: playing ? 'Pause all' : 'Play all',
         children: playing
-          ? jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-              children: jsx('path', { d: 'M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z' }),
-            })
-          : jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4 ml-0.5',
-              children: jsx('path', { d: 'M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z' }),
-            }),
+          ? jsx(PauseIcon, {})
+          : jsx('span', { className: 'ml-0.5', children: jsx(PlayIcon, {}) }),
+      }),
+      // Speed button
+      jsx('button', {
+        onClick: cycleSpeed,
+        className: 'relative w-7 h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0',
+        title: `Playback speed: ${speed}x (click to change)`,
+        children: jsxs(Fragment, { children: [
+          jsx(FastForwardIcon, { className: 'w-3.5 h-3.5' }),
+          speed !== 1 && jsx('span', {
+            className: 'absolute -bottom-0.5 -right-0.5 text-[8px] font-bold text-blue-600 dark:text-blue-400 leading-none',
+            children: `${speed}x`,
+          }),
+        ]}),
       }),
       // Stop button
       jsx('button', {
         onClick: stopAll,
         className: 'w-7 h-7 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0',
         title: 'Stop and reset',
-        children: jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-3.5 h-3.5',
-          children: jsx('rect', { x: '4', y: '4', width: '12', height: '12', rx: '1' }),
-        }),
+        children: jsx(StopSquareIcon, { className: 'w-3.5 h-3.5' }),
       }),
       // Time
       jsx('span', { className: 'text-xs font-mono text-gray-500 dark:text-gray-400 w-10 text-right flex-shrink-0', children: fmtTime(currentTime) }),

@@ -64,10 +64,41 @@ export const SpeakerIcon = ({ className }) => jsx('svg', {
   children: jsx('path', { d: 'M7.557 2.066A.75.75 0 018.5 2.75v10.5a.75.75 0 01-1.264.546L4.203 11H2.75A.75.75 0 012 10.25v-4.5A.75.75 0 012.75 5h1.453l3.033-2.796a.75.75 0 01.321-.138zM10.78 4.22a.75.75 0 011.06 0 5.5 5.5 0 010 7.78.75.75 0 01-1.06-1.06 4 4 0 000-5.66.75.75 0 010-1.06z' }),
 });
 
+// Record circle icon
+export const RecordIcon = () => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'currentColor', className: 'w-4 h-4',
+  children: jsx('circle', { cx: '12', cy: '12', r: '8' }),
+});
+
+// Pause icon
+export const PauseIcon = () => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+  children: jsx('path', { d: 'M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75A.75.75 0 007.25 3h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z' }),
+});
+
+// Square stop icon (no circle)
+export const StopSquareIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-3.5 h-3.5',
+  children: jsx('rect', { x: '4', y: '4', width: '12', height: '12', rx: '1' }),
+});
+
+// Fast-forward icon (double triangle >>)
+export const FastForwardIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-3.5 h-3.5',
+  children: jsx('path', { d: 'M3 4.5a.5.5 0 01.832-.374l5.336 4.715a.75.75 0 010 1.024L3.832 14.78A.5.5 0 013 14.406V4.5zm7 0a.5.5 0 01.832-.374l5.336 4.715a.75.75 0 010 1.024l-5.336 4.914A.5.5 0 0110 14.406V4.5z' }),
+});
+
+// Transcript/lines icon
+export const TranscriptIcon = () => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+  children: jsx('path', { fillRule: 'evenodd', clipRule: 'evenodd', d: 'M2 3.75A.75.75 0 012.75 3h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 3.75zm0 4.167a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75zm0 4.166a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75zm0 4.167a.75.75 0 01.75-.75h7.5a.75.75 0 010 1.5h-7.5a.75.75 0 01-.75-.75z' }),
+});
+
 // Returns the appropriate source icon component for a given source_type
 export function SourceIcon({ sourceType, className }) {
   if (sourceType === 'mic') return jsx(MicIcon, { className });
   if (sourceType === 'system_mix') return jsx(SpeakerIcon, { className });
-  // Default to mic for unknown types
   return jsx(MicIcon, { className });
 }

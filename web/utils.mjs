@@ -173,7 +173,7 @@ export function speakerColor(speaker) {
 }
 
 // ── Icons (re-exported from icons.mjs) ──
-export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon } from './icons.mjs';
+export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon, RecordIcon, PauseIcon, StopSquareIcon, FastForwardIcon, TranscriptIcon } from './icons.mjs';
 
 // ── Shared components ──
 

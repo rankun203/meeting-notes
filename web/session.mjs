@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
          formatFileSize, formatDuration, formatTime, typeBadgeColor,
-         ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon } from './utils.mjs';
+         ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon,
+         RecordIcon, TranscriptIcon } from './utils.mjs';
 import { SyncedPlayer } from './player.mjs';
 import { TranscriptViewer, SpeakerAttributionWrapper } from './transcript.mjs';
 
@@ -148,10 +149,7 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
       onClick: create, disabled: creating,
       className: 'w-full flex justify-center items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 transition-colors',
       children: creating ? 'Starting...' : jsxs(Fragment, { children: [
-        jsx('svg', {
-          xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'currentColor', className: 'w-4 h-4',
-          children: jsx('circle', { cx: '12', cy: '12', r: '8' }),
-        }),
+        jsx(RecordIcon, {}),
         'Start Recording',
       ]}),
     }),
@@ -468,9 +466,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
               onClick: () => action(() => api(`/sessions/${s.id}/transcribe`, { method: 'POST' })),
               className: 'w-full flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition-colors',
               children: jsxs(Fragment, { children: [
-                jsx('svg', { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
-                  children: jsx('path', { fillRule: 'evenodd', clipRule: 'evenodd', d: 'M2 3.75A.75.75 0 012.75 3h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 3.75zm0 4.167a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75zm0 4.166a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75zm0 4.167a.75.75 0 01.75-.75h7.5a.75.75 0 010 1.5h-7.5a.75.75 0 01-.75-.75z' }),
-                }),
+                jsx(TranscriptIcon, {}),
                 'Transcribe',
               ]}),
             }),
