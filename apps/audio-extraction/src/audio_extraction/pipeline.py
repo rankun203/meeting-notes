@@ -337,6 +337,11 @@ print('DOWNLOAD_OK')
 # Helpers
 # ------------------------------------------------------------------
 
+def _has_valid_embedding(embedding: list[float]) -> bool:
+    """Return False if embedding contains any NaN or Inf values."""
+    return not any(v != v or v == float('inf') or v == float('-inf') for v in embedding)
+
+
 def _parse_diarize_output(output) -> tuple[any, dict[str, list[float]]]:
     """Extract annotation and speaker embeddings from pyannote output."""
     speaker_embeddings = {}
@@ -347,11 +352,14 @@ def _parse_diarize_output(output) -> tuple[any, dict[str, list[float]]]:
         raw = output.speaker_embeddings
         if raw is not None and hasattr(raw, 'shape') and raw.shape[0] > 0:
             labels = annotation.labels()
-            speaker_embeddings = {
-                label: raw[i].tolist()
-                for i, label in enumerate(labels)
-                if i < raw.shape[0]
-            }
+            for i, label in enumerate(labels):
+                if i >= raw.shape[0]:
+                    break
+                emb = raw[i].tolist()
+                if _has_valid_embedding(emb):
+                    speaker_embeddings[label] = emb
+                else:
+                    logger.warning("Skipping speaker %s: invalid embedding (NaN/Inf)", label)
             logger.info("Parsed DiarizeOutput: %d speakers, embedding shape %s", len(labels), raw.shape)
         else:
             logger.warning("DiarizeOutput has no speaker embeddings (raw=%s)", type(raw).__name__)
@@ -359,10 +367,12 @@ def _parse_diarize_output(output) -> tuple[any, dict[str, list[float]]]:
         # Legacy: tuple of (Annotation, embeddings_dict)
         annotation, raw = output
         if raw:
-            speaker_embeddings = {
-                k: v if isinstance(v, list) else v.tolist()
-                for k, v in raw.items()
-            }
+            for k, v in raw.items():
+                emb = v if isinstance(v, list) else v.tolist()
+                if _has_valid_embedding(emb):
+                    speaker_embeddings[k] = emb
+                else:
+                    logger.warning("Skipping speaker %s: invalid embedding (NaN/Inf)", k)
             logger.info("Parsed tuple output: %d speakers", len(speaker_embeddings))
         else:
             logger.warning("Diarize tuple output has empty embeddings")
