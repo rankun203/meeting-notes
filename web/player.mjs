@@ -127,9 +127,19 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   const rafRef = useRef(null);
   const playingRef = useRef(false);
 
-  // Expose seekTo for external callers (e.g. transcript click)
+  // Expose seekTo and play for external callers (e.g. transcript click)
   useImperativeHandle(ref, () => ({
     seekTo,
+    seekAndPlay(t) {
+      seekTo(t);
+      const audios = getAudios();
+      if (audios.length > 0 && !playingRef.current) {
+        audios.forEach(a => a.play());
+        setPlaying(true);
+        playingRef.current = true;
+        rafRef.current = requestAnimationFrame(updateTime);
+      }
+    },
   }), []);
 
   // Keep refs array sized to files

@@ -503,7 +503,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                 sessionId: s.id,
                 currentTime: playbackTime,
                 onSeek: (t) => {
-                  if (playerRef.current) playerRef.current.seekTo(t);
+                  if (playerRef.current) playerRef.current.seekAndPlay(t);
                 },
                 onSpeakerUpdate: onRefresh,
               }),
