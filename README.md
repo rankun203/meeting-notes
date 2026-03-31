@@ -93,9 +93,13 @@ Open `http://127.0.0.1:33487` in your browser.
 
 ## Roadmap
 
-- [ ] Full meeting transcription
-- [ ] Speaker diarization
+- [x] Full meeting transcription
+- [x] Speaker diarization
+- [x] People management
+- [ ] Tags management
+- [ ] Search
 - [ ] Meeting summary and TODO extraction
+- [ ] Chat with X (a particular meeting, person, tag)
 - [ ] Logseq plugin
 - [ ] Obsidian plugin
 - [ ] Windows support
