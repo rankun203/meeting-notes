@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { jsx, jsxs, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
+import { jsx, jsxs, Fragment, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
 import { parseRoute, buildPath } from './router.mjs';
 import { SessionDetail } from './session.mjs';
 import { PersonDetail } from './people.mjs';
 import { SettingsPage } from './settings.mjs';
 import { Sidebar } from './sidebar.mjs';
+import { ChatBubble } from './chat.mjs';
 
 function App() {
   // Initialize state from URL
@@ -171,6 +172,13 @@ function App() {
     navigateTo(buildPath('sessions'));
   }
 
+  // Refresh session list when leaving settings (hidden tags may have changed)
+  const prevViewRef = useRef(currentView);
+  useEffect(() => {
+    if (prevViewRef.current === 'settings' && currentView !== 'settings') refresh();
+    prevViewRef.current = currentView;
+  }, [currentView]);
+
   const selectedSession = sessions.find(s => s.id === selectedId) || null;
 
   const sidebarProps = {
@@ -192,7 +200,7 @@ function App() {
   };
 
   function mainContent() {
-    if (currentView === 'settings') return jsx(SettingsPage, { category: settingsCategory });
+    if (currentView === 'settings') return jsx(SettingsPage, { category: settingsCategory, onSelectSession: (id) => navigateTo(buildPath('sessions', id)) });
     if (currentView === 'people') {
       const selectedPerson = people.find(p => p.id === selectedPersonId) || people[0] || null;
       return jsx(PersonDetail, {
@@ -212,23 +220,37 @@ function App() {
     });
   }
 
+  const chatBubble = jsx(ChatBubble, {});
+
   if (isMobile) {
     if (currentView !== 'sessions') {
-      return jsx('div', { className: 'h-full bg-gray-50 dark:bg-gray-950', children: mainContent() });
+      return jsxs(Fragment, { children: [
+        jsx('div', { className: 'h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
+        chatBubble,
+      ]});
     }
     if (mobileView === 'detail' && selectedSession) {
-      return jsx('div', { className: 'h-full bg-gray-50 dark:bg-gray-950', children: mainContent() });
+      return jsxs(Fragment, { children: [
+        jsx('div', { className: 'h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
+        chatBubble,
+      ]});
     }
-    return jsx('div', { className: 'h-full', children: jsx(Sidebar, sidebarProps) });
+    return jsxs(Fragment, { children: [
+      jsx('div', { className: 'h-full', children: jsx(Sidebar, sidebarProps) }),
+      chatBubble,
+    ]});
   }
 
-  return jsxs('div', {
-    className: 'h-full flex',
-    children: [
-      jsx('div', { className: 'w-72 flex-shrink-0 h-full', children: jsx(Sidebar, sidebarProps) }),
-      jsx('div', { className: 'flex-1 h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
-    ],
-  });
+  return jsxs(Fragment, { children: [
+    jsxs('div', {
+      className: 'h-full flex',
+      children: [
+        jsx('div', { className: 'w-72 flex-shrink-0 h-full', children: jsx(Sidebar, sidebarProps) }),
+        jsx('div', { className: 'flex-1 h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
+      ],
+    }),
+    chatBubble,
+  ]});
 }
 
 createRoot(document.getElementById('root')).render(jsx(App, {}));

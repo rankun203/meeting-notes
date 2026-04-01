@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, speakerColor, fmtTimestamp } from './utils.mjs';
 import { SourceIcon } from './icons.mjs';
+import { SearchableList } from './searchable-list.mjs';
 
 // ── Transcript Viewer ──
 
@@ -9,8 +10,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [people, setPeople] = useState([]);
-  const [editingSpeaker, setEditingSpeaker] = useState(null);
-  const [newName, setNewName] = useState('');
+  const [speakerPicker, setSpeakerPicker] = useState(null); // { anchorPoint, speaker }
   const [hiddenSpeakers, setHiddenSpeakers] = useState({});
   const containerRef = useRef(null);
   const activeRef = useRef(null);
@@ -43,8 +43,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
         method: 'POST',
         body: JSON.stringify({ attributions: [{ speaker, action, person_id: personId, name }] }),
       });
-      setEditingSpeaker(null);
-      setNewName('');
+      setSpeakerPicker(null);
       reload();
       if (onSpeakerUpdate) onSpeakerUpdate();
     } catch (e) { alert(`Failed: ${e.message}`); }
@@ -53,7 +52,6 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
   const segments = (transcript && transcript.segments) || [];
 
   // Find all active segment indices — segments whose time range spans currentTime.
-  // A segment is active if currentTime >= seg.start and (currentTime < next_seg.start or it's the last).
   const activeSet = new Set();
   if (currentTime != null && segments.length > 0) {
     for (let i = 0; i < segments.length; i++) {
@@ -64,7 +62,6 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
         activeSet.add(i);
       }
     }
-    // If nothing matched (e.g. gap between segments), highlight the last segment before currentTime
     if (activeSet.size === 0) {
       for (let i = segments.length - 1; i >= 0; i--) {
         if (segments[i].start != null && segments[i].start <= currentTime) {
@@ -76,15 +73,13 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
   }
   const firstActiveIdx = activeSet.size > 0 ? Math.min(...activeSet) : -1;
 
-  // Auto-scroll to first active segment (pause auto-scroll briefly when user scrolls manually)
+  // Auto-scroll to first active segment
   useEffect(() => {
     if (firstActiveIdx < 0 || !activeRef.current || !containerRef.current || userScrolledRef.current) return;
     const container = containerRef.current;
     const el = activeRef.current;
     const containerRect = container.getBoundingClientRect();
     const elRect = el.getBoundingClientRect();
-
-    // Scroll so active line is roughly in the top third of the container
     const targetOffset = containerRect.height * 0.3;
     const elRelativeTop = elRect.top - containerRect.top;
     if (Math.abs(elRelativeTop - targetOffset) > 40) {
@@ -95,7 +90,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     }
   }, [firstActiveIdx]);
 
-  // Detect manual scroll — pause auto-scroll for 4 seconds after user scrolls
+  // Detect manual scroll — pause auto-scroll for 4 seconds
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -117,8 +112,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     return jsx('div', { className: 'text-sm text-gray-400 py-4 text-center', children: 'No transcript segments' });
   }
 
-  // Collect unique speakers for filter chips, deduplicated by display name.
-  // Each entry maps a display label to the set of raw speaker IDs sharing that name.
+  // Collect unique speakers for filter chips
   const speakersByLabel = new Map();
   for (const seg of segments) {
     const label = seg.person_name || seg.speaker || 'Unknown';
@@ -139,6 +133,15 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
       const next = { ...prev };
       for (const k of keys) next[k] = !allHidden;
       return next;
+    });
+  }
+
+  function openSpeakerPicker(e, speaker) {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setSpeakerPicker({
+      anchorPoint: { x: rect.left, y: rect.bottom },
+      speaker,
     });
   }
 
@@ -167,7 +170,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
       }),
     }),
 
-    // Scrollable transcript — CSS grid so the speaker column auto-sizes to the widest badge
+    // Scrollable transcript
     jsx('div', {
       ref: containerRef,
       className: 'overflow-y-auto scroll-smooth',
@@ -181,17 +184,14 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
             if (hiddenSpeakers[speakerKey]) return null;
             const speaker = seg.person_name || seg.speaker || 'Unknown';
             const isUnconfirmed = !seg.person_id && seg.speaker;
-            const isEditing = editingSpeaker === `${i}-${seg.speaker}`;
             const isActive = activeSet.has(i);
 
-            // Compute average word score if words are available
             const words = seg.words || [];
             const wordScores = words.map(w => w.score).filter(s => s != null);
             const avgScore = wordScores.length > 0
               ? (wordScores.reduce((a, b) => a + b, 0) / wordScores.length)
               : null;
 
-            // Build hover tooltip with segment details
             const tooltipParts = [
               `${fmtTimestamp(seg.start)} – ${fmtTimestamp(seg.end)}`,
               `Speaker: ${speaker} (${seg.speaker || 'unknown'})`,
@@ -203,7 +203,6 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
               `Click to seek · Click badge to assign`,
             ].filter(Boolean).join('\n');
 
-            // Row uses subgrid to inherit parent column sizing while allowing a single row background
             return jsxs('div', {
               key: i,
               ref: i === firstActiveIdx ? activeRef : undefined,
@@ -230,45 +229,11 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
                 // Col 2: speaker badge
                 jsx('div', {
                   className: 'py-1.5 pr-2',
-                  children: isEditing
-                    ? jsxs('div', {
-                        className: 'flex flex-wrap items-center gap-1',
-                        onClick: e => e.stopPropagation(),
-                        children: [
-                          jsx('input', {
-                            type: 'text', placeholder: 'New name...', value: newName, autoFocus: true,
-                            onChange: e => setNewName(e.target.value),
-                            onKeyDown: e => {
-                              if (e.key === 'Enter' && newName.trim()) assignSpeaker(seg.speaker, 'create', null, newName.trim());
-                              if (e.key === 'Escape') setEditingSpeaker(null);
-                            },
-                            className: 'text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 w-24',
-                          }),
-                          newName.trim() && jsx('button', {
-                            onClick: () => assignSpeaker(seg.speaker, 'create', null, newName.trim()),
-                            className: 'text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 hover:bg-blue-200',
-                            children: 'Create',
-                          }),
-                          people.length > 0 && jsx('select', {
-                            onChange: e => { if (e.target.value) assignSpeaker(seg.speaker, 'correct', e.target.value); },
-                            className: 'text-[10px] px-1 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800',
-                            children: [
-                              jsx('option', { key: '', value: '', children: 'Assign...' }),
-                              ...people.map(p => jsx('option', { key: p.id, value: p.id, children: p.name })),
-                            ],
-                          }),
-                          jsx('button', {
-                            onClick: () => setEditingSpeaker(null),
-                            className: 'text-[10px] text-gray-400 hover:text-gray-600',
-                            children: 'Cancel',
-                          }),
-                        ],
-                      })
-                    : jsx('button', {
-                        onClick: (e) => { e.stopPropagation(); setEditingSpeaker(`${i}-${seg.speaker}`); setNewName(''); },
-                        className: `text-[10px] font-medium px-1.5 py-0.5 rounded-full cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all whitespace-nowrap ${speakerColor(seg.speaker)} ${isUnconfirmed ? 'border border-dashed border-current' : ''}`,
-                        children: speaker.length > 15 ? speaker.slice(0, 15) + '...' : speaker,
-                      }),
+                  children: jsx('button', {
+                    onClick: (e) => openSpeakerPicker(e, seg.speaker),
+                    className: `text-[10px] font-medium px-1.5 py-0.5 rounded-full cursor-pointer hover:ring-2 hover:ring-blue-400 transition-all whitespace-nowrap ${speakerColor(seg.speaker)} ${isUnconfirmed ? 'border border-dashed border-current' : ''}`,
+                    children: speaker.length > 15 ? speaker.slice(0, 15) + '...' : speaker,
+                  }),
                 }),
                 // Col 3: text
                 jsx('span', {
@@ -285,6 +250,16 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
           }).filter(Boolean),
       }),
     }),
+
+    // Speaker picker (SearchableList portal)
+    speakerPicker && jsx(SearchableList, {
+      items: people.map(p => ({ id: p.id, label: p.name })),
+      anchorPoint: speakerPicker.anchorPoint,
+      placeholder: 'Search or create person...',
+      onSelect: (item) => assignSpeaker(speakerPicker.speaker, 'correct', item.id),
+      onCreateAndSelect: (name) => assignSpeaker(speakerPicker.speaker, 'create', null, name),
+      onClose: () => setSpeakerPicker(null),
+    }),
   ]});
 }
 
@@ -292,8 +267,8 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
 
 export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPerson }) {
   const [people, setPeople] = useState([]);
-  const [newNames, setNewNames] = useState({});
   const [busy, setBusy] = useState({});
+  const [picker, setPicker] = useState(null); // { anchorPoint, speaker }
 
   useEffect(() => {
     api('/people').then(d => setPeople(d.people || [])).catch(() => {});
@@ -304,6 +279,7 @@ export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPe
   if (speakers.length === 0) return null;
 
   async function submitAttribution(speaker, action, personId, name) {
+    setPicker(null);
     setBusy(prev => ({ ...prev, [speaker]: true }));
     try {
       await api(`/sessions/${sessionId}/attribution`, {
@@ -317,6 +293,14 @@ export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPe
     } finally {
       setBusy(prev => ({ ...prev, [speaker]: false }));
     }
+  }
+
+  function openPicker(e, speaker) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setPicker({
+      anchorPoint: { x: rect.left, y: rect.bottom },
+      speaker,
+    });
   }
 
   return jsxs('div', { className: 'space-y-2', children: [
@@ -350,37 +334,38 @@ export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPe
                 }),
                 jsx('button', {
                   disabled: isBusy,
+                  onClick: (e) => openPicker(e, speaker),
+                  className: 'text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40',
+                  children: 'Reassign',
+                }),
+                jsx('button', {
+                  disabled: isBusy,
                   onClick: () => submitAttribution(speaker, 'reject'),
                   className: 'text-[11px] px-2 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 disabled:opacity-40',
                   children: 'Reject',
                 }),
               ]})
             : jsxs(Fragment, { children: [
-                jsx('span', { className: 'text-sm text-gray-400 dark:text-gray-500 italic', children: 'Unknown' }),
-                jsx('input', {
-                  type: 'text',
-                  placeholder: 'Name...',
-                  value: newNames[speaker] || '',
-                  onChange: e => setNewNames(prev => ({ ...prev, [speaker]: e.target.value })),
-                  className: 'text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 w-32',
-                }),
+                jsx('span', { className: 'text-sm text-gray-400 dark:text-gray-500 italic flex-1', children: 'Unknown' }),
                 jsx('button', {
-                  disabled: isBusy || !(newNames[speaker] || '').trim(),
-                  onClick: () => submitAttribution(speaker, 'create', null, newNames[speaker].trim()),
+                  disabled: isBusy,
+                  onClick: (e) => openPicker(e, speaker),
                   className: 'text-[11px] px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50 disabled:opacity-40',
-                  children: 'Create',
-                }),
-                people.length > 0 && jsx('select', {
-                  onChange: e => { if (e.target.value) submitAttribution(speaker, 'correct', e.target.value); },
-                  className: 'text-[11px] px-1 py-0.5 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400',
-                  children: [
-                    jsx('option', { key: '', value: '', children: 'Assign...' }),
-                    ...people.map(p => jsx('option', { key: p.id, value: p.id, children: p.name })),
-                  ],
+                  children: 'Assign Person',
                 }),
               ]}),
         ]}),
       });
+    }),
+
+    // Speaker picker (SearchableList portal)
+    picker && jsx(SearchableList, {
+      items: people.map(p => ({ id: p.id, label: p.name })),
+      anchorPoint: picker.anchorPoint,
+      placeholder: 'Search or create person...',
+      onSelect: (item) => submitAttribution(picker.speaker, 'correct', item.id),
+      onCreateAndSelect: (name) => submitAttribution(picker.speaker, 'create', null, name),
+      onClose: () => setPicker(null),
     }),
   ]});
 }

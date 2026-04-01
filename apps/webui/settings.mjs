@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
-import { jsx, jsxs, api, INPUT_CLS, LABEL_CLS } from './utils.mjs';
+import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, TagIcon, ChevronIcon } from './utils.mjs';
+import { ConversationsSettings } from './chat.mjs';
 
 const SETTINGS_CATEGORIES = [
   { id: 'services', label: 'Services' },
   { id: 'pipeline', label: 'Pipeline' },
+  { id: 'tags', label: 'Tags' },
+  { id: 'conversations', label: 'Conversations' },
 ];
 
 export function SettingsSidebar({ selected, onSelect }) {
@@ -23,7 +26,214 @@ export function SettingsSidebar({ selected, onSelect }) {
   });
 }
 
-export function SettingsPage({ category }) {
+// ── Tags Settings (self-contained, no global save button) ──
+
+function TagsSettings({ onSelectSession }) {
+  const [tags, setTags] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState('');
+  const [expandedTag, setExpandedTag] = useState(null);
+  const [tagSessions, setTagSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [renamingTag, setRenamingTag] = useState(null); // tag name being renamed
+  const [renameValue, setRenameValue] = useState('');
+
+  async function fetchTags() {
+    try {
+      const data = await api('/tags');
+      setTags(data.tags || []);
+    } catch {}
+    setLoading(false);
+  }
+
+  useEffect(() => { fetchTags(); }, []);
+
+  async function createTag() {
+    const normalized = normalizeTagName(newName);
+    if (!normalized) return;
+    try {
+      await api('/tags', { method: 'POST', body: JSON.stringify({ name: normalized }) });
+      setNewName('');
+      fetchTags();
+    } catch (e) { alert(e.message); }
+  }
+
+  async function toggleHidden(name, hidden) {
+    try {
+      await api(`/tags/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ hidden }) });
+      fetchTags();
+    } catch (e) { alert(e.message); }
+  }
+
+  async function deleteTag(name) {
+    if (!confirm(`Delete tag "${name}"? It will be removed from all sessions.`)) return;
+    try {
+      await api(`/tags/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (expandedTag === name) { setExpandedTag(null); setTagSessions([]); }
+      fetchTags();
+    } catch (e) { alert(e.message); }
+  }
+
+  function startRename(name) {
+    setRenamingTag(name);
+    setRenameValue(name);
+  }
+
+  async function submitRename(oldName) {
+    setRenamingTag(null);
+    const normalized = normalizeTagName(renameValue);
+    if (!normalized || normalized === oldName) return;
+    try {
+      await api(`/tags/${encodeURIComponent(oldName)}`, { method: 'PATCH', body: JSON.stringify({ name: normalized }) });
+      if (expandedTag === oldName) setExpandedTag(normalized);
+      fetchTags();
+    } catch (e) { alert(e.message); }
+  }
+
+  async function toggleExpand(name) {
+    if (expandedTag === name) {
+      setExpandedTag(null);
+      setTagSessions([]);
+      return;
+    }
+    setExpandedTag(name);
+    setLoadingSessions(true);
+    try {
+      const data = await api(`/tags/${encodeURIComponent(name)}`);
+      setTagSessions(data.sessions || []);
+    } catch { setTagSessions([]); }
+    setLoadingSessions(false);
+  }
+
+  async function removeSessionFromTag(sessionId, tagName) {
+    try {
+      const session = await api(`/sessions/${sessionId}`);
+      const newTags = (session.tags || []).filter(t => t !== tagName);
+      await api(`/sessions/${sessionId}/tags`, { method: 'PUT', body: JSON.stringify({ tags: newTags }) });
+      const data = await api(`/tags/${encodeURIComponent(tagName)}`);
+      setTagSessions(data.sessions || []);
+      fetchTags();
+    } catch (e) { alert(e.message); }
+  }
+
+  if (loading) return jsx('div', { className: 'text-sm text-gray-400 py-4', children: 'Loading...' });
+
+  return jsxs('div', { className: 'space-y-4', children: [
+    // Create tag input
+    jsxs('div', { className: 'flex gap-2', children: [
+      jsx('input', {
+        type: 'text', value: newName, placeholder: 'New tag name...',
+        onChange: e => setNewName(e.target.value),
+        onKeyDown: e => { if (e.key === 'Enter') createTag(); },
+        className: INPUT_CLS + ' flex-1',
+      }),
+      jsx('button', {
+        onClick: createTag, disabled: !normalizeTagName(newName),
+        className: 'px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors',
+        children: 'Add',
+      }),
+    ]}),
+    newName && normalizeTagName(newName) !== newName && jsx('p', {
+      className: 'text-[11px] text-gray-400',
+      children: `Will be saved as: ${normalizeTagName(newName)}`,
+    }),
+
+    // Tags list
+    tags.length === 0
+      ? jsx('p', { className: 'text-xs text-gray-400 py-2', children: 'No tags yet. Create one above.' })
+      : jsx('div', { className: 'space-y-1', children:
+          tags.map(t => jsxs('div', {
+            key: t.name,
+            className: 'rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden',
+            children: [
+              // Tag row
+              jsxs('div', {
+                className: 'flex items-center gap-2 px-3 py-2 cursor-pointer',
+                onClick: () => toggleExpand(t.name),
+                children: [
+                  jsx('span', {
+                    className: 'flex-shrink-0',
+                    children: jsx(ChevronIcon, { open: expandedTag === t.name }),
+                  }),
+                  renamingTag === t.name
+                    ? jsx('input', {
+                        type: 'text', value: renameValue, autoFocus: true,
+                        onClick: e => e.stopPropagation(),
+                        onChange: e => setRenameValue(e.target.value),
+                        onBlur: () => submitRename(t.name),
+                        onKeyDown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenamingTag(null); },
+                        className: 'text-[11px] px-1.5 py-0.5 rounded border border-blue-400 bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 w-28 focus:outline-none',
+                      })
+                    : jsx('span', {
+                        onDoubleClick: () => startRename(t.name),
+                        className: `inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium cursor-default select-none ${tagColor(t.name)}`,
+                        title: 'Double-click to rename',
+                        children: jsxs(Fragment, { children: [
+                          jsx(TagIcon, { className: 'w-2.5 h-2.5' }),
+                          t.name,
+                        ]}),
+                      }),
+                  jsx('span', {
+                    className: 'text-[10px] text-gray-400 ml-auto',
+                    children: `${t.session_count} session${t.session_count !== 1 ? 's' : ''}`,
+                  }),
+                  jsxs('label', {
+                    onClick: e => e.stopPropagation(),
+                    className: 'flex items-center gap-1.5 cursor-pointer ml-2',
+                    title: 'Hide sessions with this tag from the list',
+                    children: [
+                      jsx('input', {
+                        type: 'checkbox', checked: t.hidden,
+                        onChange: e => toggleHidden(t.name, e.target.checked),
+                        className: 'w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
+                      }),
+                      jsx('span', { className: 'text-[10px] text-gray-400', children: 'Hide' }),
+                    ],
+                  }),
+                  jsx('button', {
+                    onClick: (e) => { e.stopPropagation(); deleteTag(t.name); },
+                    className: 'text-[11px] text-red-400 hover:text-red-600 ml-1 transition-colors',
+                    children: 'Delete',
+                  }),
+                ],
+              }),
+              // Expanded: sessions list
+              expandedTag === t.name && jsx('div', {
+                className: 'border-t border-gray-200 dark:border-gray-700 px-3 py-2 bg-gray-50 dark:bg-gray-800/50',
+                children: loadingSessions
+                  ? jsx('p', { className: 'text-[11px] text-gray-400 py-1', children: 'Loading...' })
+                  : tagSessions.length === 0
+                    ? jsx('p', { className: 'text-[11px] text-gray-400 py-1', children: 'No sessions with this tag' })
+                    : jsx('div', { className: 'space-y-1', children:
+                        tagSessions.map(s => jsxs('div', {
+                          key: s.id,
+                          className: 'flex items-center justify-between py-1',
+                          children: [
+                            jsx('button', {
+                              onClick: () => onSelectSession && onSelectSession(s.id),
+                              className: 'min-w-0 flex-1 text-left hover:underline',
+                              children: jsxs('div', { children: [
+                                jsx('p', { className: 'text-xs text-gray-700 dark:text-gray-300 truncate', children: s.name || s.id }),
+                                jsx('p', { className: 'text-[10px] text-gray-400', children: new Date(s.created_at).toLocaleDateString() }),
+                              ]}),
+                            }),
+                            jsx('button', {
+                              onClick: () => removeSessionFromTag(s.id, t.name),
+                              title: 'Remove this session from tag',
+                              className: 'text-[11px] text-red-400 hover:text-red-600 px-1 transition-colors',
+                              children: '\u00d7',
+                            }),
+                          ],
+                        })),
+                      }),
+              }),
+            ],
+          })),
+        }),
+  ]});
+}
+
+export function SettingsPage({ category, onSelectSession }) {
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -184,6 +394,9 @@ export function SettingsPage({ category }) {
         ]}),
       ]}),
     ]}),
+
+    tags: jsx(TagsSettings, { onSelectSession }),
+    conversations: jsx(ConversationsSettings, {}),
   };
 
   return jsx('div', {
@@ -194,7 +407,7 @@ export function SettingsPage({ category }) {
         className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5',
         children: categoryContent[cat],
       }),
-      jsxs('div', { className: 'flex items-center gap-3', children: [
+      (cat !== 'tags' && cat !== 'conversations') && jsxs('div', { className: 'flex items-center gap-3', children: [
         jsx('button', {
           onClick: save, disabled: saving,
           className: 'px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors',

@@ -4,5 +4,6 @@ pub mod people;
 pub mod server;
 pub mod session;
 pub mod settings;
+pub mod tags;
 pub mod understanding;
 pub mod waveform;

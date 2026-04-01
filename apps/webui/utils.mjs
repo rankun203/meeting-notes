@@ -172,8 +172,19 @@ export function speakerColor(speaker) {
   return SPEAKER_COLORS[Math.abs(hash) % SPEAKER_COLORS.length];
 }
 
+export function tagColor(name) {
+  if (!name) return SPEAKER_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return SPEAKER_COLORS[Math.abs(hash) % SPEAKER_COLORS.length];
+}
+
+export function normalizeTagName(input) {
+  return input.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
+
 // ── Icons (re-exported from icons.mjs) ──
-export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon, RecordIcon, PauseIcon, StopSquareIcon, FastForwardIcon, TranscriptIcon } from './icons.mjs';
+export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon, RecordIcon, PauseIcon, StopSquareIcon, FastForwardIcon, TranscriptIcon, TagIcon, ChatIcon, SendIcon, MinimizeIcon, SparkleIcon, NewChatIcon } from './icons.mjs';
 
 // ── Shared components ──
 

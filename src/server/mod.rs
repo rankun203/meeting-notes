@@ -9,6 +9,7 @@ use crate::filesdb::FilesDb;
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::settings::SharedSettings;
+use crate::tags::TagsManager;
 
 use self::routes::AppState;
 
@@ -17,6 +18,7 @@ pub fn create_router(
     people_manager: PeopleManager,
     settings: SharedSettings,
     files_db: FilesDb,
+    tags_manager: TagsManager,
     enable_web_ui: bool,
 ) -> Router {
     let state = AppState {
@@ -24,6 +26,7 @@ pub fn create_router(
         people_manager,
         settings,
         files_db,
+        tags_manager,
     };
 
     // All API routes (REST + WebSocket) under /api

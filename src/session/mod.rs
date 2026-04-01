@@ -311,10 +311,24 @@ impl SessionManager {
         self.sessions.read().await.get(id).map(|s| s.info())
     }
 
-    pub async fn list_sessions(&self, limit: usize, offset: usize) -> (Vec<SessionInfo>, usize) {
+    pub async fn list_sessions(
+        &self,
+        limit: usize,
+        offset: usize,
+        hidden_tags: &std::collections::HashSet<String>,
+    ) -> (Vec<SessionInfo>, usize) {
         let sessions = self.sessions.read().await;
-        let total = sessions.len();
-        let mut infos: Vec<SessionInfo> = sessions.values().map(|s| s.info()).collect();
+        let mut infos: Vec<SessionInfo> = sessions.values()
+            .filter(|s| {
+                // Hide session if it has tags AND all of them are hidden
+                if hidden_tags.is_empty() || s.tags.is_empty() {
+                    return true;
+                }
+                !s.tags.iter().all(|t| hidden_tags.contains(t))
+            })
+            .map(|s| s.info())
+            .collect();
+        let total = infos.len();
         infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         let page = infos.into_iter().skip(offset).take(limit).collect();
         (page, total)
@@ -571,6 +585,73 @@ impl SessionManager {
                     .map(|j| (s.id.clone(), j.clone()))
             })
             .collect()
+    }
+
+    /// Set the tags for a session.
+    pub async fn update_session_tags(&self, id: &str, tags: Vec<String>) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        session.tags = tags;
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata on tag update: {}", e);
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionUpdated(info.clone()));
+        Ok(info)
+    }
+
+    /// Rename a tag across all sessions.
+    pub async fn rename_tag_in_all_sessions(&self, old_name: &str, new_name: &str) {
+        let mut sessions = self.sessions.write().await;
+        for session in sessions.values_mut() {
+            if let Some(pos) = session.tags.iter().position(|t| t == old_name) {
+                session.tags[pos] = new_name.to_string();
+                session.touch();
+                if let Err(e) = Self::write_metadata(session) {
+                    warn!("Failed to write metadata after tag rename for {}: {}", session.id, e);
+                }
+                self.emit(ServerEvent::SessionUpdated(session.info()));
+            }
+        }
+    }
+
+    /// Remove a tag from all sessions (cascade on tag deletion).
+    pub async fn remove_tag_from_all_sessions(&self, tag_name: &str) {
+        let mut sessions = self.sessions.write().await;
+        for session in sessions.values_mut() {
+            if session.tags.contains(&tag_name.to_string()) {
+                session.tags.retain(|t| t != tag_name);
+                session.touch();
+                if let Err(e) = Self::write_metadata(session) {
+                    warn!("Failed to write metadata after tag removal for {}: {}", session.id, e);
+                }
+                self.emit(ServerEvent::SessionUpdated(session.info()));
+            }
+        }
+    }
+
+    /// Count sessions per tag.
+    pub async fn tag_session_counts(&self) -> HashMap<String, usize> {
+        let sessions = self.sessions.read().await;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for session in sessions.values() {
+            for tag in &session.tags {
+                *counts.entry(tag.clone()).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    /// Get sessions that have a given tag.
+    pub async fn sessions_for_tag(&self, tag_name: &str) -> Vec<SessionInfo> {
+        let sessions = self.sessions.read().await;
+        let mut infos: Vec<SessionInfo> = sessions.values()
+            .filter(|s| s.tags.contains(&tag_name.to_string()))
+            .map(|s| s.info())
+            .collect();
+        infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        infos
     }
 
     /// Get the session directory path, session language, and source metadata.

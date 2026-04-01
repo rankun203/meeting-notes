@@ -59,6 +59,8 @@ pub struct Session {
     pub processing_state: Option<String>,
     /// Persisted audio extraction job info (for resume on restart).
     pub audio_extraction: Option<AudioExtractionJob>,
+    /// User-assigned tags.
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +95,8 @@ pub struct SessionInfo {
     pub unconfirmed_speakers: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_meta: Vec<SourceMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// Persisted state of an audio extraction job (RunPod).
@@ -132,6 +136,8 @@ pub struct SessionMetadata {
     pub sources: Vec<SourceMetadata>,
     #[serde(default)]
     pub audio_extraction: Option<AudioExtractionJob>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 fn default_stopped_state() -> SessionState {
@@ -169,6 +175,7 @@ impl Session {
             notices: Vec::new(),
             processing_state: None,
             audio_extraction: None,
+            tags: Vec::new(),
         }
     }
 
@@ -211,6 +218,7 @@ impl Session {
                 None
             },
             audio_extraction: meta.audio_extraction.clone(),
+            tags: meta.tags.clone(),
         }
     }
 
@@ -235,6 +243,7 @@ impl Session {
             duration_secs,
             sources: self.source_meta.clone(),
             audio_extraction: self.audio_extraction.clone(),
+            tags: self.tags.clone(),
         }
     }
 
@@ -294,6 +303,7 @@ impl Session {
             processing_state: self.processing_state.clone(),
             unconfirmed_speakers,
             source_meta: self.source_meta.clone(),
+            tags: self.tags.clone(),
         }
     }
 

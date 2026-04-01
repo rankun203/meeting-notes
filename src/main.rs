@@ -8,6 +8,7 @@ use meeting_notes_daemon::people::PeopleManager;
 use meeting_notes_daemon::server;
 use meeting_notes_daemon::session::SessionManager;
 use meeting_notes_daemon::settings::AppSettings;
+use meeting_notes_daemon::tags::TagsManager;
 
 fn install_signal_handlers() {
     unsafe {
@@ -103,6 +104,9 @@ async fn main() {
             let people_manager = PeopleManager::new(&data_dir);
             people_manager.load_from_disk().await;
 
+            let tags_manager = TagsManager::new(&data_dir);
+            tags_manager.load_from_disk().await;
+
             let files_db = FilesDb::load_from_disk(&recordings_dir).await;
 
             let settings = AppSettings::load_or_create(&data_dir);
@@ -115,7 +119,7 @@ async fn main() {
             ).await;
 
             let app = server::create_router(
-                manager, people_manager, shared_settings, files_db, web_ui,
+                manager, people_manager, shared_settings, files_db, tags_manager, web_ui,
             );
 
             let addr = format!("{}:{}", host, port);

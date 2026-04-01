@@ -17,6 +17,7 @@ use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
 use crate::session::session::SessionInfo;
 use crate::settings::SharedSettings;
+use crate::tags::TagsManager;
 use crate::understanding::{ExtractionClient, ExtractionOutput, TrackInput};
 
 /// Shared state for routes.
@@ -26,6 +27,7 @@ pub struct AppState {
     pub people_manager: PeopleManager,
     pub settings: SharedSettings,
     pub files_db: FilesDb,
+    pub tags_manager: TagsManager,
 }
 
 pub fn session_routes() -> Router<AppState> {
@@ -51,6 +53,12 @@ pub fn session_routes() -> Router<AppState> {
         .route("/people/{id}", patch(update_person))
         .route("/people/{id}", delete(delete_person))
         .route("/people/{id}/sessions", get(get_person_sessions))
+        .route("/sessions/{id}/tags", put(set_session_tags))
+        .route("/tags", get(list_tags))
+        .route("/tags", post(create_tag))
+        .route("/tags/{name}", get(get_tag_sessions))
+        .route("/tags/{name}", patch(update_tag))
+        .route("/tags/{name}", delete(delete_tag))
         .route("/settings", get(get_settings))
         .route("/settings", put(update_settings))
         .route("/config", get(get_config))
@@ -76,7 +84,8 @@ async fn list_sessions(
 ) -> Json<Value> {
     let limit = params.limit.unwrap_or(20);
     let offset = params.offset.unwrap_or(0);
-    let (mut sessions, total) = state.session_manager.list_sessions(limit, offset).await;
+    let hidden_tags = state.tags_manager.hidden_tag_names().await;
+    let (mut sessions, total) = state.session_manager.list_sessions(limit, offset, &hidden_tags).await;
     // Enrich with unconfirmed speaker counts from cache
     for s in &mut sessions {
         s.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&s.id).await;
@@ -655,6 +664,93 @@ async fn update_settings(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
     info!("Settings updated");
     Ok(Json(settings.to_masked_json()))
+}
+
+// --- Tag routes ---
+
+async fn list_tags(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let tags = state.tags_manager.list_tags().await;
+    let counts = state.session_manager.tag_session_counts().await;
+    let list: Vec<Value> = tags.iter().map(|t| {
+        json!({
+            "name": t.name,
+            "hidden": t.hidden,
+            "session_count": counts.get(&t.name).copied().unwrap_or(0),
+        })
+    }).collect();
+    Json(json!({ "tags": list }))
+}
+
+async fn create_tag(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let tag = state.tags_manager.create_tag(name).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    Ok(Json(json!(tag)))
+}
+
+async fn update_tag(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let new_name = body.get("name").and_then(|v| v.as_str());
+    let hidden = body.get("hidden").and_then(|v| v.as_bool());
+    let (tag, old_name) = state.tags_manager.update_tag(&name, new_name, hidden).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    // If renamed, cascade to all sessions
+    if let Some(old) = old_name {
+        state.session_manager.rename_tag_in_all_sessions(&old, &tag.name).await;
+    }
+    Ok(Json(json!(tag)))
+}
+
+async fn delete_tag(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    state.tags_manager.delete_tag(&name).await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    // Cascade: remove tag from all sessions
+    state.session_manager.remove_tag_from_all_sessions(&name).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_tag_sessions(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !state.tags_manager.tag_exists(&name).await {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "tag not found"}))));
+    }
+    let sessions = state.session_manager.sessions_for_tag(&name).await;
+    Ok(Json(json!({ "sessions": sessions })))
+}
+
+async fn set_session_tags(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let tags: Vec<String> = body.get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    // Validate all tags exist
+    for tag in &tags {
+        if !state.tags_manager.tag_exists(tag).await {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({"error": format!("tag '{}' does not exist", tag)}))));
+        }
+    }
+
+    let info = state.session_manager.update_session_tags(&id, tags).await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    Ok(Json(serde_json::to_value(info).unwrap()))
 }
 
 // --- Transcribe route ---

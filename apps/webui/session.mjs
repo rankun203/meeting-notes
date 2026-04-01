@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
-         formatFileSize, formatDuration, formatTime, typeBadgeColor,
+         formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor,
          ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon,
-         RecordIcon, TranscriptIcon } from './utils.mjs';
+         RecordIcon, TranscriptIcon, TagIcon, PlusIcon, CloseIcon } from './utils.mjs';
 import { SyncedPlayer } from './player.mjs';
 import { TranscriptViewer, SpeakerAttributionWrapper } from './transcript.mjs';
+import { SearchableList } from './searchable-list.mjs';
 
 // ── New Session Form ──
 
@@ -209,6 +210,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const [playbackTime, setPlaybackTime] = useState(0);
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
+  const [tagPicker, setTagPicker] = useState(null); // { anchorPoint, items } or null
 
   // Close export dropdown on outside click
   useEffect(() => {
@@ -217,6 +219,44 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [exportOpen]);
+
+  async function openTagPicker(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    let items = [];
+    try { const data = await api('/tags'); items = data.tags || []; } catch {}
+    const currentTags = new Set(session.tags || []);
+    setTagPicker({
+      anchorPoint: { x: rect.left, y: rect.bottom },
+      items: items.filter(t => !currentTags.has(t.name)).map(t => ({ id: t.name, label: t.name })),
+    });
+  }
+
+  async function addTag(tagName) {
+    setTagPicker(null);
+    const newTags = [...(session.tags || []), tagName];
+    try {
+      await api(`/sessions/${session.id}/tags`, { method: 'PUT', body: JSON.stringify({ tags: newTags }) });
+      await onRefresh();
+    } catch (e) { setError(e.message); }
+  }
+
+  async function createAndAddTag(name) {
+    setTagPicker(null);
+    try {
+      await api('/tags', { method: 'POST', body: JSON.stringify({ name }) });
+      const newTags = [...(session.tags || []), name];
+      await api(`/sessions/${session.id}/tags`, { method: 'PUT', body: JSON.stringify({ tags: newTags }) });
+      await onRefresh();
+    } catch (e) { setError(e.message); }
+  }
+
+  async function removeTag(tagName) {
+    const newTags = (session.tags || []).filter(t => t !== tagName);
+    try {
+      await api(`/sessions/${session.id}/tags`, { method: 'PUT', body: JSON.stringify({ tags: newTags }) });
+      await onRefresh();
+    } catch (e) { setError(e.message); }
+  }
 
   if (!session) {
     return jsx('div', {
@@ -324,20 +364,28 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
               }),
               jsx('h2', { className: 'text-base md:text-lg font-semibold tracking-tight flex-shrink-0', children: 'Session' }),
               renaming
-                ? jsx('input', {
-                    ref: renameRef,
-                    value: renameValue,
-                    onChange: e => setRenameValue(e.target.value),
-                    onBlur: submitRename,
-                    onKeyDown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setRenaming(false); } },
-                    className: 'text-xs md:text-sm font-mono px-1.5 py-0.5 border border-blue-400 rounded outline-none bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 min-w-0',
-                    placeholder: 'Session name...',
-                  })
+                ? jsxs(Fragment, { children: [
+                    jsx('input', {
+                      ref: renameRef,
+                      value: renameValue,
+                      onChange: e => setRenameValue(e.target.value),
+                      onBlur: submitRename,
+                      onKeyDown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setRenaming(false); } },
+                      className: 'text-xs md:text-sm px-1.5 py-0.5 border border-blue-400 rounded outline-none bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 min-w-0 w-96',
+                      placeholder: 'Session name...',
+                    }),
+                    jsx('span', { className: 'text-xs md:text-sm font-mono text-gray-500 dark:text-gray-400', children: `(${s.id})` }),
+                  ]})
                 : jsx('span', {
                     onDoubleClick: startRename,
-                    className: 'text-xs md:text-sm font-mono text-gray-500 dark:text-gray-400 truncate cursor-default select-none',
+                    className: 'text-xs md:text-sm text-gray-500 dark:text-gray-400 truncate cursor-default select-none',
                     title: 'Double-click to rename',
-                    children: s.name ? `${s.name} (${s.id})` : s.id,
+                    children: s.name
+                      ? jsxs(Fragment, { children: [
+                          s.name, ' ',
+                          jsx('span', { className: 'font-mono', children: `(${s.id})` }),
+                        ]})
+                      : jsx('span', { className: 'font-mono', children: s.id }),
                   }),
               jsx(StateBadge, { state: s.state }),
             ]}),
@@ -438,6 +486,42 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                 s.summarization_instruction && jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
                   jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Summarization' }),
                   jsx('p', { className: 'text-sm text-gray-600 dark:text-gray-400', children: s.summarization_instruction }),
+                ]}),
+                // Tags
+                jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
+                  jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1', children: 'Tags' }),
+                  jsxs('div', { className: 'flex flex-wrap items-center gap-1.5', children: [
+                    ...(s.tags || []).map(tag => jsxs('span', {
+                      key: tag,
+                      className: `inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${tagColor(tag)}`,
+                      children: [
+                        jsx(TagIcon, { className: 'w-2.5 h-2.5' }),
+                        tag,
+                        jsx('button', {
+                          onClick: () => removeTag(tag),
+                          className: 'ml-0.5 opacity-60 hover:opacity-100 transition-opacity',
+                          title: `Remove tag "${tag}"`,
+                          children: '\u00d7',
+                        }),
+                      ],
+                    })),
+                    // Add tag button
+                    jsx('button', {
+                      onClick: openTagPicker,
+                      className: 'inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors',
+                      title: 'Add tag',
+                      children: jsx(PlusIcon, {}),
+                    }),
+                    // Tag picker portal (rendered outside the grid)
+                    tagPicker && jsx(SearchableList, {
+                      items: tagPicker.items,
+                      anchorPoint: tagPicker.anchorPoint,
+                      placeholder: 'Search or create tag...',
+                      onSelect: (item) => addTag(item.id),
+                      onCreateAndSelect: (name) => createAndAddTag(name),
+                      onClose: () => setTagPicker(null),
+                    }),
+                  ]}),
                 ]}),
               ],
             }),
