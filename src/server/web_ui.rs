@@ -8,7 +8,7 @@ use axum::{
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "web/"]
+#[folder = "apps/webui/"]
 struct WebAssets;
 
 pub fn web_ui_routes() -> Router {
