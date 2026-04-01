@@ -10,6 +10,10 @@ RUN apt-get update && \
 # Install uv for fast dependency resolution
 RUN pip install --no-cache-dir uv
 
+# Ubuntu 24.04 marks system Python as externally managed (PEP 668).
+# The base image sets PIP_BREAK_SYSTEM_PACKAGES for pip; uv needs its own env var.
+ENV UV_BREAK_SYSTEM_PACKAGES=1
+
 # Install dependencies first (layer cached unless pyproject.toml changes).
 # Pin torch* to base image versions so uv doesn't try to upgrade them.
 COPY pyproject.toml .
@@ -35,7 +39,7 @@ RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cp
     python -c "\
 from lightning.pytorch.utilities.migration.utils import migrate_checkpoint; \
 import torch, pathlib; \
-p = pathlib.Path('/usr/local/lib/python3.12/dist-packages/whisperx/assets/pytorch_model.bin'); \
+p = next(pathlib.Path('/usr/local/lib').glob('python3.*/dist-packages/whisperx/assets/pytorch_model.bin')); \
 ckpt = torch.load(p, map_location='cpu', weights_only=False); \
 migrated, _ = migrate_checkpoint(ckpt); \
 torch.save(migrated, p); \
