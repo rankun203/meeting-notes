@@ -65,7 +65,7 @@ function saveJSON(key, value) {
 function panelPosition(bx, by, bSize, isMobile) {
   if (isMobile) return { top: 8, left: 0, right: 0, bottom: 0 };
   const w = window.innerWidth, h = window.innerHeight;
-  const pw = 380, ph = 520;
+  const pw = 460, ph = Math.round(h * 0.9);
   // Determine which side the panel should open toward
   const centerX = bx + bSize / 2, centerY = by + bSize / 2;
   let left, top;
@@ -86,6 +86,10 @@ function panelPosition(bx, by, bSize, isMobile) {
 function InputComposer({ onSend }) {
   const [text, setText] = useState('');
   const textareaRef = useRef(null);
+
+  useEffect(() => {
+    if (textareaRef.current) textareaRef.current.focus();
+  }, []);
 
   function handleInput(e) {
     setText(e.target.value);
@@ -377,9 +381,8 @@ export function ChatBubble() {
   const [animating, setAnimating] = useState(false);
   const dragRef = useRef({ startX: 0, startY: 0, startBX: 0, startBY: 0, moved: false });
 
-  // Tooltip state
-  const [showTooltip, setShowTooltip] = useState(false);
-  const tooltipTimer = useRef(null);
+  // Tooltip state (hover-only)
+  const [hovering, setHovering] = useState(false);
 
   // Ensure active conversation exists
   useEffect(() => {
@@ -417,24 +420,12 @@ export function ChatBubble() {
     return () => window.removeEventListener('resize', onResize);
   }, [snapIndex]);
 
-  // Tooltip idle timer
-  useEffect(() => {
-    if (panelOpen || dragging) {
-      setShowTooltip(false);
-      clearTimeout(tooltipTimer.current);
-      return;
-    }
-    tooltipTimer.current = setTimeout(() => setShowTooltip(true), 3000);
-    return () => clearTimeout(tooltipTimer.current);
-  }, [panelOpen, dragging]);
-
   // ── Drag handlers ──
 
   function onPointerDown(e) {
     if (e.button !== 0) return;
     e.preventDefault();
-    setShowTooltip(false);
-    clearTimeout(tooltipTimer.current);
+    setHovering(false);
     dragRef.current = { startX: e.clientX, startY: e.clientY, startBX: bubblePos.x, startBY: bubblePos.y, moved: false };
     setDragging(true);
     setAnimating(false);
@@ -535,7 +526,7 @@ export function ChatBubble() {
 
   return jsxs(Fragment, { children: [
     // Tooltip
-    showTooltip && !panelOpen && jsx('div', {
+    hovering && !panelOpen && !dragging && jsx('div', {
       className: 'chat-tooltip-enter fixed z-[9998] pointer-events-none',
       style: {
         top: bubblePos.y + bSize / 2 - 16,
@@ -552,6 +543,8 @@ export function ChatBubble() {
     // Bubble
     jsx('button', {
       onPointerDown,
+      onMouseEnter: () => setHovering(true),
+      onMouseLeave: () => setHovering(false),
       style: {
         position: 'fixed',
         left: bubblePos.x,
