@@ -1289,6 +1289,7 @@ pub fn conversation_routes() -> Router<AppState> {
         .route("/conversations/{id}", get(get_conversation))
         .route("/conversations/{id}", delete(delete_conversation))
         .route("/conversations/{id}/messages", post(send_message))
+        .route("/conversations/{id}/messages/{msg_id}", delete(delete_message))
         .route("/conversations/{id}/export-prompt", get(export_prompt))
         .route("/llm/models", get(list_models))
 }
@@ -1519,16 +1520,18 @@ async fn send_message(
                     }
                 }
 
-                // Save assistant message
-                if let Some(mut conv) = conv_manager.get(&conv_id) {
-                    conv.messages.push(Message::Assistant {
-                        id: assistant_msg_id.clone(),
-                        content: full_content,
-                        timestamp: chrono::Utc::now(),
-                    });
-                    conv.updated_at = chrono::Utc::now();
-                    if let Err(e) = conv_manager.save(&conv) {
-                        warn!("Failed to save assistant message: {}", e);
+                // Save assistant message (skip if empty, e.g. client cancelled before any content)
+                if !full_content.is_empty() {
+                    if let Some(mut conv) = conv_manager.get(&conv_id) {
+                        conv.messages.push(Message::Assistant {
+                            id: assistant_msg_id.clone(),
+                            content: full_content,
+                            timestamp: chrono::Utc::now(),
+                        });
+                        conv.updated_at = chrono::Utc::now();
+                        if let Err(e) = conv_manager.save(&conv) {
+                            warn!("Failed to save assistant message: {}", e);
+                        }
                     }
                 }
 
@@ -1545,6 +1548,18 @@ async fn send_message(
     };
 
     Ok(Sse::new(stream))
+}
+
+async fn delete_message(
+    State(state): State<AppState>,
+    Path((id, msg_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    state.conversation_manager.delete_message(&id, &msg_id)
+        .map_err(|e| {
+            let status = if e.contains("not found") { StatusCode::NOT_FOUND } else { StatusCode::INTERNAL_SERVER_ERROR };
+            (status, Json(json!({"error": e})))
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn export_prompt(

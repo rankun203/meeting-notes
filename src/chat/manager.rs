@@ -150,6 +150,21 @@ impl ConversationManager {
         Ok(())
     }
 
+    /// Delete a single message from a conversation by message ID.
+    pub fn delete_message(&self, conv_id: &str, msg_id: &str) -> Result<(), String> {
+        let mut conv = self.get(conv_id)
+            .ok_or_else(|| "conversation not found".to_string())?;
+        let before = conv.messages.len();
+        conv.messages.retain(|m| m.id() != msg_id);
+        if conv.messages.len() == before {
+            return Err("message not found".to_string());
+        }
+        conv.updated_at = chrono::Utc::now();
+        self.save(&conv)?;
+        info!("Deleted message {} from conversation {}", msg_id, conv_id);
+        Ok(())
+    }
+
     /// Get the data directory (for secrets access).
     pub fn data_dir(&self) -> &Path {
         &self.data_dir

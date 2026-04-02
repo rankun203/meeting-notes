@@ -38,7 +38,7 @@ function ThinkingDots() {
   });
 }
 
-export function MessageThread({ messages, streamingContent, streamingPhase }) {
+export function MessageThread({ messages, streamingContent, streamingPhase, onDeleteMessage }) {
   const scrollRef = useRef(null);
   const [, forceRender] = useState(0);
 
@@ -137,9 +137,17 @@ export function MessageThread({ messages, streamingContent, streamingPhase }) {
                       dangerouslySetInnerHTML: { __html: renderMarkdown(msg.content || '') },
                     }),
               // Status line
-              jsx('span', {
-                className: 'text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 px-1',
-                children: isThinking ? 'Thinking...' : isStreaming ? 'Streaming...' : formatTime(msg.timestamp),
+              jsxs('span', {
+                className: 'text-[10px] text-gray-400 dark:text-gray-500 mt-0.5 px-1 flex items-center gap-1.5',
+                children: [
+                  isThinking ? 'Thinking...' : isStreaming ? 'Streaming...' : formatTime(msg.timestamp),
+                  !isThinking && !isStreaming && onDeleteMessage && jsx('button', {
+                    onClick: () => onDeleteMessage(msg.id),
+                    className: 'text-gray-300 dark:text-gray-600 hover:text-red-400 dark:hover:text-red-400 transition-colors',
+                    title: 'Delete message',
+                    children: '\u00d7',
+                  }),
+                ],
               }),
             ],
           }),

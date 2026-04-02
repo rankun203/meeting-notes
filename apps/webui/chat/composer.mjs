@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { jsx, jsxs, Fragment, API } from '../utils.mjs';
-import { SendIcon, SpinnerIcon, ExportIcon } from '../icons.mjs';
+import { SendIcon, SpinnerIcon, ExportIcon, StopSquareIcon } from '../icons.mjs';
 import { MentionPopup } from './mentions.mjs';
 
-export function InputComposer({ onSend, disabled, mentionData, conversationId }) {
+export function InputComposer({ onSend, onStop, streaming, mentionData, conversationId }) {
   const [text, setText] = useState('');
   const [mentions, setMentions] = useState([]);
   const [showMention, setShowMention] = useState(false);
@@ -88,10 +88,19 @@ export function InputComposer({ onSend, disabled, mentionData, conversationId })
     }, 0);
   }
 
+  function stripMentions(str, mentionList) {
+    let result = str;
+    for (const m of mentionList) {
+      result = result.replace(`@${m.kind}:${m.label} `, '');
+      result = result.replace(`@${m.kind}:${m.label}`, '');
+    }
+    return result.trim();
+  }
+
   function send() {
     const trimmed = text.trim();
-    if (!trimmed || disabled) return;
-    const cleanContent = trimmed.replace(/@(tag|person|session):\S+\s?/g, '').trim();
+    if (!trimmed || streaming) return;
+    const cleanContent = stripMentions(trimmed, mentions);
     onSend(cleanContent || trimmed, mentions);
     setText('');
     setMentions([]);
@@ -137,8 +146,7 @@ export function InputComposer({ onSend, disabled, mentionData, conversationId })
             onKeyDown: handleKeyDown,
             placeholder: 'Type a message... Use @ to add context',
             rows: 1,
-            disabled,
-            className: 'flex-1 resize-none rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder-gray-400 dark:placeholder-gray-500 disabled:opacity-50',
+            className: 'flex-1 resize-none rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder-gray-400 dark:placeholder-gray-500',
             style: { maxHeight: '96px' },
           }),
           conversationId && jsx('button', {
@@ -148,7 +156,7 @@ export function InputComposer({ onSend, disabled, mentionData, conversationId })
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 let content = await res.text();
                 // Append current draft message if present
-                const draft = text.trim().replace(/@(tag|person|session):\S+\s?/g, '').trim();
+                const draft = stripMentions(text.trim(), mentions);
                 if (draft) content += '\n\n=== USER ===\n\n' + draft + '\n';
                 // Download as text file
                 const blob = new Blob([content], { type: 'text/plain' });
@@ -166,14 +174,19 @@ export function InputComposer({ onSend, disabled, mentionData, conversationId })
             className: 'flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center justify-center transition-colors',
             children: jsx(ExportIcon, { className: 'w-3.5 h-3.5 text-gray-600 dark:text-gray-300' }),
           }),
-          jsx('button', {
-            onClick: send,
-            disabled: !text.trim() || disabled,
-            className: 'flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-colors',
-            children: disabled
-              ? jsx(SpinnerIcon, { className: 'w-3.5 h-3.5 text-white' })
-              : jsx(SendIcon, { className: 'w-3.5 h-3.5 text-white' }),
-          }),
+          streaming
+            ? jsx('button', {
+                onClick: onStop,
+                className: 'flex-shrink-0 w-8 h-8 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center transition-colors',
+                title: 'Stop',
+                children: jsx(StopSquareIcon, { className: 'w-3.5 h-3.5 text-white' }),
+              })
+            : jsx('button', {
+                onClick: send,
+                disabled: !text.trim(),
+                className: 'flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition-colors',
+                children: jsx(SendIcon, { className: 'w-3.5 h-3.5 text-white' }),
+              }),
         ],
       }),
     ]}),

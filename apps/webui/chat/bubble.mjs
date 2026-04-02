@@ -39,6 +39,7 @@ export function ChatBubble() {
   const [animating, setAnimating] = useState(false);
   const dragRef = useRef({ startX: 0, startY: 0, startBX: 0, startBY: 0, moved: false });
   const [hovering, setHovering] = useState(false);
+  const abortRef = useRef(null);
 
   const refreshConvList = useCallback(async () => {
     try {
@@ -180,6 +181,19 @@ export function ChatBubble() {
     } catch {}
   }
 
+  async function handleDeleteMessage(msgId) {
+    if (!activeId) return;
+    try {
+      await api(`/conversations/${activeId}/messages/${msgId}`, { method: 'DELETE' });
+      await loadConversation(activeId);
+      await refreshConvList();
+    } catch {}
+  }
+
+  function handleStop() {
+    if (abortRef.current) abortRef.current.abort();
+  }
+
   async function handleSend(content, mentions) {
     if (!activeId || streaming) return;
 
@@ -189,11 +203,15 @@ export function ChatBubble() {
     setStreamingContent('');
     setStreamingPhase('thinking');
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch(`${API}/conversations/${activeId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, mentions }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -249,6 +267,15 @@ export function ChatBubble() {
       await refreshConvList();
 
     } catch (e) {
+      if (e.name === 'AbortError') {
+        // Cancelled by user — keep whatever was streamed
+        setStreamingContent(null);
+        setStreaming(false);
+        setStreamingPhase(null);
+        await loadConversation(activeId);
+        await refreshConvList();
+        return;
+      }
       setStreamingContent(null);
       setStreaming(false);
       setStreamingPhase(null);
@@ -256,6 +283,8 @@ export function ChatBubble() {
         ...prev,
         messages: [...prev.messages, { role: 'assistant', id: 'err_' + Date.now(), content: `Error: ${e.message}`, timestamp: new Date().toISOString() }]
       } : prev);
+    } finally {
+      abortRef.current = null;
     }
   }
 
@@ -305,7 +334,8 @@ export function ChatBubble() {
       onSelectConversation: handleSelectConversation,
       onNewConversation: handleNewConversation,
       onDeleteConversation: handleDeleteConversation,
-      onSend: handleSend,
+      onSend: handleSend, onStop: handleStop,
+      onDeleteMessage: handleDeleteMessage,
       onClose: closePanel, onMinimize: closePanel,
       bubblePos, isMobile, closing: panelClosing,
       streaming, streamingContent, streamingPhase, mentionData, llmConfigured,
