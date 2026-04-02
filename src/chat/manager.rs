@@ -25,21 +25,32 @@ impl ConversationManager {
         }
     }
 
-    /// List all conversations (lightweight summaries, sorted by updated_at desc).
-    pub fn list(&self) -> Vec<ConversationSummary> {
-        let mut summaries = Vec::new();
-
+    /// List conversations (lightweight summaries, sorted by most recent first).
+    /// Uses file modification time to pre-sort and only parses the top `limit` files.
+    pub fn list(&self, limit: usize) -> Vec<ConversationSummary> {
         let entries = match std::fs::read_dir(&self.conversations_dir) {
             Ok(e) => e,
-            Err(_) => return summaries,
+            Err(_) => return Vec::new(),
         };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
+        // Collect paths with modification time, sort by most recent first
+        let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    return None;
+                }
+                let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+                Some((path, mtime))
+            })
+            .collect();
 
+        files.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Only parse the top N files
+        let mut summaries = Vec::new();
+        for (path, _) in files.into_iter().take(limit) {
             let size_bytes = std::fs::metadata(&path)
                 .map(|m| m.len())
                 .unwrap_or(0);

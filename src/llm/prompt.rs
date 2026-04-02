@@ -13,12 +13,15 @@ pub fn system_prompt() -> &'static str {
     r#"You are a helpful meeting notes assistant. You have access to transcripts from the user's meetings and can answer questions about what was discussed, who said what, action items, decisions made, and other meeting content.
 
 When answering:
+
 - Reference specific speakers by name when available
 - Include approximate timestamps when relevant
 - Be concise but thorough
 - If asked about something not covered in the provided context, say so clearly
 - Format your responses with markdown when helpful (lists, bold for emphasis, code blocks if relevant)
 - Avoid wide tables — the display is narrow. Prefer bullet lists or short key-value pairs instead. Only use tables when the user explicitly asks for one, and keep columns to 2-3 max
+
+If no meeting context is provided and the user isn't asking about a specific meeting, briefly remind them: "Use @ to mention sessions, people, or tags to give me context about your meetings."
 
 The meeting transcript context is provided below. Use it to answer the user's questions."#
 }
@@ -33,6 +36,24 @@ pub fn format_context(chunks: &[ContextChunk]) -> String {
 
     let mut output = String::new();
     let mut current_source: Option<String> = None;
+
+    // Pre-collect named attendees per session
+    let mut session_attendees: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for chunk in chunks {
+        if chunk.kind == "segment" {
+            if let Some(segment) = &chunk.segment {
+                if let Some(name) = segment.get("person_name").and_then(|v| v.as_str()) {
+                    if !name.is_empty() {
+                        let key = format!("{}:{}", chunk.source_type, chunk.source_id);
+                        let names = session_attendees.entry(key).or_default();
+                        if !names.contains(&name.to_string()) {
+                            names.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Notes come first (sorted that way), then segments
     for chunk in chunks {
@@ -52,10 +73,15 @@ pub fn format_context(chunks: &[ContextChunk]) -> String {
         // Segment — group by source session
         let source_key = format!("{}:{}", chunk.source_type, chunk.source_id);
         if current_source.as_deref() != Some(&source_key) {
-            current_source = Some(source_key);
+            current_source = Some(source_key.clone());
             let name = chunk.source_label.as_deref().unwrap_or("Untitled Session");
             let date = chunk.created_at.format("%Y-%m-%d %H:%M");
             output.push_str(&format!("\n=== Session: \"{}\" ({}) ===\n", name, date));
+            if let Some(attendees) = session_attendees.get(&source_key) {
+                if !attendees.is_empty() {
+                    output.push_str(&format!("Attendees: {}\n", attendees.join(", ")));
+                }
+            }
         }
 
         if let Some(segment) = &chunk.segment {
@@ -68,7 +94,24 @@ pub fn format_context(chunks: &[ContextChunk]) -> String {
 
             let mins = (start / 60.0) as u32;
             let secs = (start % 60.0) as u32;
-            output.push_str(&format!("[{:02}:{:02}] {}: {}\n", mins, secs, speaker, text.trim()));
+
+            // Collect low-confidence words from the words array
+            let low_conf: Vec<&str> = segment.get("words")
+                .and_then(|w| w.as_array())
+                .map(|words| {
+                    words.iter()
+                        .filter(|w| w.get("score").and_then(|s| s.as_f64()).unwrap_or(1.0) < 0.5)
+                        .filter_map(|w| w.get("word").and_then(|v| v.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if low_conf.is_empty() {
+                output.push_str(&format!("[{:02}:{:02}] {}: {}\n", mins, secs, speaker, text.trim()));
+            } else {
+                output.push_str(&format!("[{:02}:{:02}] {}: {} (low confidence: {})\n",
+                    mins, secs, speaker, text.trim(), low_conf.join(", ")));
+            }
         }
     }
 

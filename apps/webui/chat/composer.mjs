@@ -146,15 +146,23 @@ export function InputComposer({ onSend, disabled, mentionData, conversationId })
               try {
                 const res = await fetch(`${API}/conversations/${conversationId}/export-prompt`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const text = await res.text();
-                await navigator.clipboard.writeText(text);
-                const btn = document.activeElement;
-                if (btn) { btn.title = 'Copied!'; setTimeout(() => { btn.title = 'Copy prompt to clipboard'; }, 1500); }
+                let content = await res.text();
+                // Append current draft message if present
+                const draft = text.trim().replace(/@(tag|person|session):\S+\s?/g, '').trim();
+                if (draft) content += '\n\n=== USER ===\n\n' + draft + '\n';
+                // Download as text file
+                const blob = new Blob([content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `prompt-${conversationId}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
               } catch (e) {
                 alert('Export failed: ' + e.message);
               }
             },
-            title: 'Copy prompt to clipboard',
+            title: 'Download prompt as text file',
             className: 'flex-shrink-0 w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center justify-center transition-colors',
             children: jsx(ExportIcon, { className: 'w-3.5 h-3.5 text-gray-600 dark:text-gray-300' }),
           }),

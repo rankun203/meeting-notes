@@ -116,7 +116,7 @@ export function MessageThread({ messages, streamingContent, streamingPhase }) {
                 children: msg.mentions.map((m, j) =>
                   jsx('span', {
                     key: j,
-                    className: 'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-500/20 text-[9px] text-blue-300 font-medium',
+                    className: 'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-500/20 text-[9px] text-blue-600 dark:text-blue-300 font-medium',
                     children: `${m.kind === 'tag' ? '#' : m.kind === 'person' ? '\u{1F464}' : '\u{1F4DD}'} ${m.label}`,
                   })
                 ),

@@ -1,5 +1,5 @@
 import { jsx, jsxs, Fragment, formatTime, formatFileSize } from '../utils.mjs';
-import { NewChatIcon } from '../icons.mjs';
+import { PlusIcon } from '../icons.mjs';
 
 function countWords(activeConv) {
   if (!activeConv || !activeConv.messages) return 0;
@@ -27,7 +27,7 @@ function formatWordCount(n) {
   return `${n} words`;
 }
 
-export function ConversationList({ conversations, activeId, activeConv, onSelect, onNew, expanded, onToggleExpanded }) {
+export function ConversationList({ conversations, activeId, activeConv, onSelect, onNew, onDelete, expanded, onToggleExpanded }) {
   if (!conversations.length) return null;
 
   const active = conversations.find(c => c.id === activeId);
@@ -45,7 +45,7 @@ export function ConversationList({ conversations, activeId, activeConv, onSelect
             onClick: onNew,
             className: 'p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors',
             title: 'New conversation',
-            children: jsx(NewChatIcon, { className: 'w-3.5 h-3.5 text-gray-500 dark:text-gray-400' }),
+            children: jsx(PlusIcon, { className: 'w-3.5 h-3.5 text-gray-500 dark:text-gray-400' }),
           }),
         ]}),
       }),
@@ -94,9 +94,16 @@ export function ConversationList({ conversations, activeId, activeConv, onSelect
                   conv.size_bytes && jsx('span', { className: 'text-[9px] text-gray-400', children: formatFileSize(conv.size_bytes) }),
                 ],
               }),
-              conv.id !== activeId && jsx('span', {
-                className: 'text-[10px] text-blue-500 dark:text-blue-400 flex-shrink-0 font-medium',
+              conv.id !== activeId && jsx('button', {
+                onClick: (e) => { e.stopPropagation(); onSelect(conv.id); },
+                className: 'px-2 py-1 rounded text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/30 flex-shrink-0 transition-colors',
                 children: 'Resume',
+              }),
+              onDelete && jsx('button', {
+                onClick: (e) => { e.stopPropagation(); onDelete(conv.id); },
+                className: 'w-6 h-6 rounded flex items-center justify-center text-[13px] text-red-400 hover:text-red-600 hover:bg-red-100 dark:hover:bg-red-900/30 flex-shrink-0 transition-colors',
+                title: 'Delete conversation',
+                children: '\u00d7',
               }),
             ]}),
           })

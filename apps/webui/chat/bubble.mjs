@@ -168,6 +168,18 @@ export function ChatBubble() {
     setActiveId(id);
   }
 
+  async function handleDeleteConversation(id) {
+    if (!confirm('Delete this conversation?')) return;
+    try {
+      await api(`/conversations/${id}`, { method: 'DELETE' });
+      if (activeId === id) {
+        setActiveId(null);
+        setActiveConv(null);
+      }
+      await refreshConvList();
+    } catch {}
+  }
+
   async function handleSend(content, mentions) {
     if (!activeId || streaming) return;
 
@@ -292,6 +304,7 @@ export function ChatBubble() {
       conversations: convList, activeConv, activeId,
       onSelectConversation: handleSelectConversation,
       onNewConversation: handleNewConversation,
+      onDeleteConversation: handleDeleteConversation,
       onSend: handleSend,
       onClose: closePanel, onMinimize: closePanel,
       bubblePos, isMobile, closing: panelClosing,

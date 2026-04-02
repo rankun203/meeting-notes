@@ -6,7 +6,7 @@ import { ConversationList } from './conversations.mjs';
 import { MessageThread } from './thread.mjs';
 import { InputComposer } from './composer.mjs';
 
-export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onSend, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingPhase, mentionData, llmConfigured }) {
+export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingPhase, mentionData, llmConfigured }) {
   const [listExpanded, setListExpanded] = useState(false);
   const bSize = isMobile ? BUBBLE_SIZE_MOBILE : BUBBLE_SIZE;
   const pos = panelPosition(bubblePos.x, bubblePos.y, bSize, isMobile);
@@ -69,6 +69,7 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
         conversations, activeId, activeConv,
         onSelect: (id) => { onSelectConversation(id); setListExpanded(false); },
         onNew: onNewConversation,
+        onDelete: onDeleteConversation,
         expanded: listExpanded,
         onToggleExpanded: () => setListExpanded(!listExpanded),
       }),

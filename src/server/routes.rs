@@ -1290,7 +1290,7 @@ pub fn conversation_routes() -> Router<AppState> {
 async fn list_conversations(
     State(state): State<AppState>,
 ) -> Json<Value> {
-    let summaries = state.conversation_manager.list();
+    let summaries = state.conversation_manager.list(10);
     Json(json!({ "conversations": summaries }))
 }
 
