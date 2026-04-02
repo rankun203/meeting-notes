@@ -46,6 +46,14 @@ pub struct AppSettings {
     #[serde(default)]
     pub summarization_prompt: Option<String>,
 
+    /// LLM API host (OpenAI-compatible endpoint).
+    #[serde(default = "default_llm_host")]
+    pub llm_host: String,
+
+    /// LLM model identifier (e.g. "anthropic/claude-sonnet-4").
+    #[serde(default = "default_llm_model")]
+    pub llm_model: String,
+
     /// Path to the settings file (not serialized).
     #[serde(skip)]
     settings_path: PathBuf,
@@ -67,6 +75,14 @@ fn default_threshold() -> f64 {
     0.75
 }
 
+fn default_llm_host() -> String {
+    "https://openrouter.ai/api/v1".to_string()
+}
+
+fn default_llm_model() -> String {
+    "anthropic/claude-sonnet-4".to_string()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -78,6 +94,8 @@ impl Default for AppSettings {
             people_recognition: true,
             speaker_match_threshold: 0.75,
             summarization_prompt: None,
+            llm_host: default_llm_host(),
+            llm_model: default_llm_model(),
             settings_path: PathBuf::new(),
         }
     }
@@ -164,6 +182,16 @@ impl AppSettings {
         if let Some(v) = update.get("summarization_prompt") {
             self.summarization_prompt = v.as_str().map(|s| s.to_string());
         }
+        if let Some(v) = update.get("llm_host") {
+            if let Some(s) = v.as_str() {
+                self.llm_host = s.to_string();
+            }
+        }
+        if let Some(v) = update.get("llm_model") {
+            if let Some(s) = v.as_str() {
+                self.llm_model = s.to_string();
+            }
+        }
         self.save()
     }
 
@@ -199,6 +227,8 @@ impl AppSettings {
             "people_recognition": self.people_recognition,
             "speaker_match_threshold": self.speaker_match_threshold,
             "summarization_prompt": self.summarization_prompt,
+            "llm_host": self.llm_host,
+            "llm_model": self.llm_model,
         })
     }
 

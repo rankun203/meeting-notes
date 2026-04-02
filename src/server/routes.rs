@@ -1,17 +1,24 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
+    response::sse::{Event, Sse},
     routing::{delete, get, patch, post, put},
 };
+use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{info, warn, error};
 
+use crate::chat::manager::ConversationManager;
+use crate::chat::types::{ContextCriteria, Mention, Message};
 use crate::filesdb::FilesDb;
+use crate::llm::client::LlmClient;
+use crate::llm::secrets::SharedSecrets;
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::session::config::SessionConfig;
@@ -28,6 +35,8 @@ pub struct AppState {
     pub settings: SharedSettings,
     pub files_db: FilesDb,
     pub tags_manager: TagsManager,
+    pub conversation_manager: ConversationManager,
+    pub llm_secrets: SharedSecrets,
 }
 
 pub fn session_routes() -> Router<AppState> {
@@ -124,6 +133,13 @@ async fn rename_session(
     if let Some(lang) = body.get("language").and_then(|v| v.as_str()) {
         state.session_manager
             .update_session_language(&id, lang.to_string())
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
+    if body.get("notes").is_some() {
+        let notes = body.get("notes").unwrap().as_str().map(|s| s.to_string());
+        state.session_manager
+            .update_session_notes(&id, notes)
             .await
             .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
     }
@@ -651,19 +667,53 @@ async fn get_settings(
     State(state): State<AppState>,
 ) -> Json<Value> {
     let settings = state.settings.read().await;
-    Json(settings.to_masked_json())
+    let mut result = settings.to_masked_json();
+    // Add llm_api_key_set indicator for the current host (never expose the actual key)
+    let secrets = state.llm_secrets.read().await;
+    result.as_object_mut().unwrap().insert(
+        "llm_api_key_set".to_string(),
+        json!(secrets.has_api_key(&settings.llm_host)),
+    );
+    Json(result)
 }
 
 async fn update_settings(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Determine the host to associate the key with.
+    // If llm_host is being updated in this request, use the new value;
+    // otherwise fall back to the current setting.
+    let host_for_key = body.get("llm_host")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Route llm_api_key to the secrets file, keyed by host provider
+    if let Some(v) = body.get("llm_api_key") {
+        let key = v.as_str().map(|s| s.to_string());
+        let host = match &host_for_key {
+            Some(h) => h.clone(),
+            None => state.settings.read().await.llm_host.clone(),
+        };
+        let mut secrets = state.llm_secrets.write().await;
+        secrets.set_api_key(&host, key)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+        info!("LLM API key updated for host");
+    }
+
     let mut settings = state.settings.write().await;
     settings
         .merge_and_save(&body)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
     info!("Settings updated");
-    Ok(Json(settings.to_masked_json()))
+
+    let mut result = settings.to_masked_json();
+    let secrets = state.llm_secrets.read().await;
+    result.as_object_mut().unwrap().insert(
+        "llm_api_key_set".to_string(),
+        json!(secrets.has_api_key(&settings.llm_host)),
+    );
+    Ok(Json(result))
 }
 
 // --- Tag routes ---
@@ -677,6 +727,7 @@ async fn list_tags(
         json!({
             "name": t.name,
             "hidden": t.hidden,
+            "notes": t.notes,
             "session_count": counts.get(&t.name).copied().unwrap_or(0),
         })
     }).collect();
@@ -700,7 +751,10 @@ async fn update_tag(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let new_name = body.get("name").and_then(|v| v.as_str());
     let hidden = body.get("hidden").and_then(|v| v.as_bool());
-    let (tag, old_name) = state.tags_manager.update_tag(&name, new_name, hidden).await
+    let notes = if body.get("notes").is_some() {
+        Some(body.get("notes").unwrap().as_str().map(|s| s.to_string()))
+    } else { None };
+    let (tag, old_name) = state.tags_manager.update_tag(&name, new_name, hidden, notes).await
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
     // If renamed, cascade to all sessions
     if let Some(old) = old_name {
@@ -1220,3 +1274,315 @@ pub async fn resume_pending_extractions(
     }
 }
 
+// --- Conversation routes ---
+
+pub fn conversation_routes() -> Router<AppState> {
+    Router::new()
+        .route("/conversations", get(list_conversations))
+        .route("/conversations", post(create_conversation))
+        .route("/conversations/{id}", get(get_conversation))
+        .route("/conversations/{id}", delete(delete_conversation))
+        .route("/conversations/{id}/messages", post(send_message))
+        .route("/conversations/{id}/export-prompt", get(export_prompt))
+        .route("/llm/models", get(list_models))
+}
+
+async fn list_conversations(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let summaries = state.conversation_manager.list();
+    Json(json!({ "conversations": summaries }))
+}
+
+async fn create_conversation(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let title = body.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let conv = state.conversation_manager.create(title)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    Ok((StatusCode::CREATED, Json(serde_json::to_value(&conv).unwrap_or_default())))
+}
+
+async fn get_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let conv = state.conversation_manager.get_transformed(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+    Ok(Json(conv))
+}
+
+async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    state.conversation_manager.delete(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SendMessageBody {
+    content: String,
+    #[serde(default)]
+    mentions: Vec<Mention>,
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SendMessageBody>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)> {
+    // Load conversation
+    let mut conv = state.conversation_manager.get(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+
+    let now = chrono::Utc::now();
+
+    // Append user message
+    let user_msg_id = format!("msg_{}", now.timestamp_nanos_opt().unwrap_or(0));
+    conv.messages.push(Message::User {
+        id: user_msg_id,
+        content: body.content.clone(),
+        mentions: body.mentions.clone(),
+        timestamp: now,
+    });
+
+    // Auto-title from first user message
+    if conv.title.is_empty() {
+        conv.title = body.content.chars().take(60).collect();
+    }
+
+    // Build context: fetch only new chunks, dedupe against existing context
+    let new_criteria = ContextCriteria::from_mentions(&body.mentions);
+
+    // Get existing context from the most recent context_result
+    let existing_context: Vec<crate::chat::types::ContextChunk> = conv.messages.iter().rev()
+        .find_map(|m| {
+            if let Message::ContextResult { chunks, .. } = m { Some(chunks.clone()) }
+            else { None }
+        })
+        .unwrap_or_default();
+
+    let context_chunks = if !new_criteria.is_empty() {
+        // Retrieve only for the new criteria
+        let new_chunks = crate::llm::context::retrieve_context(
+            &new_criteria,
+            &state.files_db,
+            &state.session_manager,
+            &state.tags_manager,
+            &state.people_manager,
+        ).await;
+
+        // Dedupe: build a set of (kind, source_id, start_time_or_note_hash) from existing chunks
+        let chunk_key = |c: &crate::chat::types::ContextChunk| -> (String, String, u64) {
+            if c.kind == "note" {
+                let hash = c.note.as_deref().unwrap_or("").len() as u64;
+                (c.kind.clone(), c.source_id.clone(), hash)
+            } else {
+                let start_bits = c.segment.as_ref()
+                    .and_then(|s| s.get("start")).and_then(|v| v.as_f64())
+                    .unwrap_or(0.0).to_bits();
+                (c.kind.clone(), c.source_id.clone(), start_bits)
+            }
+        };
+
+        let existing_keys: std::collections::HashSet<_> = existing_context.iter()
+            .map(chunk_key)
+            .collect();
+
+        let delta: Vec<_> = new_chunks.into_iter()
+            .filter(|c| !existing_keys.contains(&chunk_key(c)))
+            .collect();
+
+        // Merge: existing + new unique chunks
+        let mut combined = existing_context;
+        combined.extend(delta.clone());
+
+        // Re-sort: notes first, then by time
+        combined.sort_by(|a, b| {
+            let a_note = a.kind == "note";
+            let b_note = b.kind == "note";
+            if a_note != b_note {
+                return if a_note { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            }
+            a.created_at.cmp(&b.created_at)
+                .then_with(|| {
+                    let as_ = a.segment.as_ref().and_then(|s| s.get("start")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let bs = b.segment.as_ref().and_then(|s| s.get("start")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    as_.partial_cmp(&bs).unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+
+        // Build merged criteria for storage
+        let mut merged_criteria = ContextCriteria::default();
+        for msg in &conv.messages {
+            if let Message::ContextResult { criteria: prev, .. } = msg {
+                merged_criteria.merge(prev);
+            }
+        }
+        merged_criteria.merge(&new_criteria);
+
+        if !combined.is_empty() {
+            let ctx_msg_id = format!("ctx_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+            conv.messages.push(Message::ContextResult {
+                id: ctx_msg_id,
+                criteria: merged_criteria,
+                chunks: combined.clone(),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
+        combined
+    } else if !existing_context.is_empty() {
+        // No new mentions — reuse existing context
+        existing_context
+    } else {
+        Vec::new()
+    };
+
+    conv.updated_at = chrono::Utc::now();
+
+    // Save conversation with user message (and possibly context)
+    state.conversation_manager.save(&conv)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    // Prepare LLM request
+    let context_str = crate::llm::prompt::format_context(&context_chunks);
+    let llm_messages = crate::llm::prompt::build_messages(&conv, &context_str);
+
+    let settings = state.settings.read().await;
+    let host = settings.llm_host.clone();
+    let model = settings.llm_model.clone();
+    drop(settings);
+
+    let secrets = state.llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    let chunk_count = context_chunks.len();
+    let session_count = {
+        let mut sids = std::collections::HashSet::new();
+        for c in &context_chunks { sids.insert(&c.source_id); }
+        sids.len()
+    };
+
+    let conv_manager = state.conversation_manager.clone();
+    let conv_id = id.clone();
+
+    // Build SSE stream
+    let stream = async_stream::stream! {
+        // Emit context loaded event if applicable
+        if chunk_count > 0 {
+            yield Ok(Event::default()
+                .event("context_loaded")
+                .data(json!({"chunk_count": chunk_count, "session_count": session_count}).to_string()));
+        }
+
+        if api_key.is_empty() {
+            yield Ok(Event::default()
+                .event("error")
+                .data(json!({"error": "LLM API key not configured. Set it in Settings > Services."}).to_string()));
+            return;
+        }
+
+        // Stream from LLM
+        let client = LlmClient::new(host, api_key, model);
+        match client.stream_chat(llm_messages).await {
+            Ok(llm_stream) => {
+                let mut full_content = String::new();
+                let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+
+                futures::pin_mut!(llm_stream);
+
+                while let Some(result) = llm_stream.next().await {
+                    match result {
+                        Ok(content) => {
+                            full_content.push_str(&content);
+                            yield Ok(Event::default()
+                                .event("delta")
+                                .data(json!({"content": content}).to_string()));
+                        }
+                        Err(e) => {
+                            yield Ok(Event::default()
+                                .event("error")
+                                .data(json!({"error": e}).to_string()));
+                            return;
+                        }
+                    }
+                }
+
+                // Save assistant message
+                if let Some(mut conv) = conv_manager.get(&conv_id) {
+                    conv.messages.push(Message::Assistant {
+                        id: assistant_msg_id.clone(),
+                        content: full_content,
+                        timestamp: chrono::Utc::now(),
+                    });
+                    conv.updated_at = chrono::Utc::now();
+                    if let Err(e) = conv_manager.save(&conv) {
+                        warn!("Failed to save assistant message: {}", e);
+                    }
+                }
+
+                yield Ok(Event::default()
+                    .event("done")
+                    .data(json!({"message_id": assistant_msg_id}).to_string()));
+            }
+            Err(e) => {
+                yield Ok(Event::default()
+                    .event("error")
+                    .data(json!({"error": e}).to_string()));
+            }
+        }
+    };
+
+    Ok(Sse::new(stream))
+}
+
+async fn export_prompt(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, [(axum::http::header::HeaderName, &'static str); 1], String), (StatusCode, Json<Value>)> {
+    let conv = state.conversation_manager.get(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+
+    // Get context from the most recent context_result
+    let context_chunks: Vec<crate::chat::types::ContextChunk> = conv.messages.iter().rev()
+        .find_map(|m| {
+            if let Message::ContextResult { chunks, .. } = m { Some(chunks.clone()) }
+            else { None }
+        })
+        .unwrap_or_default();
+
+    let context_str = crate::llm::prompt::format_context(&context_chunks);
+    let text = crate::llm::prompt::format_as_text(&conv, &context_str);
+
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        text,
+    ))
+}
+
+async fn list_models(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let settings = state.settings.read().await;
+    let host = settings.llm_host.clone();
+    drop(settings);
+
+    let secrets = state.llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    if api_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "LLM API key not configured"}))));
+    }
+
+    let result = LlmClient::list_models(&host, &api_key).await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+
+    Ok(Json(result))
+}

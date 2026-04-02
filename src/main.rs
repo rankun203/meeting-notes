@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing::info;
 
+use meeting_notes_daemon::chat::manager::ConversationManager;
 use meeting_notes_daemon::filesdb::FilesDb;
+use meeting_notes_daemon::llm::secrets::LlmSecrets;
 use meeting_notes_daemon::people::PeopleManager;
 use meeting_notes_daemon::server;
 use meeting_notes_daemon::session::SessionManager;
@@ -88,7 +90,7 @@ async fn main() {
 
     match cli.command {
         Commands::Serve { port, host, data_dir, web_ui } => {
-            info!("Meeting Notes daemon starting...");
+            info!("Meeting Notes daemon starting on port {}...", port);
             let data_dir = data_dir.unwrap_or_else(default_data_dir);
             let recordings_dir = data_dir.join("recordings");
             std::fs::create_dir_all(&recordings_dir)
@@ -112,6 +114,11 @@ async fn main() {
             let settings = AppSettings::load_or_create(&data_dir);
             let shared_settings = std::sync::Arc::new(tokio::sync::RwLock::new(settings));
 
+            let llm_secrets = LlmSecrets::load_or_create(&data_dir);
+            let shared_secrets = std::sync::Arc::new(tokio::sync::RwLock::new(llm_secrets));
+
+            let conversation_manager = ConversationManager::new(&data_dir);
+
             // Resume any pending extraction jobs from before restart
             server::routes::resume_pending_extractions(
                 manager.clone(), people_manager.clone(),
@@ -119,7 +126,8 @@ async fn main() {
             ).await;
 
             let app = server::create_router(
-                manager, people_manager, shared_settings, files_db, tags_manager, web_ui,
+                manager, people_manager, shared_settings, files_db, tags_manager,
+                conversation_manager, shared_secrets, web_ui,
             );
 
             let addr = format!("{}:{}", host, port);

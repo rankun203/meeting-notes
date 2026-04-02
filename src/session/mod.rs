@@ -601,6 +601,19 @@ impl SessionManager {
         Ok(info)
     }
 
+    pub async fn update_session_notes(&self, id: &str, notes: Option<String>) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        session.notes = notes;
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata on notes update: {}", e);
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionUpdated(info.clone()));
+        Ok(info)
+    }
+
     /// Rename a tag across all sessions.
     pub async fn rename_tag_in_all_sessions(&self, old_name: &str, new_name: &str) {
         let mut sessions = self.sessions.write().await;

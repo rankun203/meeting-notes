@@ -21,7 +21,7 @@ import { jsx, jsxs } from './utils.mjs';
  *   renderItem?: (item, highlighted: boolean) => ReactNode
  *     Optional custom renderer for each item row.
  */
-export function SearchableList({ items, onSelect, onCreateAndSelect, onClose, anchorPoint, placeholder, renderItem }) {
+export function SearchableList({ items, onSelect, onCreateAndSelect, onClose, anchorPoint, placeholder, renderItem, width }) {
   const [query, setQuery] = useState('');
   const [highlightIdx, setHighlightIdx] = useState(0);
   const inputRef = useRef(null);
@@ -104,7 +104,7 @@ export function SearchableList({ items, onSelect, onCreateAndSelect, onClose, an
     style,
     children: jsxs('div', {
       className: 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden',
-      style: { width: '220px' },
+      style: { width: width ? `${width}px` : '220px' },
       children: [
         // Search input
         jsx('div', {

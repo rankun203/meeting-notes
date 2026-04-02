@@ -16,8 +16,8 @@ export const PlusIcon = () => jsx('svg', {
   children: jsx('path', { d: 'M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z' }),
 });
 
-export const CloseIcon = () => jsx('svg', {
-  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',
+export const CloseIcon = ({ className } = {}) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: className || 'w-4 h-4',
   children: jsx('path', { d: 'M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z' }),
 });
 
@@ -107,13 +107,13 @@ export const TagIcon = ({ className }) => jsx('svg', {
   }),
 });
 
-// Chat bubble icon (speech bubble)
+// Chat bubble icon (solid filled)
 export const ChatIcon = ({ className }) => jsx('svg', {
   xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'currentColor',
   className: className || 'w-6 h-6',
   children: jsx('path', {
     fillRule: 'evenodd', clipRule: 'evenodd',
-    d: 'M4.804 21.644A6.707 6.707 0 006 21.75a6.721 6.721 0 003.583-1.029c.774.182 1.584.279 2.417.279 5.322 0 9.75-3.97 9.75-8.5S17.322 4 12 4s-9.75 3.97-9.75 8.5c0 2.012.738 3.87 1.985 5.37a.75.75 0 01.088.585l-.573 2.189zM6 24a9.204 9.204 0 01-2.746-.414l.87-3.328C2.825 18.476 1.5 16.11 1.5 12.5 1.5 7.253 6.203 3 12 3s10.5 4.253 10.5 9.5S17.797 22 12 22c-.905 0-1.786-.1-2.63-.29A9.218 9.218 0 016 24z',
+    d: 'M12 2C6.477 2 2 5.813 2 10.5c0 2.55 1.278 4.858 3.338 6.476L4.25 21.5a.75.75 0 001.068.79L9.5 20.27c.806.15 1.643.23 2.5.23 5.523 0 10-3.813 10-8.5S17.523 2 12 2z',
   }),
 });
 
@@ -151,6 +151,36 @@ export const NewChatIcon = ({ className }) => jsx('svg', {
   className: className || 'w-4 h-4',
   children: jsx('path', {
     d: 'M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z',
+  }),
+});
+
+// Context/search icon (magnifying glass with document)
+export const ContextIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-4 h-4',
+  children: jsx('path', {
+    fillRule: 'evenodd', clipRule: 'evenodd',
+    d: 'M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z',
+  }),
+});
+
+// Loading spinner icon
+export const SpinnerIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24', fill: 'none',
+  className: (className || 'w-4 h-4') + ' animate-spin',
+  children: jsx('path', {
+    d: 'M12 2a10 10 0 0110 10h-2a8 8 0 00-8-8V2z',
+    fill: 'currentColor',
+  }),
+});
+
+// Export/clipboard icon (arrow out of box)
+export const ExportIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-4 h-4',
+  children: jsx('path', {
+    fillRule: 'evenodd', clipRule: 'evenodd',
+    d: 'M13.75 7h-3V3.66l1.95 2.1a.75.75 0 101.1-1.02l-3.25-3.5a.75.75 0 00-1.1 0L6.2 4.74a.75.75 0 001.1 1.02l1.95-2.1V7h-3A2.25 2.25 0 004 9.25v7.5A2.25 2.25 0 006.25 19h7.5A2.25 2.25 0 0016 16.75v-7.5A2.25 2.25 0 0013.75 7zm-3 0h-1.5V10a.75.75 0 001.5 0V7z',
   }),
 });
 

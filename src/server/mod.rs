@@ -5,7 +5,9 @@ pub mod ws;
 use axum::Router;
 use tower_http::cors::CorsLayer;
 
+use crate::chat::manager::ConversationManager;
 use crate::filesdb::FilesDb;
+use crate::llm::secrets::SharedSecrets;
 use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::settings::SharedSettings;
@@ -19,6 +21,8 @@ pub fn create_router(
     settings: SharedSettings,
     files_db: FilesDb,
     tags_manager: TagsManager,
+    conversation_manager: ConversationManager,
+    llm_secrets: SharedSecrets,
     enable_web_ui: bool,
 ) -> Router {
     let state = AppState {
@@ -27,11 +31,14 @@ pub fn create_router(
         settings,
         files_db,
         tags_manager,
+        conversation_manager,
+        llm_secrets,
     };
 
     // All API routes (REST + WebSocket) under /api
     let api_routes = Router::new()
         .merge(routes::session_routes())
+        .merge(routes::conversation_routes())
         .merge(ws::ws_routes());
 
     let mut app = Router::new()

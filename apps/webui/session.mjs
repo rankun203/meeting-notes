@@ -211,6 +211,29 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
   const [tagPicker, setTagPicker] = useState(null); // { anchorPoint, items } or null
+  const [notes, setNotes] = useState(session?.notes || '');
+  const [notesSaving, setNotesSaving] = useState(false);
+  const notesTimer = useRef(null);
+
+  // Sync notes when session changes
+  useEffect(() => { setNotes(session?.notes || ''); }, [session?.id, session?.notes]);
+
+  function handleNotesChange(e) {
+    const val = e.target.value;
+    setNotes(val);
+    // Auto-save after 800ms of inactivity
+    clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(async () => {
+      setNotesSaving(true);
+      try {
+        await api(`/sessions/${session.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ notes: val || null }),
+        });
+      } catch {}
+      setNotesSaving(false);
+    }, 800);
+  }
 
   // Close export dropdown on outside click
   useEffect(() => {
@@ -522,6 +545,20 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                       onClose: () => setTagPicker(null),
                     }),
                   ]}),
+                ]}),
+                // Notes
+                jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
+                  jsxs('div', { className: 'flex items-center gap-2 mb-0.5', children: [
+                    jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Notes' }),
+                    notesSaving && jsx('span', { className: 'text-[10px] text-blue-500', children: 'Saving...' }),
+                  ]}),
+                  jsx('textarea', {
+                    value: notes,
+                    onChange: handleNotesChange,
+                    placeholder: 'Add notes about this session...',
+                    rows: 2,
+                    className: INPUT_CLS + ' resize-y text-xs',
+                  }),
                 ]}),
               ],
             }),

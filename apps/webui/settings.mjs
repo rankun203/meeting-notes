@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, TagIcon, ChevronIcon } from './utils.mjs';
 import { ConversationsSettings } from './chat.mjs';
+import { SearchableList } from './searchable-list.mjs';
 
 const SETTINGS_CATEGORIES = [
   { id: 'services', label: 'Services' },
@@ -197,14 +198,16 @@ function TagsSettings({ onSelectSession }) {
                   }),
                 ],
               }),
-              // Expanded: sessions list
-              expandedTag === t.name && jsx('div', {
-                className: 'border-t border-gray-200 dark:border-gray-700 px-3 py-2 bg-gray-50 dark:bg-gray-800/50',
-                children: loadingSessions
-                  ? jsx('p', { className: 'text-[11px] text-gray-400 py-1', children: 'Loading...' })
-                  : tagSessions.length === 0
-                    ? jsx('p', { className: 'text-[11px] text-gray-400 py-1', children: 'No sessions with this tag' })
-                    : jsx('div', { className: 'space-y-1', children:
+              // Expanded: notes + sessions list
+              expandedTag === t.name && jsxs('div', {
+                className: 'border-t border-gray-200 dark:border-gray-700 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 space-y-2',
+                children: [
+                  jsx(TagNotesEditor, { tag: t }),
+                  loadingSessions
+                    ? jsx('p', { className: 'text-[11px] text-gray-400 py-1', children: 'Loading...' })
+                    : tagSessions.length === 0
+                      ? jsx('p', { className: 'text-[11px] text-gray-400 py-1', children: 'No sessions with this tag' })
+                      : jsx('div', { className: 'space-y-1', children:
                         tagSessions.map(s => jsxs('div', {
                           key: s.id,
                           className: 'flex items-center justify-between py-1',
@@ -226,10 +229,133 @@ function TagsSettings({ onSelectSession }) {
                           ],
                         })),
                       }),
+                ],
               }),
             ],
           })),
         }),
+  ]});
+}
+
+// ── Tag Notes Editor ──
+
+function TagNotesEditor({ tag }) {
+  const [notes, setNotes] = useState(tag.notes || '');
+  const [saving, setSaving] = useState(false);
+  const timer = useRef(null);
+
+  useEffect(() => { setNotes(tag.notes || ''); }, [tag.name, tag.notes]);
+
+  function handleChange(e) {
+    const val = e.target.value;
+    setNotes(val);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(async () => {
+      setSaving(true);
+      try {
+        await api(`/tags/${encodeURIComponent(tag.name)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ notes: val || null }),
+        });
+      } catch {}
+      setSaving(false);
+    }, 800);
+  }
+
+  return jsxs('div', { children: [
+    jsxs('div', { className: 'flex items-center gap-2 mb-0.5', children: [
+      jsx('p', { className: 'text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Notes' }),
+      saving && jsx('span', { className: 'text-[10px] text-blue-500', children: 'Saving...' }),
+    ]}),
+    jsx('textarea', {
+      value: notes,
+      onChange: handleChange,
+      onClick: e => e.stopPropagation(),
+      placeholder: 'Add notes about this tag...',
+      rows: 2,
+      className: INPUT_CLS + ' resize-y text-xs',
+    }),
+  ]});
+}
+
+// ── LLM Settings Section with Model Picker ──
+
+function LlmSettingsSection({ form, setForm, settings }) {
+  const [modelPicker, setModelPicker] = useState(null); // { anchorPoint, items }
+  const [loadingModels, setLoadingModels] = useState(false);
+
+  async function openModelPicker(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setLoadingModels(true);
+    try {
+      const data = await api('/llm/models');
+      const models = (data.data || []).map(m => ({
+        id: m.id,
+        label: m.id,
+        detail: m.name || '',
+      }));
+      setModelPicker({
+        anchorPoint: { x: rect.left, y: rect.top },
+        items: models,
+      });
+    } catch (e) {
+      setModelPicker({
+        anchorPoint: { x: rect.left, y: rect.top },
+        items: [{ id: '_error', label: `Error: ${e.message}` }],
+      });
+    }
+    setLoadingModels(false);
+  }
+
+  return jsxs('div', { className: 'space-y-4', children: [
+    jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'AI Chat (LLM)' }),
+    jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Configure the LLM backend for the chat feature. Default: OpenRouter.' }),
+    jsxs('div', { children: [
+      jsx('label', { className: LABEL_CLS, children: 'Host URL' }),
+      jsx('input', {
+        type: 'text', value: form.llm_host,
+        onChange: e => setForm(prev => ({ ...prev, llm_host: e.target.value })),
+        placeholder: 'https://openrouter.ai/api/v1',
+        className: INPUT_CLS,
+      }),
+    ]}),
+    jsxs('div', { children: [
+      jsx('label', { className: LABEL_CLS, children: 'API Key' }),
+      jsx('input', {
+        type: 'password', value: form.llm_api_key,
+        onChange: e => setForm(prev => ({ ...prev, llm_api_key: e.target.value })),
+        placeholder: settings?.llm_api_key_set ? 'Current: configured (hidden)' : 'Enter API key',
+        className: INPUT_CLS,
+      }),
+    ]}),
+    jsxs('div', { children: [
+      jsx('label', { className: LABEL_CLS, children: 'Model' }),
+      jsxs('div', { className: 'flex gap-2', children: [
+        jsx('input', {
+          type: 'text', value: form.llm_model,
+          onChange: e => setForm(prev => ({ ...prev, llm_model: e.target.value })),
+          placeholder: 'anthropic/claude-sonnet-4',
+          className: INPUT_CLS + ' flex-1',
+        }),
+        jsx('button', {
+          onClick: openModelPicker,
+          disabled: loadingModels,
+          className: 'px-3 py-1.5 rounded-md text-xs font-medium text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-50',
+          children: loadingModels ? 'Loading...' : 'Browse',
+        }),
+      ]}),
+      modelPicker && jsx(SearchableList, {
+        items: modelPicker.items,
+        onSelect: (item) => {
+          if (item.id !== '_error') setForm(prev => ({ ...prev, llm_model: item.id }));
+          setModelPicker(null);
+        },
+        onClose: () => setModelPicker(null),
+        anchorPoint: modelPicker.anchorPoint,
+        placeholder: 'Search models...',
+        width: 440,
+      }),
+    ]}),
   ]});
 }
 
@@ -252,6 +378,9 @@ export function SettingsPage({ category, onSelectSession }) {
         people_recognition: data.people_recognition ?? true,
         speaker_match_threshold: data.speaker_match_threshold ?? 0.75,
         summarization_prompt: data.summarization_prompt || '',
+        llm_host: data.llm_host || 'https://openrouter.ai/api/v1',
+        llm_model: data.llm_model || 'anthropic/claude-sonnet-4',
+        llm_api_key: '',
       });
       setLoading(false);
     }).catch(e => { setLoading(false); setMessage(`Error: ${e.message}`); });
@@ -278,6 +407,12 @@ export function SettingsPage({ category, onSelectSession }) {
         update.speaker_match_threshold = parseFloat(form.speaker_match_threshold);
       if (form.summarization_prompt !== (settings.summarization_prompt || ''))
         update.summarization_prompt = form.summarization_prompt || null;
+      if (form.llm_host !== (settings.llm_host || ''))
+        update.llm_host = form.llm_host;
+      if (form.llm_model !== (settings.llm_model || ''))
+        update.llm_model = form.llm_model;
+      if (form.llm_api_key)
+        update.llm_api_key = form.llm_api_key;
       if (Object.keys(update).length === 0) {
         setMessage('No changes to save');
         setSaving(false);
@@ -285,7 +420,7 @@ export function SettingsPage({ category, onSelectSession }) {
       }
       const result = await api('/settings', { method: 'PUT', body: JSON.stringify(update) });
       setSettings(result);
-      setForm(prev => ({ ...prev, audio_extraction_api_key: '', file_drop_api_key: '' }));
+      setForm(prev => ({ ...prev, audio_extraction_api_key: '', file_drop_api_key: '', llm_api_key: '' }));
       setMessage('Settings saved');
     } catch (e) {
       setMessage(`Error: ${e.message}`);
@@ -345,6 +480,8 @@ export function SettingsPage({ category, onSelectSession }) {
           }),
         ]}),
       ]}),
+      jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
+      jsx(LlmSettingsSection, { form, setForm, settings }),
     ]}),
 
     pipeline: jsxs('div', { className: 'space-y-6', children: [

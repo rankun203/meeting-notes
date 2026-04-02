@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { jsx, jsxs, api, formatTime, formatDuration } from './utils.mjs';
+import { useState, useEffect, useRef } from 'react';
+import { jsx, jsxs, api, INPUT_CLS, formatTime, formatDuration } from './utils.mjs';
 
 // ── People sidebar list ──
 
@@ -56,6 +56,33 @@ export function PeopleSidebar({ selectedId, onSelect, people, onRefresh }) {
 export function PersonDetail({ person, onRefresh, onSelectSession }) {
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [notesSaving, setNotesSaving] = useState(false);
+  const notesTimer = useRef(null);
+
+  // Fetch full person detail (list endpoint doesn't include notes)
+  useEffect(() => {
+    if (!person) return;
+    api(`/people/${person.id}`)
+      .then(d => setNotes(d.notes || ''))
+      .catch(() => {});
+  }, [person?.id]);
+
+  function handleNotesChange(e) {
+    const val = e.target.value;
+    setNotes(val);
+    clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(async () => {
+      setNotesSaving(true);
+      try {
+        await api(`/people/${person.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ notes: val || null }),
+        });
+      } catch {}
+      setNotesSaving(false);
+    }, 800);
+  }
 
   useEffect(() => {
     if (!person) { setSessions([]); return; }
@@ -106,6 +133,19 @@ export function PersonDetail({ person, onRefresh, onSelectSession }) {
           jsxs('div', { children: [
             jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'ID' }),
             jsx('p', { className: 'text-xs font-mono text-gray-500', children: person.id }),
+          ]}),
+          jsxs('div', { className: 'col-span-2', children: [
+            jsxs('div', { className: 'flex items-center gap-2 mb-0.5', children: [
+              jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Notes' }),
+              notesSaving && jsx('span', { className: 'text-[10px] text-blue-500', children: 'Saving...' }),
+            ]}),
+            jsx('textarea', {
+              value: notes,
+              onChange: handleNotesChange,
+              placeholder: 'Add notes about this person...',
+              rows: 2,
+              className: INPUT_CLS + ' resize-y text-xs',
+            }),
           ]}),
         ]}),
       }),

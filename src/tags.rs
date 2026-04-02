@@ -10,6 +10,8 @@ pub struct Tag {
     pub name: String,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,14 +105,14 @@ impl TagsManager {
             return Err(format!("Tag '{}' already exists", name));
         }
 
-        let tag = Tag { name, hidden: false };
+        let tag = Tag { name, hidden: false, notes: None };
         tags.push(tag.clone());
         self.save_to_disk(&tags);
         info!("Created tag: {}", tag.name);
         Ok(tag)
     }
 
-    pub async fn update_tag(&self, name: &str, new_name: Option<&str>, hidden: Option<bool>) -> Result<(Tag, Option<String>), String> {
+    pub async fn update_tag(&self, name: &str, new_name: Option<&str>, hidden: Option<bool>, notes: Option<Option<String>>) -> Result<(Tag, Option<String>), String> {
         let mut tags = self.tags.write().await;
         let idx = tags.iter().position(|t| t.name == name)
             .ok_or_else(|| format!("Tag '{}' not found", name))?;
@@ -133,6 +135,9 @@ impl TagsManager {
         if let Some(h) = hidden {
             tags[idx].hidden = h;
         }
+        if let Some(n) = notes {
+            tags[idx].notes = n;
+        }
 
         let result = tags[idx].clone();
         self.save_to_disk(&tags);
@@ -152,6 +157,10 @@ impl TagsManager {
         self.save_to_disk(&tags);
         info!("Deleted tag: {}", name);
         Ok(())
+    }
+
+    pub async fn get_tag(&self, name: &str) -> Option<Tag> {
+        self.tags.read().await.iter().find(|t| t.name == name).cloned()
     }
 
     pub async fn tag_exists(&self, name: &str) -> bool {

@@ -184,7 +184,7 @@ export function normalizeTagName(input) {
 }
 
 // ── Icons (re-exported from icons.mjs) ──
-export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon, RecordIcon, PauseIcon, StopSquareIcon, FastForwardIcon, TranscriptIcon, TagIcon, ChatIcon, SendIcon, MinimizeIcon, SparkleIcon, NewChatIcon } from './icons.mjs';
+export { ChevronIcon, PlusIcon, CloseIcon, MenuIcon, BackIcon, PlayIcon, StopIcon, MicIcon, SpeakerIcon, SourceIcon, RecordIcon, PauseIcon, StopSquareIcon, FastForwardIcon, TranscriptIcon, TagIcon, ChatIcon, SendIcon, MinimizeIcon, SparkleIcon, NewChatIcon, ContextIcon, SpinnerIcon, ExportIcon } from './icons.mjs';
 
 // ── Shared components ──
 
