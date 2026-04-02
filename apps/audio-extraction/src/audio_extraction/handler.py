@@ -128,6 +128,7 @@ def handler(event: dict) -> dict:
     pipeline = get_pipeline()
     results = {}
     downloaded_files = []
+    track_timings: list[dict] = []
 
     try:
         # Download and decode all tracks in parallel (CPU-bound) while
@@ -162,6 +163,13 @@ def handler(event: dict) -> dict:
                 logger.info("Track \"%s\" done: %d segments, %d speakers, %.1fs audio in %.1fs (%.1fx realtime)",
                             track_name, segs, embs, dur, track_elapsed, dur / max(track_elapsed, 0.001))
 
+                track_timings.append({
+                    "track": track_name,
+                    "duration": dur,
+                    "process": track_elapsed,
+                    **result.pop("step_timings", {}),
+                })
+
                 results[track_name] = {
                     "source_type": source_type,
                     **result,
@@ -174,7 +182,23 @@ def handler(event: dict) -> dict:
                 logger.warning("Failed to clean up temp file %s: %s", path, e)
 
     total_elapsed = time.time() - job_t0
-    logger.info("Job completed: %d tracks in %.1fs", len(results), total_elapsed)
+
+    # Single summary log with per-track step timings and total
+    timing_lines = []
+    for tt in track_timings:
+        steps = " | ".join(
+            f"{k}={tt[k]:.1f}s"
+            for k in ["transcribe", "align", "diarize", "assign_speakers"]
+            if k in tt
+        )
+        timing_lines.append(
+            f'  "{tt["track"]}": {tt["duration"]:.1f}s audio, '
+            f'process={tt["process"]:.1f}s ({steps})'
+        )
+    logger.info(
+        "Job completed: %d tracks in %.1fs\n%s",
+        len(results), total_elapsed, "\n".join(timing_lines),
+    )
 
     response = {
         "tracks": results,

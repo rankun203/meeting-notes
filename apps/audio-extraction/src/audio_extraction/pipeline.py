@@ -293,23 +293,31 @@ print('DOWNLOAD_OK')
         if audio is None:
             audio = whisperx.load_audio(audio_path)
         duration_secs = len(audio) / 16000
+        step_timings: dict[str, float] = {}
 
         # Step 1: Transcribe
+        t0 = time.time()
         result = self._transcribe(audio, language)
+        step_timings["transcribe"] = time.time() - t0
 
         # Step 2: Align (word-level timestamps)
+        t0 = time.time()
         result = self._align(result["segments"], audio, result["language"])
+        step_timings["align"] = time.time() - t0
 
         # Step 3: Diarize (speaker labels + embeddings)
         speaker_embeddings = {}
         if diarize:
             logger.info("Diarization requested")
+            t0 = time.time()
             annotation, speaker_embeddings = self._diarize(
                 audio, min_speakers, max_speakers
             )
+            step_timings["diarize"] = time.time() - t0
             if annotation is None:
                 logger.warning("Diarization returned no annotation — speakers will not be assigned")
             else:
+                t0 = time.time()
                 diarize_segments = pd.DataFrame(
                     [
                         {"start": turn.start, "end": turn.end, "speaker": speaker}
@@ -319,6 +327,7 @@ print('DOWNLOAD_OK')
                 result = whisperx.assign_word_speakers(
                     diarize_segments, result, fill_nearest=True
                 )
+                step_timings["assign_speakers"] = time.time() - t0
 
         # Prefix speaker IDs to avoid cross-track collisions
         segments = _prefix_speakers(result["segments"], speaker_prefix)
@@ -330,6 +339,7 @@ print('DOWNLOAD_OK')
             "duration_secs": round(duration_secs, 2),
             "segments": segments,
             "speaker_embeddings": speaker_embeddings,
+            "step_timings": step_timings,
         }
 
 
