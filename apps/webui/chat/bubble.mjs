@@ -141,13 +141,6 @@ export function ChatBubble() {
     } else {
       setPanelOpen(true);
       setPanelClosing(false);
-      if (!activeId) {
-        try {
-          const conv = await api('/conversations', { method: 'POST', body: JSON.stringify({}) });
-          setActiveId(conv.id);
-          await refreshConvList();
-        } catch {}
-      }
     }
   }
 
@@ -156,13 +149,9 @@ export function ChatBubble() {
     setTimeout(() => { setPanelOpen(false); setPanelClosing(false); }, 150);
   }
 
-  async function handleNewConversation() {
-    try {
-      const conv = await api('/conversations', { method: 'POST', body: JSON.stringify({}) });
-      setActiveId(conv.id);
-      setActiveConv(conv);
-      await refreshConvList();
-    } catch {}
+  function handleNewConversation() {
+    setActiveId(null);
+    setActiveConv(null);
   }
 
   function handleSelectConversation(id) {
@@ -195,10 +184,21 @@ export function ChatBubble() {
   }
 
   async function handleSend(content, mentions) {
-    if (!activeId || streaming) return;
+    if (streaming) return;
+
+    // Create conversation lazily on first message
+    let convId = activeId;
+    if (!convId) {
+      try {
+        const conv = await api('/conversations', { method: 'POST', body: JSON.stringify({}) });
+        convId = conv.id;
+        setActiveId(convId);
+        setActiveConv(conv);
+      } catch { return; }
+    }
 
     const userMsg = { role: 'user', id: 'pending_' + Date.now(), content, mentions, timestamp: new Date().toISOString() };
-    setActiveConv(prev => prev ? { ...prev, messages: [...prev.messages, userMsg] } : prev);
+    setActiveConv(prev => prev ? { ...prev, messages: [...prev.messages, userMsg] } : { id: convId, messages: [userMsg] });
     setStreaming(true);
     setStreamingContent('');
     setStreamingPhase('thinking');
@@ -207,7 +207,7 @@ export function ChatBubble() {
     abortRef.current = controller;
 
     try {
-      const res = await fetch(`${API}/conversations/${activeId}/messages`, {
+      const res = await fetch(`${API}/conversations/${convId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, mentions }),
@@ -263,7 +263,7 @@ export function ChatBubble() {
       setStreamingContent(null);
       setStreaming(false);
       setStreamingPhase(null);
-      await loadConversation(activeId);
+      await loadConversation(convId);
       await refreshConvList();
 
     } catch (e) {
@@ -272,7 +272,7 @@ export function ChatBubble() {
         setStreamingContent(null);
         setStreaming(false);
         setStreamingPhase(null);
-        await loadConversation(activeId);
+        await loadConversation(convId);
         await refreshConvList();
         return;
       }

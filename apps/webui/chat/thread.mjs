@@ -142,10 +142,9 @@ export function MessageThread({ messages, streamingContent, streamingPhase, onDe
                 children: [
                   isThinking ? 'Thinking...' : isStreaming ? 'Streaming...' : formatTime(msg.timestamp),
                   !isThinking && !isStreaming && onDeleteMessage && jsx('button', {
-                    onClick: () => onDeleteMessage(msg.id),
-                    className: 'text-gray-300 dark:text-gray-600 hover:text-red-400 dark:hover:text-red-400 transition-colors',
-                    title: 'Delete message',
-                    children: '\u00d7',
+                    onClick: () => { if (confirm('Delete this message?')) onDeleteMessage(msg.id); },
+                    className: 'text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors',
+                    children: 'Delete',
                   }),
                 ],
               }),
