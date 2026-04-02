@@ -63,6 +63,8 @@ pub struct Session {
     pub tags: Vec<String>,
     /// User notes for this session.
     pub notes: Option<String>,
+    /// When true, auto-stop recording after system audio is silent for 1 minute.
+    pub auto_stop: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +103,7 @@ pub struct SessionInfo {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    pub auto_stop: bool,
 }
 
 /// Persisted state of an audio extraction job (RunPod).
@@ -144,6 +147,8 @@ pub struct SessionMetadata {
     pub tags: Vec<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub auto_stop: bool,
 }
 
 fn default_stopped_state() -> SessionState {
@@ -183,6 +188,7 @@ impl Session {
             audio_extraction: None,
             tags: Vec::new(),
             notes: None,
+            auto_stop: false,
         }
     }
 
@@ -227,6 +233,7 @@ impl Session {
             audio_extraction: meta.audio_extraction.clone(),
             tags: meta.tags.clone(),
             notes: meta.notes.clone(),
+            auto_stop: meta.auto_stop,
         }
     }
 
@@ -253,6 +260,7 @@ impl Session {
             audio_extraction: self.audio_extraction.clone(),
             tags: self.tags.clone(),
             notes: self.notes.clone(),
+            auto_stop: self.auto_stop,
         }
     }
 
@@ -314,6 +322,7 @@ impl Session {
             source_meta: self.source_meta.clone(),
             tags: self.tags.clone(),
             notes: self.notes.clone(),
+            auto_stop: self.auto_stop,
         }
     }
 

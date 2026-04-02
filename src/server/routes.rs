@@ -143,6 +143,12 @@ async fn rename_session(
             .await
             .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
     }
+    if let Some(auto_stop) = body.get("auto_stop").and_then(|v| v.as_bool()) {
+        state.session_manager
+            .set_auto_stop(&id, auto_stop)
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
     state.session_manager
         .get_session(&id)
         .await

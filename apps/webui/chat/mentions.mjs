@@ -1,4 +1,4 @@
-import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { jsx, jsxs, Fragment, formatTime } from '../utils.mjs';
 import { TagIcon } from '../icons.mjs';
 
@@ -33,20 +33,49 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
 
   const visible = items.slice(0, 20);
 
+  const listRef = useRef(null);
+
   // Reset highlight when items change
   useEffect(() => { setHighlightIdx(0); }, [q, filter]);
+
+
+  // Scroll before paint so highlight and scroll position update together
+  useLayoutEffect(() => {
+    if (!listRef.current) return;
+    const container = listRef.current;
+    const el = container.children[highlightIdx];
+    if (!el) return;
+    // Show one row beyond the highlight in the scroll direction
+    const next = container.children[highlightIdx + 1];
+    const prev = container.children[highlightIdx - 1];
+    if (next) next.scrollIntoView({ block: 'nearest' });
+    else el.scrollIntoView({ block: 'nearest' });
+    if (prev && prev.offsetTop < container.scrollTop) {
+      prev.scrollIntoView({ block: 'nearest' });
+    }
+  }, [highlightIdx]);
 
   // Expose keyboard handler to parent
   useImperativeHandle(ref, () => ({
     handleKey(e) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setHighlightIdx(prev => (prev + 1) % (visible.length || 1));
+        const len = visible.length || 1;
+        setHighlightIdx(prev => {
+          const next = (prev + 1) % len;
+          if (next === 0 && listRef.current) listRef.current.scrollTop = 0;
+          return next;
+        });
         return true;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setHighlightIdx(prev => (prev - 1 + (visible.length || 1)) % (visible.length || 1));
+        const len = visible.length || 1;
+        setHighlightIdx(prev => {
+          const next = (prev - 1 + len) % len;
+          if (next === len - 1 && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+          return next;
+        });
         return true;
       }
       if (e.key === 'ArrowLeft') {
@@ -98,6 +127,7 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
         ],
       }),
       jsx('div', {
+        ref: listRef,
         className: 'max-h-40 overflow-y-auto',
         children: visible.length === 0
           ? jsx('div', { className: 'px-3 py-2 text-xs text-gray-400', children: 'No matches' })
@@ -107,7 +137,7 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
                 onMouseDown: e => e.preventDefault(), // prevent textarea blur
                 onClick: () => onSelect(item),
                 onMouseEnter: () => setHighlightIdx(i),
-                className: `w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${i === highlightIdx ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`,
+                className: `w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${i === highlightIdx ? 'bg-blue-100 dark:bg-blue-800/40 text-blue-700 dark:text-blue-200' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`,
                 children: jsxs(Fragment, { children: [
                   kindIcon(item.kind),
                   jsx('span', { className: 'font-medium truncate flex-1', children: item.label }),

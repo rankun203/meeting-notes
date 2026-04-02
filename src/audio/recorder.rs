@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use crossbeam_channel::{self, Sender};
 use tracing::{info, warn};
 
-use super::source::{AudioChunk, AudioError, AudioSource, SourceDescriptor, sanitize_label};
+use super::source::{AudioChunk, AudioError, AudioSource, SourceDescriptor, SourceType, sanitize_label};
 use super::writer::{AudioFormat, AudioWriterHandle, Mp3Config, OpusConfig};
 
 struct ActiveSource {
@@ -12,6 +14,8 @@ struct ActiveSource {
     writer: Option<AudioWriterHandle>,
     sender: Option<Sender<AudioChunk>>,
     file_path: Option<PathBuf>,
+    /// Epoch millis of last non-silent audio chunk (updated by writer thread).
+    last_active_ms: Arc<AtomicU64>,
 }
 
 pub struct Recorder {
@@ -42,6 +46,7 @@ impl Recorder {
                 writer: None,
                 sender: None,
                 file_path: None,
+                last_active_ms: Arc::new(AtomicU64::new(0)),
             })
             .collect();
         Self {
@@ -79,6 +84,7 @@ impl Recorder {
                 self.mp3_config,
                 self.opus_config,
                 receiver,
+                active.last_active_ms.clone(),
             )?;
             active.source.as_mut().unwrap().start(sender.clone())?;
             active.writer = Some(writer);
@@ -135,6 +141,14 @@ impl Recorder {
         self.sources.iter().any(|a| {
             a.source.as_ref().map_or(false, |s| s.is_device_lost())
         })
+    }
+
+    /// Returns the epoch millis of the last non-silent audio chunk from the
+    /// system audio source, or None if no system audio source exists.
+    pub fn system_audio_last_active_ms(&self) -> Option<u64> {
+        self.sources.iter()
+            .find(|a| a.descriptor.source_type == SourceType::SystemMix)
+            .map(|a| a.last_active_ms.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Restart sources that lost their device. Stops the old stream and starts

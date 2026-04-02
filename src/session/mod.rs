@@ -29,6 +29,9 @@ pub enum ServerEvent {
     FileSizes {
         id: String,
         file_sizes: HashMap<String, u64>,
+        /// Seconds remaining before auto-stop triggers (None = not counting down).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auto_stop_remaining_secs: Option<u64>,
     },
     SessionNotice {
         id: String,
@@ -94,6 +97,7 @@ impl SessionManager {
     /// detects audio issues (e.g., mic permission denied), and auto-reconnects
     /// sources that lost their device (e.g., Teams joining a call).
     pub fn start_file_size_ticker(&self) {
+        let manager = self.clone();
         let sessions = self.sessions.clone();
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
@@ -109,6 +113,7 @@ impl SessionManager {
 
                 // Phase 1: broadcast file sizes, detect silent sources, find device-lost sessions.
                 let mut device_lost_sessions: Vec<String> = Vec::new();
+                let mut auto_stop_sessions: Vec<String> = Vec::new();
                 {
                     let mut sessions = sessions.write().await;
                     for session in sessions.values_mut() {
@@ -117,9 +122,35 @@ impl SessionManager {
                         }
 
                         let info = session.info();
+
+                        // Auto-stop: detect silence via RMS at the raw PCM level.
+                        let mut auto_stop_remaining_secs: Option<u64> = None;
+                        if session.auto_stop {
+                            if let Some(ref recorder) = session.recorder {
+                                if let Some(last_active_ms) = recorder.system_audio_last_active_ms() {
+                                    if last_active_ms > 0 {
+                                        let now_ms = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as u64;
+                                        let silent_secs = now_ms.saturating_sub(last_active_ms) / 1000;
+                                        if silent_secs >= 60 {
+                                            auto_stop_sessions.push(session.id.clone());
+                                        } else if silent_secs >= 10 {
+                                            if silent_secs < 12 {
+                                                info!("Session {}: system audio silent for {}s, auto-stop countdown started", session.id, silent_secs);
+                                            }
+                                            auto_stop_remaining_secs = Some(60 - silent_secs);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         let _ = event_tx.send(ServerEvent::FileSizes {
                             id: session.id.clone(),
                             file_sizes: info.file_sizes.clone(),
+                            auto_stop_remaining_secs,
                         });
 
                         // Update live notices (silent mic, no system audio, etc).
@@ -224,6 +255,32 @@ impl SessionManager {
                                 let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
                                 *attempts += 1;
                             }
+                        }
+                    }
+                }
+
+                // Phase 3: auto-stop sessions where system audio went silent.
+                for session_id in auto_stop_sessions {
+                    info!("Auto-stopping session {} (system audio silent for 60s)", session_id);
+                    match manager.stop_recording(&session_id).await {
+                        Ok(_) => {
+                            let mut sessions_guard = sessions.write().await;
+                            if let Some(session) = sessions_guard.get_mut(&session_id) {
+                                let notice = Notice {
+                                    key: None,
+                                    level: NoticeLevel::Info,
+                                    message: "Recording auto-stopped: system audio was silent for 1 minute".to_string(),
+                                    platform: None,
+                                    details: None,
+                                    created_at: Utc::now(),
+                                };
+                                session.notices.push(notice);
+                                let info = session.info();
+                                let _ = event_tx.send(ServerEvent::SessionUpdated(info));
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to auto-stop session {}: {}", session_id, e);
                         }
                     }
                 }
@@ -341,6 +398,24 @@ impl SessionManager {
         session.touch();
         if let Err(e) = Self::write_metadata(session) {
             warn!("Failed to write metadata on rename: {}", e);
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionUpdated(info.clone()));
+        Ok(info)
+    }
+
+    pub async fn set_auto_stop(&self, id: &str, auto_stop: bool) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        if auto_stop {
+            info!("Auto-stop enabled for session {}", id);
+        } else {
+            info!("Auto-stop disabled for session {}", id);
+        }
+        session.auto_stop = auto_stop;
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata on auto_stop update: {}", e);
         }
         let info = session.info();
         self.emit(ServerEvent::SessionUpdated(info.clone()));

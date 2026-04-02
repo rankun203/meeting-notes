@@ -218,6 +218,30 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   // Sync notes when session changes
   useEffect(() => { setNotes(session?.notes || ''); }, [session?.id, session?.notes]);
 
+  // Auto-stop countdown: tick down every second between backend updates.
+  const [autoStopCountdown, setAutoStopCountdown] = useState(null);
+  const autoStopDeadlineRef = useRef(null);
+
+  useEffect(() => {
+    const remaining = session?.auto_stop_remaining_secs;
+    if (remaining != null) {
+      autoStopDeadlineRef.current = Date.now() + remaining * 1000;
+      setAutoStopCountdown(remaining);
+    } else {
+      autoStopDeadlineRef.current = null;
+      setAutoStopCountdown(null);
+    }
+  }, [session?.auto_stop_remaining_secs]);
+
+  useEffect(() => {
+    if (autoStopDeadlineRef.current == null) return;
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((autoStopDeadlineRef.current - Date.now()) / 1000));
+      setAutoStopCountdown(remaining);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [session?.auto_stop_remaining_secs]);
+
   function handleNotesChange(e) {
     const val = e.target.value;
     setNotes(val);
@@ -571,6 +595,27 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
               jsxs('div', { className: 'flex items-center gap-2 mb-3', children: [
                 jsx('span', { className: 'w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse-recording' }),
                 jsx('p', { className: 'text-sm font-medium text-red-700 dark:text-red-300', children: 'Recording in progress' }),
+                jsx('label', {
+                  className: 'ml-auto flex items-center gap-1.5 cursor-pointer select-none',
+                  title: 'When system audio stopped receiving new audio for 1 minute, the recording will be automatically stopped',
+                  children: jsxs(Fragment, { children: [
+                    jsx('input', {
+                      type: 'checkbox',
+                      checked: s.auto_stop || false,
+                      onChange: (e) => {
+                        api(`/sessions/${s.id}`, {
+                          method: 'PATCH',
+                          body: JSON.stringify({ auto_stop: e.target.checked }),
+                        }).catch(() => {});
+                      },
+                      className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
+                    }),
+                    jsx('span', {
+                      className: 'text-xs text-red-600 dark:text-red-400',
+                      children: 'Auto-stop',
+                    }),
+                  ]}),
+                }),
               ]}),
               s.files.length > 0 && jsx('div', { className: 'flex flex-wrap gap-1.5', children:
                 s.files.map(f => jsx('span', {
@@ -586,6 +631,17 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                 })),
               }),
             ]}),
+          }),
+
+          // Auto-stop countdown notice
+          autoStopCountdown != null && s.state === 'recording' && jsxs('div', {
+            className: 'rounded-xl border p-4 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-200',
+            children: [
+              jsxs('div', { className: 'flex items-start gap-2', children: [
+                jsx('span', { className: 'flex-shrink-0 text-sm', children: '\u23F1\uFE0F' }),
+                jsx('p', { className: 'text-sm font-medium', children: `Auto-stopping in ${autoStopCountdown}s — system audio not receiving data` }),
+              ]}),
+            ],
           }),
 
           // Notices

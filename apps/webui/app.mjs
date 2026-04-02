@@ -82,7 +82,7 @@ function App() {
         break;
       case 'file_sizes':
         setSessions(prev => prev.map(s =>
-          s.id === event.data.id ? { ...s, file_sizes: event.data.file_sizes } : s
+          s.id === event.data.id ? { ...s, file_sizes: event.data.file_sizes, auto_stop_remaining_secs: event.data.auto_stop_remaining_secs ?? null } : s
         ));
         break;
       case 'session_notice':

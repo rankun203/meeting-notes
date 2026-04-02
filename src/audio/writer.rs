@@ -1,6 +1,8 @@
 use std::fmt;
 use std::io::BufWriter;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::Receiver;
@@ -12,6 +14,10 @@ use tracing::{error, info};
 use super::source::{AudioChunk, AudioError};
 
 const FLUSH_INTERVAL_CHUNKS: u64 = 100;
+
+/// RMS threshold below which audio is considered silence.
+/// -60 dBFS ≈ 0.001 amplitude.
+const SILENCE_RMS_THRESHOLD: f32 = 0.001;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -478,6 +484,7 @@ impl AudioWriterHandle {
         mp3_config: Mp3Config,
         opus_config: OpusConfig,
         receiver: Receiver<AudioChunk>,
+        last_active_ms: Arc<AtomicU64>,
     ) -> Result<Self, AudioError> {
         info!("Audio writer started ({}): \"{}\"", format, path.display());
 
@@ -492,6 +499,18 @@ impl AudioWriterHandle {
                     let actual_sample_rate = chunk.sample_rate;
                     info!("Writer for \"{}\": {}ch {}Hz", path.display(), channels, actual_sample_rate);
                     writer = Some(create_writer(format, &path, channels, actual_sample_rate, &mp3_config, &opus_config)?);
+                }
+
+                // Update last-active timestamp when audio is non-silent.
+                if !chunk.samples.is_empty() {
+                    let mean_sq = chunk.samples.iter().map(|s| s * s).sum::<f32>() / chunk.samples.len() as f32;
+                    if mean_sq.sqrt() > SILENCE_RMS_THRESHOLD {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        last_active_ms.store(now_ms, Ordering::Relaxed);
+                    }
                 }
 
                 writer.as_mut().unwrap().write_chunk(&chunk)?;
