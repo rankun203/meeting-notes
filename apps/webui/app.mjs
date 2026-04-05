@@ -120,6 +120,34 @@ function App() {
             : s
         ));
         break;
+      case 'summary_progress':
+        setSessions(prev => prev.map(s =>
+          s.id === event.data.id
+            ? { ...s, summary_processing: true, summary_streaming: '' }
+            : s
+        ));
+        break;
+      case 'summary_delta':
+        setSessions(prev => prev.map(s =>
+          s.id === event.data.id
+            ? { ...s, summary_streaming: (s.summary_streaming || '') + event.data.delta }
+            : s
+        ));
+        break;
+      case 'summary_completed':
+        setSessions(prev => prev.map(s =>
+          s.id === event.data.id
+            ? { ...s, summary_available: true, summary_processing: false, summary_streaming: null }
+            : s
+        ));
+        break;
+      case 'summary_failed':
+        setSessions(prev => prev.map(s =>
+          s.id === event.data.id
+            ? { ...s, summary_processing: false, summary_streaming: null }
+            : s
+        ));
+        break;
     }
   }
 

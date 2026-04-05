@@ -126,6 +126,26 @@ export const SendIcon = ({ className }) => jsx('svg', {
   }),
 });
 
+// Maximize icon (expand arrows)
+export const MaximizeIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-4 h-4',
+  children: jsx('path', {
+    fillRule: 'evenodd', clipRule: 'evenodd',
+    d: 'M3.75 2A1.75 1.75 0 002 3.75v3.5a.75.75 0 001.5 0v-3.5a.25.25 0 01.25-.25h3.5a.75.75 0 000-1.5h-3.5zm9 0a.75.75 0 000 1.5h3.5a.25.25 0 01.25.25v3.5a.75.75 0 001.5 0v-3.5A1.75 1.75 0 0016.25 2h-3.5zM3.5 12.75a.75.75 0 00-1.5 0v3.5c0 .966.784 1.75 1.75 1.75h3.5a.75.75 0 000-1.5h-3.5a.25.25 0 01-.25-.25v-3.5zm15 0a.75.75 0 00-1.5 0v3.5a.25.25 0 01-.25.25h-3.5a.75.75 0 000 1.5h3.5A1.75 1.75 0 0018.5 16.25v-3.5z',
+  }),
+});
+
+// Restore/shrink icon (collapse arrows)
+export const RestoreIcon = ({ className }) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-4 h-4',
+  children: jsx('path', {
+    fillRule: 'evenodd', clipRule: 'evenodd',
+    d: 'M3.28 2.22a.75.75 0 00-1.06 1.06L5.44 6.5H3.75a.75.75 0 000 1.5h3.5a.75.75 0 00.75-.75v-3.5a.75.75 0 00-1.5 0v1.69L3.28 2.22zm13.44 0a.75.75 0 010 1.06L13.5 6.5h1.75a.75.75 0 010 1.5h-3.5a.75.75 0 01-.75-.75v-3.5a.75.75 0 011.5 0v1.69l3.22-3.22a.75.75 0 011.06 0zM3.28 17.78a.75.75 0 010-1.06l3.22-3.22H4.81a.75.75 0 010-1.5h3.5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-1.69l-3.22 3.22a.75.75 0 01-1.06 0zm13.44 0a.75.75 0 01-1.06 0L12.44 14.5v1.75a.75.75 0 01-1.5 0v-3.5a.75.75 0 01.75-.75h3.5a.75.75 0 010 1.5H13.5l3.22 3.22a.75.75 0 010 1.06z',
+  }),
+});
+
 // Minimize icon (chevron down)
 export const MinimizeIcon = ({ className }) => jsx('svg', {
   xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',

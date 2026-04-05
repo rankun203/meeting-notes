@@ -329,7 +329,7 @@ function LlmSettingsSection({ form, setForm, settings }) {
       }),
     ]}),
     jsxs('div', { children: [
-      jsx('label', { className: LABEL_CLS, children: 'Model' }),
+      jsx('label', { className: LABEL_CLS, children: 'Default Model (used in chat)' }),
       jsxs('div', { className: 'flex gap-2', children: [
         jsx('input', {
           type: 'text', value: form.llm_model,
@@ -381,6 +381,9 @@ export function SettingsPage({ category, onSelectSession }) {
         llm_host: data.llm_host || 'https://openrouter.ai/api/v1',
         llm_model: data.llm_model || 'anthropic/claude-sonnet-4',
         llm_api_key: '',
+        summarization_model: data.summarization_model || '',
+        auto_transcribe: data.auto_transcribe ?? true,
+        auto_summarize: data.auto_summarize ?? false,
       });
       setLoading(false);
     }).catch(e => { setLoading(false); setMessage(`Error: ${e.message}`); });
@@ -413,6 +416,12 @@ export function SettingsPage({ category, onSelectSession }) {
         update.llm_model = form.llm_model;
       if (form.llm_api_key)
         update.llm_api_key = form.llm_api_key;
+      if (form.summarization_model !== (settings.summarization_model || ''))
+        update.summarization_model = form.summarization_model || null;
+      if (form.auto_transcribe !== settings.auto_transcribe)
+        update.auto_transcribe = form.auto_transcribe;
+      if (form.auto_summarize !== settings.auto_summarize)
+        update.auto_summarize = form.auto_summarize;
       if (Object.keys(update).length === 0) {
         setMessage('No changes to save');
         setSaving(false);
@@ -517,8 +526,65 @@ export function SettingsPage({ category, onSelectSession }) {
       ]}),
       jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
       jsxs('div', { className: 'space-y-4', children: [
+        jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Transcripts' }),
+        jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [
+          jsx('input', {
+            type: 'checkbox', checked: form.auto_transcribe,
+            onChange: e => setForm(prev => ({ ...prev, auto_transcribe: e.target.checked })),
+            className: 'w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
+          }),
+          jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Automatically generate transcript after recording is stopped' }),
+        ]}),
+      ]}),
+      jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
+      jsxs('div', { className: 'space-y-4', children: [
         jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Summarization' }),
-        jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Used when exporting transcripts as ChatGPT messages. Automatic meeting summarization with different styles coming soon.' }),
+        jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Requires AI Chat (LLM) to be configured in Services.' }),
+        jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Summarization Model' }),
+          jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'Leave empty to use the default chat model.' }),
+          jsxs('div', { className: 'flex gap-2', children: [
+            jsx('input', {
+              type: 'text', value: form.summarization_model,
+              onChange: e => setForm(prev => ({ ...prev, summarization_model: e.target.value })),
+              placeholder: form.llm_model || 'anthropic/claude-sonnet-4',
+              className: INPUT_CLS + ' flex-1',
+            }),
+            jsx('button', {
+              onClick: async (e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                try {
+                  const data = await api('/llm/models');
+                  const models = (data.data || []).map(m => ({ id: m.id, label: m.id, detail: m.name || '' }));
+                  setForm(prev => ({ ...prev, _sumModelPicker: { anchorPoint: { x: rect.left, y: rect.top }, items: models } }));
+                } catch (err) {
+                  setForm(prev => ({ ...prev, _sumModelPicker: { anchorPoint: { x: rect.left, y: rect.top }, items: [{ id: '_error', label: `Error: ${err.message}` }] } }));
+                }
+              },
+              className: 'px-3 py-1.5 rounded-md text-xs font-medium text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-50',
+              children: 'Browse',
+            }),
+          ]}),
+          form._sumModelPicker && jsx(SearchableList, {
+            items: form._sumModelPicker.items,
+            onSelect: (item) => {
+              if (item.id !== '_error') setForm(prev => ({ ...prev, summarization_model: item.id, _sumModelPicker: null }));
+              else setForm(prev => ({ ...prev, _sumModelPicker: null }));
+            },
+            onClose: () => setForm(prev => ({ ...prev, _sumModelPicker: null })),
+            anchorPoint: form._sumModelPicker.anchorPoint,
+            placeholder: 'Search models...',
+            width: 440,
+          }),
+        ]}),
+        jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [
+          jsx('input', {
+            type: 'checkbox', checked: form.auto_summarize,
+            onChange: e => setForm(prev => ({ ...prev, auto_summarize: e.target.checked })),
+            className: 'w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500',
+          }),
+          jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Automatically generate summary with selected model after transcription' }),
+        ]}),
         jsxs('div', { children: [
           jsx('label', { className: LABEL_CLS, children: 'Prompt' }),
           jsx('textarea', {

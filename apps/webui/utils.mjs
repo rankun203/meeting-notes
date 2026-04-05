@@ -53,6 +53,7 @@ export const PROCESSING_LABELS = {
   uploading: 'Uploading audio...',
   extracting: 'Transcribing...',
   matching: 'Matching speakers...',
+  summarizing: 'Generating summary...',
 };
 
 // ── API helper ──

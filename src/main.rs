@@ -123,6 +123,7 @@ async fn main() {
             server::routes::resume_pending_extractions(
                 manager.clone(), people_manager.clone(),
                 files_db.clone(), shared_settings.clone(),
+                shared_secrets.clone(), tags_manager.clone(),
             ).await;
 
             let app = server::create_router(

@@ -200,6 +200,30 @@ export function SidebarItem({ session, selected, onClick }) {
 
 // ── Session Detail ──
 
+// Lazy-load marked for summary rendering
+let markedModule = null;
+let markedLoading = false;
+const markedWaiters = [];
+
+function ensureMarked(cb) {
+  if (markedModule) { cb(); return; }
+  markedWaiters.push(cb);
+  if (markedLoading) return;
+  markedLoading = true;
+  import('marked').then(mod => {
+    markedModule = mod.marked;
+    markedModule.setOptions({ breaks: true, gfm: true });
+    for (const fn of markedWaiters) fn();
+    markedWaiters.length = 0;
+  });
+}
+
+function renderMarkdown(content) {
+  if (!content) return '';
+  if (!markedModule) return content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+  return markedModule.parse(content);
+}
+
 export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, onSelectPerson }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -212,11 +236,72 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const exportRef = useRef(null);
   const [tagPicker, setTagPicker] = useState(null); // { anchorPoint, items } or null
   const [notes, setNotes] = useState(session?.notes || '');
+  const [activeTab, setActiveTab] = useState('transcript');
+  const [summary, setSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState(null);
+  const [regenPrompt, setRegenPrompt] = useState(null); // null = hidden, string = visible
+  const regenRef = useRef(null);
   const [notesSaving, setNotesSaving] = useState(false);
   const notesTimer = useRef(null);
 
   // Sync notes when session changes
   useEffect(() => { setNotes(session?.notes || ''); }, [session?.id, session?.notes]);
+
+  // Load summary when tab switches or summary becomes available
+  useEffect(() => {
+    if (activeTab !== 'summary' || !session?.summary_available) {
+      setSummary(null);
+      return;
+    }
+    let cancelled = false;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    api(`/sessions/${session.id}/summary`).then(data => {
+      if (!cancelled) { setSummary(data); setSummaryLoading(false); }
+    }).catch(e => {
+      if (!cancelled) { setSummaryError(e.message); setSummaryLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [activeTab, session?.id, session?.summary_available]);
+
+  // Ensure marked is loaded when summary tab is shown
+  const [markedReady, setMarkedReady] = useState(!!markedModule);
+  useEffect(() => {
+    if (activeTab === 'summary' && !markedModule) {
+      ensureMarked(() => setMarkedReady(true));
+    }
+  }, [activeTab]);
+
+  async function generateSummary(additionalInstructions) {
+    setSummaryLoading(true);
+    setSummaryError(null);
+    setRegenPrompt(null);
+    const opts = {
+      method: 'POST',
+      body: JSON.stringify({ additional_instructions: additionalInstructions?.trim() || null }),
+    };
+    try {
+      await api(`/sessions/${session.id}/summarize`, opts);
+    } catch (e) {
+      setSummaryError(e.message);
+      setSummaryLoading(false);
+    }
+  }
+
+  function startRegenerate() {
+    setRegenPrompt('');
+    setTimeout(() => regenRef.current?.focus(), 0);
+  }
+
+  async function submitRegenerate() {
+    const instructions = regenPrompt;
+    if (session.summary_available) {
+      await api(`/sessions/${session.id}/summary`, { method: 'DELETE' });
+      setSummary(null);
+    }
+    generateSummary(instructions);
+  }
 
   // Auto-stop countdown: tick down every second between backend updates.
   const [autoStopCountdown, setAutoStopCountdown] = useState(null);
@@ -719,13 +804,26 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
             ]}),
           }),
 
-          // Transcript viewer
+          // Transcript / Summary tabbed viewer
           s.transcript_available && jsx('div', {
             className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
             children: jsxs(Fragment, { children: [
               jsxs('div', { className: 'flex items-center justify-between mb-3', children: [
-                jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Transcript' }),
-                jsxs('div', { className: 'flex items-baseline gap-2', children: [
+                // Tab buttons
+                jsxs('div', { className: 'flex gap-1', children: [
+                  jsx('button', {
+                    onClick: () => setActiveTab('transcript'),
+                    className: `px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider transition-colors ${activeTab === 'transcript' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
+                    children: 'Transcript',
+                  }),
+                  jsx('button', {
+                    onClick: () => setActiveTab('summary'),
+                    className: `px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider transition-colors ${activeTab === 'summary' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
+                    children: 'Summary',
+                  }),
+                ]}),
+                // Tab-specific controls
+                activeTab === 'transcript' && jsxs('div', { className: 'flex items-baseline gap-2', children: [
                   jsxs('div', { ref: exportRef, className: 'relative inline-block', children: [
                     jsx('button', {
                       onClick: () => setExportOpen(v => !v),
@@ -758,8 +856,14 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                     children: 'Re-transcribe',
                   }),
                 ]}),
+                activeTab === 'summary' && s.summary_available && regenPrompt == null && jsx('button', {
+                  onClick: startRegenerate,
+                  className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
+                  children: 'Re-generate',
+                }),
               ]}),
-              jsx(TranscriptViewer, {
+              // Tab content
+              activeTab === 'transcript' && jsx(TranscriptViewer, {
                 sessionId: s.id,
                 currentTime: playbackTime,
                 onSeek: (t) => {
@@ -767,6 +871,67 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                 },
                 onSpeakerUpdate: onRefresh,
               }),
+              activeTab === 'summary' && jsxs('div', { className: 'mt-2', children: [
+                // Additional instructions input (shown for both generate and re-generate)
+                regenPrompt != null && jsxs('div', { className: 'mb-3 space-y-2', children: [
+                  jsx('textarea', {
+                    ref: regenRef,
+                    value: regenPrompt,
+                    onChange: e => setRegenPrompt(e.target.value),
+                    onKeyDown: e => {
+                      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                        e.preventDefault();
+                        submitRegenerate();
+                      }
+                      if (e.key === 'Escape') { setRegenPrompt(null); }
+                    },
+                    placeholder: 'Additional instructions (optional). Press Enter to generate, Esc to cancel...',
+                    rows: 2,
+                    className: INPUT_CLS + ' resize-y text-sm',
+                  }),
+                  jsxs('div', { className: 'flex gap-2 justify-end', children: [
+                    jsx('button', {
+                      onClick: () => setRegenPrompt(null),
+                      className: 'px-3 py-1 rounded text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors',
+                      children: 'Cancel',
+                    }),
+                    jsx('button', {
+                      onClick: submitRegenerate,
+                      className: 'px-3 py-1 rounded text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors',
+                      children: s.summary_available ? 'Re-generate' : 'Generate Summary',
+                    }),
+                  ]}),
+                ]}),
+                // Summary content
+                summaryLoading || s.summary_processing
+                  ? jsxs('div', { children: [
+                      s.summary_streaming
+                        ? jsx('div', {
+                            className: 'md-content text-sm text-gray-900 dark:text-gray-100',
+                            dangerouslySetInnerHTML: { __html: renderMarkdown(s.summary_streaming) },
+                          })
+                        : null,
+                      jsxs('div', { className: 'flex items-center gap-3 py-4 justify-center', children: [
+                        jsx('div', { className: 'w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin' }),
+                        jsx('p', { className: 'text-xs text-gray-500', children: s.summary_streaming ? 'Streaming...' : 'Generating summary...' }),
+                      ]}),
+                    ]})
+                  : summary?.content
+                    ? jsx('div', {
+                        className: 'md-content text-sm text-gray-900 dark:text-gray-100',
+                        dangerouslySetInnerHTML: { __html: renderMarkdown(summary.content) },
+                      })
+                    : summaryError
+                      ? jsx('p', { className: 'text-sm text-red-500 py-4 text-center', children: `Error: ${summaryError}` })
+                      : regenPrompt == null && jsx('div', { className: 'py-8 text-center', children:
+                          jsx('button', {
+                            onClick: startRegenerate,
+                            disabled: loading,
+                            className: 'px-4 py-2 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition-colors',
+                            children: 'Generate Summary',
+                          }),
+                        }),
+              ]}),
             ]}),
           }),
 

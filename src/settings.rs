@@ -54,6 +54,18 @@ pub struct AppSettings {
     #[serde(default = "default_llm_model")]
     pub llm_model: String,
 
+    /// Optional separate model for summarization. Falls back to `llm_model` if None.
+    #[serde(default)]
+    pub summarization_model: Option<String>,
+
+    /// Automatically start transcription after recording stops.
+    #[serde(default = "default_true")]
+    pub auto_transcribe: bool,
+
+    /// Automatically generate summary after transcription completes.
+    #[serde(default)]
+    pub auto_summarize: bool,
+
     /// Path to the settings file (not serialized).
     #[serde(skip)]
     settings_path: PathBuf,
@@ -96,6 +108,9 @@ impl Default for AppSettings {
             summarization_prompt: None,
             llm_host: default_llm_host(),
             llm_model: default_llm_model(),
+            summarization_model: None,
+            auto_transcribe: true,
+            auto_summarize: false,
             settings_path: PathBuf::new(),
         }
     }
@@ -192,6 +207,19 @@ impl AppSettings {
                 self.llm_model = s.to_string();
             }
         }
+        if let Some(v) = update.get("summarization_model") {
+            self.summarization_model = v.as_str().map(|s| s.to_string());
+        }
+        if let Some(v) = update.get("auto_transcribe") {
+            if let Some(b) = v.as_bool() {
+                self.auto_transcribe = b;
+            }
+        }
+        if let Some(v) = update.get("auto_summarize") {
+            if let Some(b) = v.as_bool() {
+                self.auto_summarize = b;
+            }
+        }
         self.save()
     }
 
@@ -229,6 +257,9 @@ impl AppSettings {
             "summarization_prompt": self.summarization_prompt,
             "llm_host": self.llm_host,
             "llm_model": self.llm_model,
+            "summarization_model": self.summarization_model,
+            "auto_transcribe": self.auto_transcribe,
+            "auto_summarize": self.auto_summarize,
         })
     }
 

@@ -113,6 +113,45 @@ impl LlmClient {
         Ok(stream)
     }
 
+    /// Non-streaming chat completion. Returns the full response content.
+    pub async fn complete(
+        &self,
+        messages: Vec<Value>,
+    ) -> Result<String, String> {
+        let url = format!("{}/chat/completions", self.host.trim_end_matches('/'));
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+        });
+
+        let response = self.http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to connect to LLM API: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("LLM API returned {}: {}", status, body));
+        }
+
+        let json: Value = response.json().await
+            .map_err(|e| format!("Failed to parse LLM response: {e}"))?;
+
+        json.get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "LLM response missing content".to_string())
+    }
+
     /// Fetch available models from the API.
     pub async fn list_models(host: &str, api_key: &str) -> Result<Value, String> {
         let url = format!("{}/models", host.trim_end_matches('/'));

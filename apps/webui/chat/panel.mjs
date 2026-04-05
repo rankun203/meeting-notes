@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { jsx, jsxs, Fragment } from '../utils.mjs';
-import { SparkleIcon, MinimizeIcon, CloseIcon } from '../icons.mjs';
+import { SparkleIcon, MinimizeIcon, MaximizeIcon, RestoreIcon, CloseIcon } from '../icons.mjs';
 import { panelPosition, BUBBLE_SIZE, BUBBLE_SIZE_MOBILE } from './constants.mjs';
 import { ConversationList } from './conversations.mjs';
 import { MessageThread } from './thread.mjs';
@@ -8,11 +8,12 @@ import { InputComposer } from './composer.mjs';
 
 export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingPhase, mentionData, llmConfigured }) {
   const [listExpanded, setListExpanded] = useState(false);
+  const [maximized, setMaximized] = useState(false);
   const bSize = isMobile ? BUBBLE_SIZE_MOBILE : BUBBLE_SIZE;
   const pos = panelPosition(bubblePos.x, bubblePos.y, bSize, isMobile);
 
-  const panelStyle = isMobile
-    ? { position: 'fixed', top: pos.top, left: pos.left, right: pos.right, bottom: pos.bottom, zIndex: 10000 }
+  const panelStyle = isMobile || maximized
+    ? { position: 'fixed', top: maximized ? 0 : pos.top, left: 0, right: 0, bottom: 0, zIndex: 10000 }
     : { position: 'fixed', top: pos.top, left: pos.left, width: pos.width, height: pos.height, zIndex: 10000 };
 
   const bCenterX = bubblePos.x + bSize / 2, bCenterY = bubblePos.y + bSize / 2;
@@ -21,7 +22,7 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
 
   return jsx('div', {
     style: { ...panelStyle, transformOrigin: `${originX} ${originY}` },
-    className: `flex flex-col bg-white dark:bg-gray-900 ${isMobile ? 'rounded-t-2xl' : 'rounded-2xl'} shadow-2xl border border-gray-200 dark:border-gray-800 overflow-hidden ${closing ? 'chat-panel-exit' : 'chat-panel-enter'}`,
+    className: `flex flex-col bg-white dark:bg-gray-900 ${maximized ? '' : isMobile ? 'rounded-t-2xl' : 'rounded-2xl'} shadow-2xl border border-gray-200 dark:border-gray-800 overflow-hidden ${closing ? 'chat-panel-exit' : 'chat-panel-enter'}`,
     children: jsxs(Fragment, { children: [
       // Header
       jsx('div', {
@@ -49,6 +50,14 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
           jsxs('div', {
             className: 'flex items-center gap-1',
             children: [
+              !isMobile && jsx('button', {
+                onClick: () => setMaximized(v => !v),
+                className: 'p-1.5 rounded-lg hover:bg-white/20 transition-colors',
+                title: maximized ? 'Restore' : 'Maximize',
+                children: maximized
+                  ? jsx(RestoreIcon, { className: 'w-4 h-4 text-white' })
+                  : jsx(MaximizeIcon, { className: 'w-4 h-4 text-white' }),
+              }),
               jsx('button', {
                 onClick: onMinimize,
                 className: 'p-1.5 rounded-lg hover:bg-white/20 transition-colors',

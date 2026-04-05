@@ -162,6 +162,62 @@ pub async fn retrieve_context(
     chunks
 }
 
+/// Collect notes for a list of tags. Returns `(tag_name, notes)` pairs.
+pub async fn collect_tag_notes(
+    tags_manager: &TagsManager,
+    tag_names: &[String],
+) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for name in tag_names {
+        if let Some(tag) = tags_manager.get_tag(name).await {
+            if let Some(notes) = tag.notes {
+                if !notes.trim().is_empty() {
+                    result.push((name.clone(), notes));
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Collect notes for people by their IDs. Returns `(person_name, notes)` pairs.
+pub async fn collect_person_notes(
+    people_manager: &PeopleManager,
+    person_ids: &[(String, String)], // (person_id, display_name)
+) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for (pid, display_name) in person_ids {
+        if let Some(person) = people_manager.get_person(pid).await {
+            if let Some(notes) = person.notes {
+                if !notes.trim().is_empty() {
+                    result.push((display_name.clone(), notes));
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Extract unique person IDs and display names from transcript segments.
+pub fn extract_person_ids(transcript: &serde_json::Value) -> Vec<(String, String)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    if let Some(segments) = transcript.get("segments").and_then(|s| s.as_array()) {
+        for seg in segments {
+            if let Some(pid) = seg.get("person_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                if seen.insert(pid.to_string()) {
+                    let name = seg.get("person_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(pid)
+                        .to_string();
+                    result.push((pid.to_string(), name));
+                }
+            }
+        }
+    }
+    result
+}
+
 async fn has_tag_match(session_id: &str, tags: &[String], session_manager: &SessionManager) -> bool {
     if tags.is_empty() {
         return false;

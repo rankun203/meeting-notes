@@ -67,8 +67,8 @@
   }
 }
 /* light */
+@media (prefers-color-scheme: light) {
 .md-content {
-  /* light */
   color-scheme: light;
   --focus-outlineColor: #0969da;
   --fgColor-default: #1f2328;
@@ -120,6 +120,7 @@
   --color-prettylights-syntax-markup-ignored-bg: #0550ae;
   --color-prettylights-syntax-meta-diff-range: #8250df;
   --color-prettylights-syntax-sublimelinter-gutter-mark: #818b98;
+}
 }
 
 .md-content {

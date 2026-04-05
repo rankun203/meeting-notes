@@ -26,6 +26,41 @@ If no meeting context is provided and the user isn't asking about a specific mee
 The meeting transcript context is provided below. Use it to answer the user's questions."#
 }
 
+/// Format a single transcript segment into a timestamped line with speaker
+/// and low-confidence word annotations.
+///
+/// Used by both chat context formatting and summarization transcript formatting.
+pub fn format_segment(segment: &Value) -> String {
+    let start = segment.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let text = segment.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    let speaker = segment.get("person_name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| segment.get("speaker").and_then(|v| v.as_str()))
+        .unwrap_or("Unknown");
+
+    let mins = (start / 60.0) as u32;
+    let secs = (start % 60.0) as u32;
+
+    // Collect low-confidence words from the words array
+    let low_conf: Vec<&str> = segment.get("words")
+        .and_then(|w| w.as_array())
+        .map(|words| {
+            words.iter()
+                .filter(|w| w.get("score").and_then(|s| s.as_f64()).unwrap_or(1.0) < 0.5)
+                .filter_map(|w| w.get("word").and_then(|v| v.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if low_conf.is_empty() {
+        format!("[{:02}:{:02}] {}: {}\n", mins, secs, speaker, text.trim())
+    } else {
+        format!("[{:02}:{:02}] {}: {} (low confidence: {})\n",
+            mins, secs, speaker, text.trim(), low_conf.join(", "))
+    }
+}
+
 /// Format context chunks into a readable string for the LLM.
 ///
 /// Groups segments by session and formats with timestamps and speaker names.
@@ -85,33 +120,7 @@ pub fn format_context(chunks: &[ContextChunk]) -> String {
         }
 
         if let Some(segment) = &chunk.segment {
-            let start = segment.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let text = segment.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            let speaker = segment.get("person_name")
-                .and_then(|v| v.as_str())
-                .or_else(|| segment.get("speaker").and_then(|v| v.as_str()))
-                .unwrap_or("Unknown");
-
-            let mins = (start / 60.0) as u32;
-            let secs = (start % 60.0) as u32;
-
-            // Collect low-confidence words from the words array
-            let low_conf: Vec<&str> = segment.get("words")
-                .and_then(|w| w.as_array())
-                .map(|words| {
-                    words.iter()
-                        .filter(|w| w.get("score").and_then(|s| s.as_f64()).unwrap_or(1.0) < 0.5)
-                        .filter_map(|w| w.get("word").and_then(|v| v.as_str()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            if low_conf.is_empty() {
-                output.push_str(&format!("[{:02}:{:02}] {}: {}\n", mins, secs, speaker, text.trim()));
-            } else {
-                output.push_str(&format!("[{:02}:{:02}] {}: {} (low confidence: {})\n",
-                    mins, secs, speaker, text.trim(), low_conf.join(", ")));
-            }
+            output.push_str(&format_segment(segment));
         }
     }
 

@@ -54,6 +54,21 @@ pub enum ServerEvent {
         id: String,
         error: String,
     },
+    SummaryProgress {
+        id: String,
+        status: String,
+    },
+    SummaryDelta {
+        id: String,
+        delta: String,
+    },
+    SummaryCompleted {
+        id: String,
+    },
+    SummaryFailed {
+        id: String,
+        error: String,
+    },
 }
 
 #[derive(Clone)]
@@ -633,6 +648,33 @@ impl SessionManager {
 
     pub fn emit_transcription_failed(&self, id: &str, error: &str) {
         self.emit(ServerEvent::TranscriptionFailed {
+            id: id.to_string(),
+            error: error.to_string(),
+        });
+    }
+
+    pub fn emit_summary_delta(&self, id: &str, delta: &str) {
+        self.emit(ServerEvent::SummaryDelta {
+            id: id.to_string(),
+            delta: delta.to_string(),
+        });
+    }
+
+    pub fn emit_summary_progress(&self, id: &str, status: &str) {
+        self.emit(ServerEvent::SummaryProgress {
+            id: id.to_string(),
+            status: status.to_string(),
+        });
+    }
+
+    pub fn emit_summary_completed(&self, id: &str) {
+        self.emit(ServerEvent::SummaryCompleted {
+            id: id.to_string(),
+        });
+    }
+
+    pub fn emit_summary_failed(&self, id: &str, error: &str) {
+        self.emit(ServerEvent::SummaryFailed {
             id: id.to_string(),
             error: error.to_string(),
         });

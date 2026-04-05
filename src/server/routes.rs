@@ -55,6 +55,9 @@ pub fn session_routes() -> Router<AppState> {
         .route("/sessions/{id}/attribution", get(get_attribution))
         .route("/sessions/{id}/attribution", post(update_attribution))
         .route("/sessions/{id}/transcribe", post(transcribe_session))
+        .route("/sessions/{id}/summarize", post(summarize_session))
+        .route("/sessions/{id}/summary", get(get_summary))
+        .route("/sessions/{id}/summary", delete(delete_summary))
         .route("/sessions/{id}/waveform/{filename}", get(get_waveform))
         .route("/people", get(list_people))
         .route("/people", post(create_person))
@@ -185,11 +188,81 @@ async fn stop_recording(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    state.session_manager
+    let files = state.session_manager
         .stop_recording(&id)
         .await
-        .map(|files| Json(json!({"status": "stopped", "files": files})))
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+
+    // Auto-transcribe if enabled
+    let settings = state.settings.read().await;
+    let should_auto_transcribe = settings.auto_transcribe && settings.is_extraction_configured();
+    let extraction_url = settings.audio_extraction_url.clone();
+    let extraction_key = settings.audio_extraction_api_key.clone();
+    let file_drop_url = settings.file_drop_url.clone();
+    let file_drop_api_key = settings.file_drop_api_key.clone();
+    let diarize = settings.diarize;
+    let people_recognition = settings.people_recognition;
+    let match_threshold = settings.speaker_match_threshold;
+    drop(settings);
+
+    if should_auto_transcribe {
+        if let Ok((session_dir, language, source_meta)) = state
+            .session_manager
+            .get_session_extraction_info(&id)
+            .await
+        {
+            // Only auto-transcribe if not already processing
+            let already_processing = state.session_manager.get_session(&id).await
+                .map(|s| s.processing_state.is_some())
+                .unwrap_or(false);
+
+            if !already_processing {
+                state.session_manager
+                    .set_processing_state(&id, Some("starting".to_string()))
+                    .await;
+
+                let session_manager = state.session_manager.clone();
+                let people_manager = state.people_manager.clone();
+                let files_db = state.files_db.clone();
+                let settings_clone = state.settings.clone();
+                let llm_secrets = state.llm_secrets.clone();
+                let tags_mgr = state.tags_manager.clone();
+                let session_id = id.clone();
+                let eu = extraction_url.unwrap();
+                let ek = extraction_key.unwrap();
+
+                tokio::spawn(async move {
+                    let result = run_transcription_pipeline(
+                        &session_id, &session_dir, &language, &source_meta,
+                        &eu, &ek, &file_drop_url, &file_drop_api_key,
+                        diarize, people_recognition, match_threshold,
+                        &session_manager, &people_manager, &files_db,
+                    ).await;
+
+                    match result {
+                        Ok(unconfirmed) => {
+                            session_manager.set_processing_state(&session_id, None).await;
+                            session_manager.emit_transcription_completed(&session_id, unconfirmed);
+                            info!("Auto-transcription completed for session {}", session_id);
+
+                            // Auto-summarize if enabled
+                            maybe_auto_summarize(
+                                &session_id, &session_manager,
+                                &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
+                            ).await;
+                        }
+                        Err(e) => {
+                            error!("Auto-transcription failed for session {}: {}", session_id, e);
+                            session_manager.set_processing_state(&session_id, None).await;
+                            session_manager.emit_transcription_failed(&session_id, &e);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    Ok(Json(json!({"status": "stopped", "files": files})))
 }
 
 async fn get_files(
@@ -863,6 +936,9 @@ async fn transcribe_session(
     let session_manager = state.session_manager.clone();
     let people_manager = state.people_manager.clone();
     let files_db = state.files_db.clone();
+    let settings_clone = state.settings.clone();
+    let llm_secrets = state.llm_secrets.clone();
+    let tags_mgr = state.tags_manager.clone();
     let session_id = id.clone();
 
     tokio::spawn(async move {
@@ -891,6 +967,12 @@ async fn transcribe_session(
                     .await;
                 session_manager.emit_transcription_completed(&session_id, unconfirmed);
                 info!("Transcription completed for session {}", session_id);
+
+                // Auto-summarize if enabled
+                maybe_auto_summarize(
+                    &session_id, &session_manager,
+                    &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
+                ).await;
             }
             Err(e) => {
                 error!("Transcription failed for session {}: {}", session_id, e);
@@ -1150,6 +1232,151 @@ async fn process_extraction_output(
     Ok(unconfirmed)
 }
 
+// ── Summary endpoints ──
+
+async fn get_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let path = dir.join("summary.json");
+    if !path.exists() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "summary not found"}))));
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to read summary: {e}")}))))?;
+    let json: Value = serde_json::from_str(&content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to parse summary: {e}")}))))?;
+    Ok(Json(json))
+}
+
+async fn delete_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let path = dir.join("summary.json");
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to delete summary: {e}")}))))?;
+    }
+    Ok(Json(json!({"status": "deleted"})))
+}
+
+#[derive(Deserialize, Default)]
+struct SummarizeRequest {
+    #[serde(default)]
+    additional_instructions: Option<String>,
+}
+
+async fn summarize_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<SummarizeRequest>>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let additional = body.and_then(|b| b.0.additional_instructions);
+
+    // Check LLM configuration
+    let settings = state.settings.read().await;
+    let host = settings.llm_host.clone();
+    let model = settings.summarization_model.clone()
+        .unwrap_or_else(|| settings.llm_model.clone());
+    let mut prompt = settings.summarization_prompt.clone()
+        .unwrap_or_else(|| "Summarize this meeting transcript, highlighting key decisions, action items, and important discussion points.".to_string());
+    drop(settings);
+
+    if let Some(extra) = additional {
+        if !extra.trim().is_empty() {
+            prompt.push_str(&format!("\n\nAdditional instructions: {}", extra.trim()));
+        }
+    }
+
+    let secrets = state.llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    if api_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "LLM API key not configured"}))));
+    }
+
+    // Check transcript exists and get session info
+    let dir = state.session_manager.session_dir(&id);
+    let transcript_path = dir.join("transcript.json");
+    if !transcript_path.exists() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "No transcript available to summarize"}))));
+    }
+
+    let session_info = state.session_manager.get_session(&id).await;
+
+    // Spawn background task
+    let session_manager = state.session_manager.clone();
+    let people_manager = state.people_manager.clone();
+    let tags_mgr = state.tags_manager.clone();
+    let session_id = id.clone();
+
+    tokio::spawn(async move {
+        session_manager.emit_summary_progress(&session_id, "summarizing");
+        match crate::chat::summarize::run_summarization(&session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), &tags_mgr, &people_manager, &session_manager).await {
+            Ok(_) => {
+                session_manager.emit_summary_completed(&session_id);
+                info!("Summary generated for session {}", session_id);
+            }
+            Err(e) => {
+                error!("Summary failed for session {}: {}", session_id, e);
+                session_manager.emit_summary_failed(&session_id, &e);
+            }
+        }
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(json!({"status": "processing"}))))
+}
+
+/// Check settings and run auto-summarization if enabled.
+async fn maybe_auto_summarize(
+    session_id: &str,
+    session_manager: &SessionManager,
+    settings: &SharedSettings,
+    llm_secrets: &SharedSecrets,
+    tags_manager: &TagsManager,
+    people_manager: &PeopleManager,
+) {
+    let s = settings.read().await;
+    if !s.auto_summarize {
+        return;
+    }
+    let host = s.llm_host.clone();
+    let model = s.summarization_model.clone().unwrap_or_else(|| s.llm_model.clone());
+    let prompt = s.summarization_prompt.clone()
+        .unwrap_or_else(|| "Summarize this meeting transcript, highlighting key decisions, action items, and important discussion points.".to_string());
+    drop(s);
+
+    let secrets = llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    if api_key.is_empty() {
+        warn!("[{}] Auto-summarize skipped: no LLM API key configured", session_id);
+        return;
+    }
+
+    let dir = session_manager.session_dir(session_id);
+    let session_info = session_manager.get_session(session_id).await;
+
+    session_manager.emit_summary_progress(session_id, "summarizing");
+
+    match crate::chat::summarize::run_summarization(session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), tags_manager, people_manager, session_manager).await {
+        Ok(_) => {
+            session_manager.emit_summary_completed(session_id);
+            info!("[{}] Auto-summary generated", session_id);
+        }
+        Err(e) => {
+            error!("[{}] Auto-summary failed: {}", session_id, e);
+            session_manager.emit_summary_failed(session_id, &e);
+        }
+    }
+}
+
+
 /// Poll an extraction job until completion. No timeout — keeps polling forever.
 async fn poll_extraction_job(
     client: &ExtractionClient,
@@ -1180,6 +1407,8 @@ pub async fn resume_pending_extractions(
     people_manager: PeopleManager,
     files_db: FilesDb,
     settings: SharedSettings,
+    llm_secrets: SharedSecrets,
+    tags_manager: TagsManager,
 ) {
     let pending = session_manager.get_pending_extractions().await;
     if pending.is_empty() { return; }
@@ -1217,6 +1446,8 @@ pub async fn resume_pending_extractions(
         let pm = people_manager.clone();
         let fdb = files_db.clone();
         let stg = settings.clone();
+        let secrets = llm_secrets.clone();
+        let tm = tags_manager.clone();
 
         info!("Resuming extraction job {} for session {}", job.job_id, session_id);
 
@@ -1260,6 +1491,8 @@ pub async fn resume_pending_extractions(
                             sm.set_processing_state(&session_id, None).await;
                             sm.emit_transcription_completed(&session_id, unconfirmed);
                             info!("[{}] Resumed transcription completed", session_id);
+
+                            maybe_auto_summarize(&session_id, &sm, &stg, &secrets, &tm, &pm).await;
                         }
                         Err(e) => {
                             error!("[{}] Resumed transcription post-processing failed: {}", session_id, e);
