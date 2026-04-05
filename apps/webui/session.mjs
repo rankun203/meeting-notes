@@ -224,7 +224,17 @@ function renderMarkdown(content) {
   return markedModule.parse(content);
 }
 
-export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, onSelectPerson }) {
+// Convert [MM:SS] citation markers into clickable links for a given session
+function convertCitations(content, sessionId) {
+  if (!content) return content;
+  // Convert [MM:SS] and 【MM:SS】 to markdown links, add space between consecutive citations
+  return content.replace(/[\[【](\d+):(\d{2})[\]】](?!\()/g, (match, mins, secs) => {
+    const total = parseInt(mins) * 60 + parseInt(secs);
+    return `[${mins}:${secs}](/sessions/${sessionId}?content_panel=transcript&jump=${total})`;
+  }).replace(/\)\[/g, ') [');
+}
+
+export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, onSelectPerson, routeQuery }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [renaming, setRenaming] = useState(false);
@@ -257,6 +267,24 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
 
   // Sync notes when updated externally
   useEffect(() => { setNotes(session?.notes || ''); }, [session?.notes]);
+
+  // Handle route query params (content_panel, jump)
+  useEffect(() => {
+    if (!routeQuery || !session) return;
+    if (routeQuery.contentPanel) {
+      setActiveTab(routeQuery.contentPanel);
+    }
+    if (routeQuery.jump != null && playerRef.current) {
+      setTimeout(() => {
+        if (playerRef.current) playerRef.current.seekAndPlay(routeQuery.jump);
+      }, 300); // small delay for player to mount
+    }
+    // Clear query params from URL after handling
+    if (routeQuery.contentPanel || routeQuery.jump != null) {
+      const cleanUrl = window.location.pathname;
+      history.replaceState(null, '', cleanUrl);
+    }
+  }, [session?.id, routeQuery]);
 
   // Load summary when tab switches or summary becomes available
   useEffect(() => {
@@ -927,7 +955,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                       s.summary_streaming
                         ? jsx('div', {
                             className: 'md-content text-sm text-gray-900 dark:text-gray-100',
-                            dangerouslySetInnerHTML: { __html: renderMarkdown(s.summary_streaming) },
+                            dangerouslySetInnerHTML: { __html: renderMarkdown(convertCitations(s.summary_streaming, s.id)) },
                           })
                         : null,
                       jsxs('div', { className: 'flex items-center gap-3 py-4 justify-center', children: [
@@ -938,7 +966,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                   : summary?.content
                     ? jsx('div', {
                         className: 'md-content text-sm text-gray-900 dark:text-gray-100',
-                        dangerouslySetInnerHTML: { __html: renderMarkdown(summary.content) },
+                        dangerouslySetInnerHTML: { __html: renderMarkdown(convertCitations(summary.content, s.id)) },
                         ref: el => {
                           if (!el) return;
                           el.querySelectorAll('input[type="checkbox"]').forEach((cb, idx) => {
@@ -959,7 +987,24 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                             const li = cb.closest('li');
                             if (li) {
                               li.style.cursor = 'pointer';
-                              li.onclick = e => { if (e.target.tagName !== 'INPUT') toggle(); };
+                              li.onclick = e => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'A') toggle(); };
+                            }
+                          });
+                          // Intercept citation links for in-app navigation
+                          el.querySelectorAll('a[href*="/sessions/"]').forEach(a => {
+                            const href = a.getAttribute('href');
+                            if (href && href.includes('jump=')) {
+                              a.style.cursor = 'pointer';
+                              a.onclick = e => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const url = new URL(href, window.location.origin);
+                                const jump = parseFloat(url.searchParams.get('jump'));
+                                if (!isNaN(jump) && playerRef.current) {
+                                  setActiveTab('transcript');
+                                  playerRef.current.seekAndPlay(jump);
+                                }
+                              };
                             }
                           });
                         },
@@ -967,7 +1012,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                     : s.summary_streaming
                       ? jsx('div', {
                           className: 'md-content text-sm text-gray-900 dark:text-gray-100',
-                          dangerouslySetInnerHTML: { __html: renderMarkdown(s.summary_streaming) },
+                          dangerouslySetInnerHTML: { __html: renderMarkdown(convertCitations(s.summary_streaming, s.id)) },
                         })
                     : summaryError
                       ? jsx('p', { className: 'text-sm text-red-500 py-4 text-center', children: `Error: ${summaryError}` })

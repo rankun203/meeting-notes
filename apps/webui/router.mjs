@@ -11,19 +11,25 @@
  *   /settings                → { view: 'settings', settingsCategory: 'services' }
  *   /settings/recognition    → { view: 'settings', settingsCategory: 'recognition' }
  */
-export function parseRoute(pathname) {
+export function parseRoute(pathname, search) {
   const parts = pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
   const first = parts[0] || 'sessions';
   const second = parts[1] || null;
 
+  // Parse query params
+  const params = new URLSearchParams(search || '');
+  const query = {};
+  if (params.get('content_panel')) query.contentPanel = params.get('content_panel');
+  if (params.get('jump')) query.jump = parseFloat(params.get('jump'));
+
   switch (first) {
     case 'people':
-      return { view: 'people', selectedPersonId: second };
+      return { view: 'people', selectedPersonId: second, query };
     case 'settings':
-      return { view: 'settings', settingsCategory: second || 'services' };
+      return { view: 'settings', settingsCategory: second || 'services', query };
     case 'sessions':
     default:
-      return { view: 'sessions', selectedId: second };
+      return { view: 'sessions', selectedId: second, query };
   }
 }
 

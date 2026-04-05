@@ -10,7 +10,7 @@ import { ChatBubble } from './chat.mjs';
 
 function App() {
   // Initialize state from URL
-  const initialRoute = parseRoute(window.location.pathname);
+  const initialRoute = parseRoute(window.location.pathname, window.location.search);
 
   const [sessions, setSessions] = useState([]);
   const [total, setTotal] = useState(0);
@@ -24,6 +24,7 @@ function App() {
   const [settingsCategory, setSettingsCategory] = useState(initialRoute.settingsCategory ?? 'services');
   const [people, setPeople] = useState([]);
   const [selectedPersonId, setSelectedPersonId] = useState(initialRoute.selectedPersonId ?? null);
+  const [routeQuery, setRouteQuery] = useState(initialRoute.query || {});
   const isMobile = useIsMobile();
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
@@ -37,11 +38,13 @@ function App() {
     } else {
       history.pushState(null, '', path);
     }
-    const r = parseRoute(path);
+    const url = new URL(path, window.location.origin);
+    const r = parseRoute(url.pathname, url.search);
     setCurrentView(r.view);
     setSelectedId(r.selectedId ?? null);
     setSelectedPersonId(r.selectedPersonId ?? null);
     setSettingsCategory(r.settingsCategory ?? 'services');
+    setRouteQuery(r.query || {});
     // Mobile view
     if (r.view === 'sessions' && r.selectedId) setMobileView('detail');
     else if (r.view === 'sessions') setMobileView('list');
@@ -50,11 +53,12 @@ function App() {
   // Handle browser back/forward
   useEffect(() => {
     function onPopState() {
-      const r = parseRoute(window.location.pathname);
+      const r = parseRoute(window.location.pathname, window.location.search);
       setCurrentView(r.view);
       setSelectedId(r.selectedId ?? null);
       setSelectedPersonId(r.selectedPersonId ?? null);
       setSettingsCategory(r.settingsCategory ?? 'services');
+      setRouteQuery(r.query || {});
       if (r.view === 'sessions' && r.selectedId) setMobileView('detail');
       else if (r.view === 'sessions') setMobileView('list');
     }
@@ -245,6 +249,7 @@ function App() {
       isMobile: isMobile,
       onSelectPerson: (personId) => navigateTo(buildPath('people', personId)),
       fields,
+      routeQuery,
     });
   }
 

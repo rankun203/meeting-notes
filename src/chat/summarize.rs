@@ -34,6 +34,15 @@ pub fn build_system_prompt(user_prompt: &str, ctx: &SummarizationContext) -> Str
     let mut prompt = user_prompt.to_string();
 
     prompt.push_str("\n\nWhen listing action items or TODOs, use markdown checkbox syntax: `- [ ] item` for incomplete and `- [x] item` for completed.");
+
+    // Citation instructions
+    prompt.push_str(
+        "\n\nFor every key point, decision, action item, or claim, add citations using the exact [MM:SS] timestamp from the transcript line it came from. \
+Place citations inline at the end of the relevant sentence or item. \
+When a claim spans multiple moments, chain them: [12:45][15:20]. \
+Example: The team decided to use React for the frontend. [12:45][14:02]"
+    );
+
     prompt.push_str(&format!("\n\nLanguage: {}", ctx.language));
 
     let now_local = Local::now();
@@ -253,13 +262,13 @@ pub async fn run_summarization(
     ];
 
     // Stream the response, emitting deltas via WebSocket
+    let stream_start = std::time::Instant::now();
     let stream = client.stream_chat(messages.clone()).await?;
     futures::pin_mut!(stream);
 
     let mut content = String::new();
     let mut first_chunk = true;
     let mut was_thinking = false;
-    let stream_start = std::time::Instant::now();
     while let Some(result) = stream.next().await {
         match result {
             Ok(delta) => {
