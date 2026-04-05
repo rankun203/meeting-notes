@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { jsx as _jsx, jsxs as _jsxs, Fragment } from 'react/jsx-runtime';
 
 // ── JSX wrappers ──
@@ -72,6 +72,29 @@ export async function api(path, opts = {}) {
 }
 
 // ── Hooks ──
+
+/// Auto-resize a textarea to fit content, up to maxRows lines.
+/// Call on the input event: onInput={autoResize} or wrap existing handler.
+export function autoResize(e, maxRows = 8) {
+  const el = e.target || e;
+  el.style.height = 'auto';
+  const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 20;
+  const maxHeight = lineHeight * maxRows + 16;
+  el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px';
+  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+}
+
+/// Trigger auto-resize on a textarea ref (for initial sizing).
+export function autoResizeRef(ref, maxRows = 8) {
+  if (ref.current) autoResize(ref.current, maxRows);
+}
+
+/// Strip basic markdown formatting (bold, italic, code) for plain-text display.
+export function stripMd(s) {
+  return s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1').replace(/_(.+?)_/g, '$1')
+    .replace(/`(.+?)`/g, '$1');
+}
 
 export function useIsMobile() {
   const [mobile, setMobile] = useState(window.innerWidth < 768);

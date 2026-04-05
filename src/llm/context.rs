@@ -74,7 +74,7 @@ pub async fn retrieve_context(
         let tag_mode = criteria.session_context_modes
             .get(&format!("_tag:{}", tag))
             .map(|s| s.as_str())
-            .unwrap_or("transcript")
+            .unwrap_or("summary")
             .to_string();
         for s in session_manager.sessions_for_tag(tag).await {
             session_modes.entry(s.id).or_insert_with(|| tag_mode.clone());
@@ -84,7 +84,7 @@ pub async fn retrieve_context(
         let person_mode = criteria.session_context_modes
             .get(&format!("_person:{}", pid))
             .map(|s| s.as_str())
-            .unwrap_or("transcript")
+            .unwrap_or("summary")
             .to_string();
         for sid in files_db.get_person_session_ids(pid).await {
             session_modes.entry(sid).or_insert_with(|| person_mode.clone());

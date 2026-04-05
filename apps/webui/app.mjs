@@ -123,7 +123,7 @@ function App() {
       case 'summary_progress':
         setSessions(prev => prev.map(s =>
           s.id === event.data.id
-            ? { ...s, summary_processing: true, summary_streaming: '' }
+            ? { ...s, summary_processing: event.data.status || true, summary_streaming: '' }
             : s
         ));
         break;
@@ -137,7 +137,7 @@ function App() {
       case 'summary_completed':
         setSessions(prev => prev.map(s =>
           s.id === event.data.id
-            ? { ...s, summary_available: true, summary_processing: false, summary_streaming: null }
+            ? { ...s, summary_available: true, summary_processing: false }
             : s
         ));
         break;

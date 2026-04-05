@@ -85,7 +85,7 @@ pub struct Mention {
     pub context_mode: String,
 }
 
-fn default_context_mode() -> String { "transcript".to_string() }
+fn default_context_mode() -> String { "summary".to_string() }
 
 /// Criteria for context retrieval, derived from mentions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -109,7 +109,7 @@ impl ContextCriteria {
 
     /// Get the context mode for a session. Defaults to "transcript".
     pub fn context_mode_for(&self, session_id: &str) -> &str {
-        self.session_context_modes.get(session_id).map(|s| s.as_str()).unwrap_or("transcript")
+        self.session_context_modes.get(session_id).map(|s| s.as_str()).unwrap_or("summary")
     }
 
     /// Merge another criteria into this one, deduplicating entries.

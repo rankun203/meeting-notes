@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, TagIcon, ChevronIcon } from './utils.mjs';
+import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, autoResize, TagIcon, ChevronIcon } from './utils.mjs';
 import { ConversationsSettings } from './chat.mjs';
 import { SearchableList } from './searchable-list.mjs';
 
@@ -270,10 +270,12 @@ function TagNotesEditor({ tag }) {
     jsx('textarea', {
       value: notes,
       onChange: handleChange,
+      onInput: autoResize,
+      ref: el => { if (el) autoResize({ target: el }); },
       onClick: e => e.stopPropagation(),
       placeholder: 'Add notes about this tag...',
-      rows: 2,
-      className: INPUT_CLS + ' resize-y text-xs',
+      rows: 1,
+      className: INPUT_CLS + ' text-xs overflow-hidden',
     }),
   ]});
 }
@@ -590,9 +592,11 @@ export function SettingsPage({ category, onSelectSession }) {
           jsx('textarea', {
             value: form.summarization_prompt,
             onChange: e => setForm(prev => ({ ...prev, summarization_prompt: e.target.value })),
+            onInput: autoResize,
+            ref: el => { if (el) autoResize({ target: el }); },
             placeholder: 'e.g. Summarize this meeting transcript, highlighting key decisions and action items.',
-            rows: 4,
-            className: INPUT_CLS + ' resize-y',
+            rows: 1,
+            className: INPUT_CLS + ' overflow-hidden',
           }),
         ]}),
       ]}),

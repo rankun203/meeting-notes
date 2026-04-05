@@ -57,7 +57,10 @@ pub fn session_routes() -> Router<AppState> {
         .route("/sessions/{id}/transcribe", post(transcribe_session))
         .route("/sessions/{id}/summarize", post(summarize_session))
         .route("/sessions/{id}/summary", get(get_summary))
+        .route("/sessions/{id}/summary", patch(update_summary))
         .route("/sessions/{id}/summary", delete(delete_summary))
+        .route("/sessions/{id}/todos", get(get_session_todos))
+        .route("/sessions/{id}/todos/{idx}", patch(toggle_todo))
         .route("/sessions/{id}/waveform/{filename}", get(get_waveform))
         .route("/people", get(list_people))
         .route("/people", post(create_person))
@@ -65,6 +68,7 @@ pub fn session_routes() -> Router<AppState> {
         .route("/people/{id}", patch(update_person))
         .route("/people/{id}", delete(delete_person))
         .route("/people/{id}/sessions", get(get_person_sessions))
+        .route("/people/{id}/todos", get(get_person_todos))
         .route("/sessions/{id}/tags", put(set_session_tags))
         .route("/tags", get(list_tags))
         .route("/tags", post(create_tag))
@@ -1250,6 +1254,41 @@ async fn get_summary(
     Ok(Json(json))
 }
 
+#[derive(Deserialize)]
+struct UpdateSummaryRequest {
+    content: String,
+}
+
+async fn update_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateSummaryRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let json_path = dir.join("summary.json");
+    if !json_path.exists() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "summary not found"}))));
+    }
+
+    // Read existing summary, update content
+    let existing = std::fs::read_to_string(&json_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    let mut summary: Value = serde_json::from_str(&existing)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    summary["content"] = json!(body.content);
+
+    let json_str = serde_json::to_string_pretty(&summary)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    std::fs::write(&json_path, json_str)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+
+    // Also update .md file
+    let md_path = dir.join("summary.md");
+    let _ = std::fs::write(&md_path, &body.content);
+
+    Ok(Json(summary))
+}
+
 async fn delete_summary(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1261,6 +1300,127 @@ async fn delete_summary(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to delete summary: {e}")}))))?;
     }
     Ok(Json(json!({"status": "deleted"})))
+}
+
+// ── TODO endpoints ──
+
+async fn get_session_todos(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let path = state.session_manager.session_dir(&id).join("todos.json");
+    if !path.exists() {
+        return Ok(Json(json!({"items": []})));
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    let json: Value = serde_json::from_str(&content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    Ok(Json(json))
+}
+
+async fn toggle_todo(
+    State(state): State<AppState>,
+    Path((id, idx)): Path<(String, usize)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let todos_path = dir.join("todos.json");
+    if !todos_path.exists() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "no todos"}))));
+    }
+    let content = std::fs::read_to_string(&todos_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    let mut todos: Value = serde_json::from_str(&content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+
+    let items = todos.get_mut("items")
+        .and_then(|i| i.as_array_mut())
+        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid todos format"}))))?;
+
+    if idx >= items.len() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "todo index out of range"}))));
+    }
+
+    // Toggle completed
+    let completed = items[idx].get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
+    items[idx]["completed"] = json!(!completed);
+
+    let json_str = serde_json::to_string_pretty(&todos)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    std::fs::write(&todos_path, json_str)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+
+    // Also update the summary.md and summary.json checkbox states
+    let summary_json_path = dir.join("summary.json");
+    if summary_json_path.exists() {
+        if let Ok(s) = std::fs::read_to_string(&summary_json_path) {
+            if let Ok(mut sj) = serde_json::from_str::<Value>(&s) {
+                if let Some(md) = sj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+                    let mut n = 0usize;
+                    let new_md = regex::Regex::new(r"- \[([ xX])\]").unwrap()
+                        .replace_all(&md, |_caps: &regex::Captures| {
+                            let result = if n == idx {
+                                if !completed { "- [x]" } else { "- [ ]" }
+                            } else {
+                                _caps.get(0).unwrap().as_str()
+                            };
+                            n += 1;
+                            result.to_string()
+                        }).to_string();
+                    sj["content"] = json!(new_md);
+                    let _ = std::fs::write(&summary_json_path, serde_json::to_string_pretty(&sj).unwrap_or_default());
+                    let _ = std::fs::write(dir.join("summary.md"), &new_md);
+                }
+            }
+        }
+    }
+
+    Ok(Json(todos))
+}
+
+async fn get_person_todos(
+    State(state): State<AppState>,
+    Path(person_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Get all sessions this person appears in
+    let session_ids = state.files_db.get_person_session_ids(&person_id).await;
+
+    let mut result: Vec<Value> = Vec::new();
+    for sid in &session_ids {
+        let todos_path = state.session_manager.session_dir(sid).join("todos.json");
+        if !todos_path.exists() { continue; }
+        let content = match std::fs::read_to_string(&todos_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let todos: Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let items = match todos.get("items").and_then(|i| i.as_array()) {
+            Some(items) => items,
+            None => continue,
+        };
+
+        // Get session info for display
+        let session_info = state.session_manager.get_session(sid).await;
+        let session_name = session_info.as_ref().and_then(|s| s.name.clone()).unwrap_or_else(|| sid.clone());
+        let session_created = session_info.as_ref().map(|s| s.created_at.to_rfc3339());
+
+        for (idx, item) in items.iter().enumerate() {
+            // Include items assigned to this person
+            if item.get("person_id").and_then(|v| v.as_str()) == Some(&person_id) {
+                let mut todo = item.clone();
+                todo["session_id"] = json!(sid);
+                todo["session_name"] = json!(session_name);
+                todo["session_created_at"] = json!(session_created);
+                todo["todo_index"] = json!(idx);
+                result.push(todo);
+            }
+        }
+    }
+
+    Ok(Json(json!({"todos": result})))
 }
 
 #[derive(Deserialize, Default)]

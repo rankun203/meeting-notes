@@ -81,7 +81,7 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     setText(newText);
     const hasSummary = item.summary_available ?? false;
     const hasTranscript = item.transcript_available ?? true;
-    const defaultMode = item.kind === 'person' ? (hasSummary ? 'both' : 'transcript') : 'transcript';
+    const defaultMode = hasSummary ? 'summary' : 'transcript';
     setMentions(prev => [...prev, { kind: item.kind, id: item.id, label: item.label, context_mode: defaultMode, summary_available: hasSummary, transcript_available: hasTranscript }]);
     setShowMention(false);
 
@@ -142,10 +142,27 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
   const MODE_LABELS = { transcript: 'T', summary: 'S', both: 'T+S' };
   const MODE_TITLES = { transcript: 'Transcript — click to switch', summary: 'Summary — click to switch', both: 'Transcript + Summary — click to switch' };
 
+  // Resolve what will actually be sent, considering availability
+  function effectiveMode(m) {
+    const mode = m.context_mode || 'summary';
+    if (m.kind === 'tag') return mode; // tags: no per-session info, trust the mode
+    const hasSummary = m.summary_available ?? false;
+    const hasTranscript = m.transcript_available ?? true;
+    if (mode === 'summary' && !hasSummary) return 'transcript';
+    if (mode === 'transcript' && !hasTranscript) return 'summary';
+    if (mode === 'both') {
+      if (!hasSummary) return 'transcript';
+      if (!hasTranscript) return 'summary';
+    }
+    return mode;
+  }
+
   const pills = mentions.length > 0 ? jsx('div', {
     className: 'flex flex-wrap gap-1 px-3 pt-2',
-    children: mentions.map((m, i) =>
-      jsxs('span', {
+    children: mentions.map((m, i) => {
+      const effective = effectiveMode(m);
+      const isFallback = effective !== (m.context_mode || 'summary');
+      return jsxs('span', {
         key: i,
         className: `inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[10px] font-medium ${shakeIdx === i ? 'mention-shake' : ''}`,
         children: [
@@ -153,9 +170,11 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
           m.label,
           jsx('button', {
             onClick: () => cycleMode(i),
-            title: MODE_TITLES[m.context_mode || 'transcript'],
-            className: 'ml-0.5 px-1 py-px rounded bg-blue-200 dark:bg-blue-800 text-blue-600 dark:text-blue-300 hover:bg-blue-300 dark:hover:bg-blue-700 text-[9px] font-bold transition-colors',
-            children: MODE_LABELS[m.context_mode || 'transcript'],
+            title: isFallback
+              ? `${MODE_TITLES[effective]} (fallback — ${m.context_mode} not available)`
+              : MODE_TITLES[effective],
+            className: `ml-0.5 px-1 py-px rounded text-[9px] font-bold transition-colors ${isFallback ? 'bg-yellow-200 dark:bg-yellow-800 text-yellow-700 dark:text-yellow-300' : 'bg-blue-200 dark:bg-blue-800 text-blue-600 dark:text-blue-300 hover:bg-blue-300 dark:hover:bg-blue-700'}`,
+            children: MODE_LABELS[effective],
           }),
           jsx('button', {
             onClick: () => setMentions(prev => prev.filter((_, j) => j !== i)),
@@ -163,8 +182,8 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
             children: '\u00d7',
           }),
         ],
-      })
-    ),
+      });
+    }),
   }) : null;
 
   return jsx('div', {

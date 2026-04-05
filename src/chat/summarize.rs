@@ -33,6 +33,7 @@ pub struct SummarizationContext<'a> {
 pub fn build_system_prompt(user_prompt: &str, ctx: &SummarizationContext) -> String {
     let mut prompt = user_prompt.to_string();
 
+    prompt.push_str("\n\nWhen listing action items or TODOs, use markdown checkbox syntax: `- [ ] item` for incomplete and `- [x] item` for completed.");
     prompt.push_str(&format!("\n\nLanguage: {}", ctx.language));
 
     let now_local = Local::now();
@@ -65,7 +66,7 @@ pub fn format_meeting_transcript(
 
     let mut output = String::new();
 
-    // Meeting title and start time
+    // Meeting title, start time, and duration
     if let Some(info) = session_info {
         if let Some(name) = &info.name {
             output.push_str(&format!("Meeting: {}\n", name));
@@ -75,6 +76,16 @@ pub fn format_meeting_transcript(
             "Started: {}\n",
             started_local.format("%A, %Y-%m-%d %H:%M %Z")
         ));
+        if let Some(dur) = info.duration_secs {
+            let h = (dur / 3600.0) as u32;
+            let m = ((dur % 3600.0) / 60.0) as u32;
+            let s = (dur % 60.0) as u32;
+            if h > 0 {
+                output.push_str(&format!("Duration: {}h {}m {}s\n", h, m, s));
+            } else {
+                output.push_str(&format!("Duration: {}m {}s\n", m, s));
+            }
+        }
     }
 
     // Unique participants: known names first, then unknown speaker IDs
@@ -131,6 +142,61 @@ pub fn format_meeting_transcript(
     }
 
     Ok(output)
+}
+
+/// Extract TODO items from summary markdown and match person names to known people.
+///
+/// Parses lines matching `- [ ] ...` or `- [x] ...`, extracts the person name
+/// (typically bold at the start), and looks up their person_id.
+async fn extract_todos(content: &str, people_manager: &PeopleManager) -> Vec<Value> {
+    // Cache all people for name matching
+    let all_people = people_manager.list_people().await;
+
+    let mut todos = Vec::new();
+    let re_todo = regex::Regex::new(r"- \[([ xX])\] (.+)").unwrap();
+    let re_bold = regex::Regex::new(r"^\*\*(.+?)\*\*").unwrap();
+
+    for cap in re_todo.captures_iter(content) {
+        let completed = cap[1].trim().len() > 0; // "x" or "X" = completed
+        let text = cap[2].trim().to_string();
+
+        // Try to extract person name from bold prefix: **Name** – task text
+        let mut person_name: Option<String> = None;
+        let mut person_id: Option<String> = None;
+        let mut task_text = text.clone();
+
+        if let Some(bold_cap) = re_bold.captures(&text) {
+            let name = bold_cap[1].trim().to_string();
+            // Find matching person (case-insensitive prefix match)
+            let name_lower = name.to_lowercase();
+            for p in &all_people {
+                if p.name.to_lowercase() == name_lower
+                    || p.name.to_lowercase().starts_with(&name_lower)
+                    || name_lower.starts_with(&p.name.to_lowercase())
+                {
+                    person_id = Some(p.id.clone());
+                    person_name = Some(p.name.clone());
+                    break;
+                }
+            }
+            if person_name.is_none() {
+                person_name = Some(name);
+            }
+            // Extract the task portion after the name
+            let after_bold = &text[bold_cap.get(0).unwrap().end()..];
+            task_text = after_bold.trim_start_matches(&[' ', '–', '—', '-', ':'][..]).trim().to_string();
+        }
+
+        todos.push(json!({
+            "text": task_text,
+            "full_text": text,
+            "completed": completed,
+            "person_name": person_name,
+            "person_id": person_id,
+        }));
+    }
+
+    todos
 }
 
 /// Run the full summarization pipeline for a session.
@@ -191,9 +257,32 @@ pub async fn run_summarization(
     futures::pin_mut!(stream);
 
     let mut content = String::new();
+    let mut first_chunk = true;
+    let mut was_thinking = false;
+    let stream_start = std::time::Instant::now();
     while let Some(result) = stream.next().await {
         match result {
             Ok(delta) => {
+                // \x01 prefix = thinking/reasoning token (not part of final content)
+                let is_thinking = delta.starts_with('\x01');
+                if is_thinking {
+                    if first_chunk {
+                        info!("[{}] Thinking started ({:.1}s)", session_id, stream_start.elapsed().as_secs_f64());
+                        first_chunk = false;
+                        was_thinking = true;
+                        session_manager.emit_summary_progress(session_id, "thinking");
+                    }
+                    continue; // Don't include thinking in output
+                }
+
+                if first_chunk {
+                    info!("[{}] Stream started ({:.1}s)", session_id, stream_start.elapsed().as_secs_f64());
+                    first_chunk = false;
+                } else if was_thinking {
+                    info!("[{}] Content started ({:.1}s)", session_id, stream_start.elapsed().as_secs_f64());
+                    was_thinking = false;
+                }
+
                 content.push_str(&delta);
                 session_manager.emit_summary_delta(session_id, &delta);
             }
@@ -221,10 +310,25 @@ pub async fn run_summarization(
     std::fs::write(&summary_path, json_str)
         .map_err(|e| format!("Failed to write summary: {e}"))?;
 
+    let md_path = session_dir.join("summary.md");
+    std::fs::write(&md_path, &content)
+        .map_err(|e| format!("Failed to write summary.md: {e}"))?;
+
+    // Extract TODOs and save per-session
+    let todos = extract_todos(&content, people_manager).await;
+    if !todos.is_empty() {
+        let todos_path = session_dir.join("todos.json");
+        let todos_json = serde_json::to_string_pretty(&json!({"items": todos}))
+            .map_err(|e| format!("Failed to serialize todos: {e}"))?;
+        std::fs::write(&todos_path, todos_json)
+            .map_err(|e| format!("Failed to write todos.json: {e}"))?;
+        info!("[{}] Extracted {} TODOs", session_id, todos.len());
+    }
+
     info!(
-        "[{}] Summary saved ({} chars)",
+        "[{}] Summary saved ({} words)",
         session_id,
-        content.len()
+        content.split_whitespace().count()
     );
     Ok(())
 }

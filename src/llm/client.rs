@@ -83,15 +83,26 @@ impl LlmClient {
                             if let Some(data) = line.strip_prefix("data: ") {
                                 match serde_json::from_str::<Value>(data) {
                                     Ok(json) => {
-                                        if let Some(content) = json
+                                        let delta = json
                                             .get("choices")
                                             .and_then(|c| c.get(0))
-                                            .and_then(|c| c.get("delta"))
-                                            .and_then(|d| d.get("content"))
-                                            .and_then(|c| c.as_str())
-                                        {
-                                            if !content.is_empty() {
-                                                yield Ok(content.to_string());
+                                            .and_then(|c| c.get("delta"));
+
+                                        // Check for reasoning/thinking content (extended thinking models)
+                                        if let Some(delta) = delta {
+                                            let reasoning = delta.get("reasoning_content")
+                                                .or_else(|| delta.get("reasoning"))
+                                                .and_then(|r| r.as_str());
+                                            if let Some(r) = reasoning {
+                                                if !r.is_empty() {
+                                                    yield Ok(format!("\x01{}", r)); // \x01 prefix = thinking
+                                                }
+                                            }
+
+                                            if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                if !content.is_empty() {
+                                                    yield Ok(content.to_string());
+                                                }
                                             }
                                         }
                                     }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
-         formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor,
+         formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor, autoResize,
          ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon,
          RecordIcon, TranscriptIcon, TagIcon, PlusIcon, CloseIcon } from './utils.mjs';
 import { SyncedPlayer } from './player.mjs';
@@ -245,8 +245,18 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const [notesSaving, setNotesSaving] = useState(false);
   const notesTimer = useRef(null);
 
-  // Sync notes when session changes
-  useEffect(() => { setNotes(session?.notes || ''); }, [session?.id, session?.notes]);
+  // Reset state when switching sessions
+  useEffect(() => {
+    setNotes(session?.notes || '');
+    setSummaryLoading(false);
+    setSummary(null);
+    setSummaryError(null);
+    setRegenPrompt(null);
+    setActiveTab('transcript');
+  }, [session?.id]);
+
+  // Sync notes when updated externally
+  useEffect(() => { setNotes(session?.notes || ''); }, [session?.notes]);
 
   // Load summary when tab switches or summary becomes available
   useEffect(() => {
@@ -255,7 +265,10 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
       return;
     }
     let cancelled = false;
-    setSummaryLoading(true);
+    // Only show loading spinner if we don't already have streamed content
+    if (!session?.summary_streaming) {
+      setSummaryLoading(true);
+    }
     setSummaryError(null);
     api(`/sessions/${session.id}/summary`).then(data => {
       if (!cancelled) { setSummary(data); setSummaryLoading(false); }
@@ -663,10 +676,12 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                   ]}),
                   jsx('textarea', {
                     value: notes,
-                    onChange: handleNotesChange,
+                    onChange: e => { handleNotesChange(e); autoResize(e); },
+                    onInput: autoResize,
+                    ref: el => { if (el) { el.style.height = 'auto'; autoResize({ target: el }); } },
                     placeholder: 'Add notes about this session...',
-                    rows: 2,
-                    className: INPUT_CLS + ' resize-y text-xs',
+                    rows: 1,
+                    className: INPUT_CLS + ' text-xs overflow-hidden',
                   }),
                 ]}),
               ],
@@ -849,9 +864,12 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                     }),
                   ]}),
                   jsx('button', {
-                    onClick: () => action(async () => {
-                      await api(`/sessions/${s.id}/transcript`, { method: 'DELETE' });
-                    }),
+                    onClick: () => {
+                      if (!confirm('Re-transcribe will delete the current transcript and summary. Continue?')) return;
+                      action(async () => {
+                        await api(`/sessions/${s.id}/transcript`, { method: 'DELETE' });
+                      });
+                    },
                     className: 'text-[11px] text-gray-400 hover:text-red-500 transition-colors',
                     children: 'Re-transcribe',
                   }),
@@ -885,9 +903,10 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                       }
                       if (e.key === 'Escape') { setRegenPrompt(null); }
                     },
+                    onInput: autoResize,
                     placeholder: 'Additional instructions (optional). Press Enter to generate, Esc to cancel...',
-                    rows: 2,
-                    className: INPUT_CLS + ' resize-y text-sm',
+                    rows: 1,
+                    className: INPUT_CLS + ' text-sm overflow-hidden',
                   }),
                   jsxs('div', { className: 'flex gap-2 justify-end', children: [
                     jsx('button', {
@@ -903,7 +922,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                   ]}),
                 ]}),
                 // Summary content
-                summaryLoading || s.summary_processing
+                s.summary_processing
                   ? jsxs('div', { children: [
                       s.summary_streaming
                         ? jsx('div', {
@@ -913,14 +932,43 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                         : null,
                       jsxs('div', { className: 'flex items-center gap-3 py-4 justify-center', children: [
                         jsx('div', { className: 'w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin' }),
-                        jsx('p', { className: 'text-xs text-gray-500', children: s.summary_streaming ? 'Streaming...' : 'Generating summary...' }),
+                        jsx('p', { className: 'text-xs text-gray-500', children: s.summary_streaming ? 'Streaming...' : s.summary_processing === 'thinking' ? 'Thinking...' : 'Generating summary...' }),
                       ]}),
                     ]})
                   : summary?.content
                     ? jsx('div', {
                         className: 'md-content text-sm text-gray-900 dark:text-gray-100',
                         dangerouslySetInnerHTML: { __html: renderMarkdown(summary.content) },
+                        ref: el => {
+                          if (!el) return;
+                          el.querySelectorAll('input[type="checkbox"]').forEach((cb, idx) => {
+                            cb.disabled = false;
+                            const toggle = () => {
+                              let md = summary.content;
+                              let n = 0;
+                              md = md.replace(/- \[([ xX])\]/g, (match, check) => {
+                                if (n++ === idx) return check.trim() ? '- [ ]' : '- [x]';
+                                return match;
+                              });
+                              const updated = { ...summary, content: md };
+                              setSummary(updated);
+                              api(`/sessions/${s.id}/summary`, { method: 'PATCH', body: JSON.stringify({ content: md }) });
+                            };
+                            cb.onclick = e => { e.stopPropagation(); toggle(); };
+                            // Make the whole <li> clickable
+                            const li = cb.closest('li');
+                            if (li) {
+                              li.style.cursor = 'pointer';
+                              li.onclick = e => { if (e.target.tagName !== 'INPUT') toggle(); };
+                            }
+                          });
+                        },
                       })
+                    : s.summary_streaming
+                      ? jsx('div', {
+                          className: 'md-content text-sm text-gray-900 dark:text-gray-100',
+                          dangerouslySetInnerHTML: { __html: renderMarkdown(s.summary_streaming) },
+                        })
                     : summaryError
                       ? jsx('p', { className: 'text-sm text-red-500 py-4 text-center', children: `Error: ${summaryError}` })
                       : regenPrompt == null && jsx('div', { className: 'py-8 text-center', children:
