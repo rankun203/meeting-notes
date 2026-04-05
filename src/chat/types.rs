@@ -80,7 +80,12 @@ pub struct Mention {
     pub kind: String,  // "tag", "person", "session"
     pub id: String,    // tag name, person_id, or session_id
     pub label: String, // display name
+    /// Context mode: "transcript", "summary", or "both". Defaults to "transcript".
+    #[serde(default = "default_context_mode")]
+    pub context_mode: String,
 }
+
+fn default_context_mode() -> String { "transcript".to_string() }
 
 /// Criteria for context retrieval, derived from mentions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -91,11 +96,20 @@ pub struct ContextCriteria {
     pub person_ids: Vec<String>,
     #[serde(default)]
     pub session_ids: Vec<String>,
+    /// Context mode per session ID: "transcript", "summary", or "both".
+    /// Sessions not in this map default to "transcript".
+    #[serde(default)]
+    pub session_context_modes: std::collections::HashMap<String, String>,
 }
 
 impl ContextCriteria {
     pub fn is_empty(&self) -> bool {
         self.tags.is_empty() && self.person_ids.is_empty() && self.session_ids.is_empty()
+    }
+
+    /// Get the context mode for a session. Defaults to "transcript".
+    pub fn context_mode_for(&self, session_id: &str) -> &str {
+        self.session_context_modes.get(session_id).map(|s| s.as_str()).unwrap_or("transcript")
     }
 
     /// Merge another criteria into this one, deduplicating entries.
@@ -109,16 +123,31 @@ impl ContextCriteria {
         for s in &other.session_ids {
             if !self.session_ids.contains(s) { self.session_ids.push(s.clone()); }
         }
+        for (k, v) in &other.session_context_modes {
+            self.session_context_modes.entry(k.clone()).or_insert_with(|| v.clone());
+        }
     }
 
     /// Build criteria from a list of mentions.
     pub fn from_mentions(mentions: &[Mention]) -> Self {
         let mut criteria = ContextCriteria::default();
         for m in mentions {
+            let mode = m.context_mode.clone();
             match m.kind.as_str() {
-                "tag" => criteria.tags.push(m.id.clone()),
-                "person" => criteria.person_ids.push(m.id.clone()),
-                "session" => criteria.session_ids.push(m.id.clone()),
+                "tag" => {
+                    criteria.tags.push(m.id.clone());
+                    // Tag mode is stored temporarily; applied to resolved sessions later
+                    criteria.session_context_modes.insert(format!("_tag:{}", m.id), mode);
+                }
+                "person" => {
+                    criteria.person_ids.push(m.id.clone());
+                    // Person mode stored; applied to resolved sessions later
+                    criteria.session_context_modes.insert(format!("_person:{}", m.id), mode);
+                }
+                "session" => {
+                    criteria.session_ids.push(m.id.clone());
+                    criteria.session_context_modes.insert(m.id.clone(), mode);
+                }
                 _ => {}
             }
         }

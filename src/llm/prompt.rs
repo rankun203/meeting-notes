@@ -105,6 +105,15 @@ pub fn format_context(chunks: &[ContextChunk]) -> String {
             continue;
         }
 
+        if chunk.kind == "summary" {
+            let name = chunk.source_label.as_deref().unwrap_or("Untitled Session");
+            let date = chunk.created_at.format("%Y-%m-%d %H:%M");
+            output.push_str(&format!("\n=== Summary of \"{}\" ({}) ===\n", name, date));
+            output.push_str(chunk.note.as_deref().unwrap_or(""));
+            output.push('\n');
+            continue;
+        }
+
         // Segment — group by source session
         let source_key = format!("{}:{}", chunk.source_type, chunk.source_id);
         if current_source.as_deref() != Some(&source_key) {

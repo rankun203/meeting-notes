@@ -74,7 +74,7 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
           }),
         ]}),
       }),
-      conversations.length > 0 && jsx(ConversationList, {
+      jsx(ConversationList, {
         conversations, activeId, activeConv,
         onSelect: (id) => { onSelectConversation(id); setListExpanded(false); },
         onNew: onNewConversation,

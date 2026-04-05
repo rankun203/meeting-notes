@@ -27,7 +27,7 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
     for (const s of (mentionData.sessions || [])) {
       const name = s.name || s.id;
       if (name.toLowerCase().includes(q))
-        items.push({ kind: 'session', id: s.id, label: name, detail: formatTime(s.created_at) });
+        items.push({ kind: 'session', id: s.id, label: name, detail: formatTime(s.created_at), summary_available: !!s.summary_available, transcript_available: !!s.transcript_available });
     }
   }
 
@@ -100,6 +100,7 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
   }), [visible, highlightIdx, filter]);
 
   const filterBtn = (id) => jsx('button', {
+    tabIndex: -1,
     onMouseDown: e => e.preventDefault(), // prevent textarea blur
     onClick: () => setFilter(id),
     className: `px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${filter === id ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`,
@@ -114,7 +115,7 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
 
   return jsx('div', {
     onMouseDown: e => e.preventDefault(),
-    className: 'absolute bottom-full left-0 right-0 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 border-b-0 rounded-t-xl shadow-[0_-4px_12px_rgba(0,0,0,0.08)] overflow-hidden z-10',
+    className: 'bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 border-b-0 rounded-t-xl shadow-[0_-4px_12px_rgba(0,0,0,0.08)] overflow-hidden z-10',
     children: jsxs(Fragment, { children: [
       jsxs('div', {
         className: 'flex items-center gap-1 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700',
@@ -134,6 +135,7 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
           : visible.map((item, i) =>
               jsx('button', {
                 key: `${item.kind}-${item.id}`,
+                tabIndex: -1,
                 onMouseDown: e => e.preventDefault(), // prevent textarea blur
                 onClick: () => onSelect(item),
                 onMouseEnter: () => setHighlightIdx(i),

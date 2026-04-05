@@ -24,6 +24,14 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     }
   }, [text]);
 
+  function hasMentionMatches(query) {
+    const q = query.toLowerCase();
+    for (const t of (mentionData.tags || [])) { if (t.name.toLowerCase().includes(q)) return true; }
+    for (const p of (mentionData.people || [])) { if (p.name.toLowerCase().includes(q)) return true; }
+    for (const s of (mentionData.sessions || [])) { if ((s.name || s.id).toLowerCase().includes(q)) return true; }
+    return false;
+  }
+
   function handleInput(e) {
     const el = e.target;
     const val = el.value;
@@ -34,16 +42,11 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     const atIdx = textBefore.lastIndexOf('@');
     if (atIdx >= 0 && (atIdx === 0 || textBefore[atIdx - 1] === ' ' || textBefore[atIdx - 1] === '\n')) {
       const query = textBefore.slice(atIdx + 1);
-      if (!query.includes(' ') && query.length < 40) {
+      // Allow spaces in query only while there are still matches
+      const hasSpace = query.includes(' ');
+      if (!hasSpace || hasMentionMatches(query)) {
         setShowMention(true);
         setMentionQuery(query);
-        // Preserve focus and cursor after state update
-        requestAnimationFrame(() => {
-          if (textareaRef.current && document.activeElement !== textareaRef.current) {
-            textareaRef.current.focus();
-            textareaRef.current.setSelectionRange(cursor, cursor);
-          }
-        });
         return;
       }
     }
@@ -76,7 +79,10 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     const tag = `@${item.kind}:${item.label} `;
     const newText = before.slice(0, atIdx) + tag + after;
     setText(newText);
-    setMentions(prev => [...prev, { kind: item.kind, id: item.id, label: item.label }]);
+    const hasSummary = item.summary_available ?? false;
+    const hasTranscript = item.transcript_available ?? true;
+    const defaultMode = item.kind === 'person' ? (hasSummary ? 'both' : 'transcript') : 'transcript';
+    setMentions(prev => [...prev, { kind: item.kind, id: item.id, label: item.label, context_mode: defaultMode, summary_available: hasSummary, transcript_available: hasTranscript }]);
     setShowMention(false);
 
     setTimeout(() => {
@@ -107,15 +113,50 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   }
 
+  const [shakeIdx, setShakeIdx] = useState(null);
+
+  function cycleMode(idx) {
+    const m = mentions[idx];
+    const hasSummary = m.summary_available ?? false;
+    const hasTranscript = m.transcript_available ?? true;
+    // Build list of available modes
+    const available = [];
+    if (hasTranscript) available.push('transcript');
+    if (hasSummary) available.push('summary');
+    if (hasTranscript && hasSummary) available.push('both');
+    // For tags (no direct availability info), allow all modes
+    if (m.kind === 'tag') { available.length = 0; available.push('transcript', 'summary', 'both'); }
+
+    if (available.length <= 1) {
+      // Shake — can't switch
+      setShakeIdx(idx);
+      setTimeout(() => setShakeIdx(null), 400);
+      return;
+    }
+
+    const cur = available.indexOf(m.context_mode || 'transcript');
+    const next = available[(cur + 1) % available.length];
+    setMentions(prev => prev.map((item, i) => i === idx ? { ...item, context_mode: next } : item));
+  }
+
+  const MODE_LABELS = { transcript: 'T', summary: 'S', both: 'T+S' };
+  const MODE_TITLES = { transcript: 'Transcript — click to switch', summary: 'Summary — click to switch', both: 'Transcript + Summary — click to switch' };
+
   const pills = mentions.length > 0 ? jsx('div', {
     className: 'flex flex-wrap gap-1 px-3 pt-2',
     children: mentions.map((m, i) =>
       jsxs('span', {
         key: i,
-        className: 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[10px] font-medium',
+        className: `inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[10px] font-medium ${shakeIdx === i ? 'mention-shake' : ''}`,
         children: [
           m.kind === 'tag' ? '#' : m.kind === 'person' ? '\u{1F464}' : '\u{1F4DD}',
           m.label,
+          jsx('button', {
+            onClick: () => cycleMode(i),
+            title: MODE_TITLES[m.context_mode || 'transcript'],
+            className: 'ml-0.5 px-1 py-px rounded bg-blue-200 dark:bg-blue-800 text-blue-600 dark:text-blue-300 hover:bg-blue-300 dark:hover:bg-blue-700 text-[9px] font-bold transition-colors',
+            children: MODE_LABELS[m.context_mode || 'transcript'],
+          }),
           jsx('button', {
             onClick: () => setMentions(prev => prev.filter((_, j) => j !== i)),
             className: 'ml-0.5 text-blue-400 hover:text-blue-600',
@@ -129,15 +170,9 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
   return jsx('div', {
     className: 'border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-b-2xl relative',
     children: jsxs(Fragment, { children: [
-      showMention && jsx(MentionPopup, {
-        ref: mentionRef,
-        query: mentionQuery,
-        onSelect: handleMentionSelect,
-        mentionData,
-      }),
       pills,
       jsxs('div', {
-        className: 'p-3 flex items-end gap-2',
+        className: 'p-3 flex items-end gap-2 relative',
         children: [
           jsx('textarea', {
             ref: textareaRef,
@@ -188,6 +223,16 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
                 children: jsx(SendIcon, { className: 'w-3.5 h-3.5 text-white' }),
               }),
         ],
+      }),
+      jsx('div', {
+        className: 'absolute bottom-full left-0 right-0',
+        style: { display: showMention ? '' : 'none' },
+        children: jsx(MentionPopup, {
+          ref: mentionRef,
+          query: mentionQuery,
+          onSelect: handleMentionSelect,
+          mentionData,
+        }),
       }),
     ]}),
   });
