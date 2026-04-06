@@ -594,7 +594,7 @@ export function SettingsPage({ category, onSelectSession }) {
             onChange: e => setForm(prev => ({ ...prev, summarization_prompt: e.target.value })),
             onInput: autoResize,
             ref: el => { if (el) autoResize({ target: el }); },
-            placeholder: 'e.g. Summarize this meeting transcript, highlighting key decisions and action items.',
+            placeholder: 'e.g. Summarize this meeting transcript, highlighting key topics, opinions of each attendee, and conclusions.',
             rows: 1,
             className: INPUT_CLS + ' overflow-hidden',
           }),

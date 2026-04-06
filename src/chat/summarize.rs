@@ -33,7 +33,16 @@ pub struct SummarizationContext<'a> {
 pub fn build_system_prompt(user_prompt: &str, ctx: &SummarizationContext) -> String {
     let mut prompt = user_prompt.to_string();
 
-    prompt.push_str("\n\nWhen listing action items or TODOs, use markdown checkbox syntax: `- [ ] item` for incomplete and `- [x] item` for completed.");
+    if !user_prompt.contains("TODO") {
+        prompt.push_str("\n\nIMPORTANT: You MUST also include a TODO section listing action items with owners. \
+If there are no action items, write `No action items.` under the TODO heading. \
+Place the TODO section near the top of the summary, right after the attendees/participants section.");
+    }
+
+    prompt.push_str("\n\nWhen listing action items or TODOs, \
+use markdown checkbox syntax: `- [ ] **Owner**: task description` for incomplete and `- [x] **Owner**: task description` for completed. \
+Each action item corresponds to exactly one owner. \
+If ownership is ambiguous, put it to the most likely owner. If multiple people share responsibility, create separate items for each person.");
 
     // Citation instructions
     prompt.push_str(
@@ -279,7 +288,7 @@ pub async fn run_summarization(
                         info!("[{}] Thinking started ({:.1}s)", session_id, stream_start.elapsed().as_secs_f64());
                         first_chunk = false;
                         was_thinking = true;
-                        session_manager.emit_summary_progress(session_id, "thinking");
+                        session_manager.emit_summary_progress(session_id, "thinking").await;
                     }
                     continue; // Don't include thinking in output
                 }

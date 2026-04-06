@@ -671,6 +671,8 @@ struct UpdatePersonRequest {
     name: Option<String>,
     #[serde(default)]
     notes: Option<Option<String>>,
+    #[serde(default)]
+    starred: Option<bool>,
 }
 
 async fn update_person(
@@ -680,7 +682,7 @@ async fn update_person(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     state
         .people_manager
-        .update_person(&id, body.name, body.notes)
+        .update_person(&id, body.name, body.notes, body.starred)
         .await
         .map(|p| Json(serde_json::to_value(p).unwrap()))
         .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
@@ -1442,7 +1444,8 @@ async fn summarize_session(
     let model = settings.summarization_model.clone()
         .unwrap_or_else(|| settings.llm_model.clone());
     let mut prompt = settings.summarization_prompt.clone()
-        .unwrap_or_else(|| "Summarize this meeting transcript, highlighting key decisions, action items, and important discussion points.".to_string());
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(crate::settings::default_summarization_prompt);
     drop(settings);
 
     if let Some(extra) = additional {
@@ -1475,15 +1478,16 @@ async fn summarize_session(
     let session_id = id.clone();
 
     tokio::spawn(async move {
-        session_manager.emit_summary_progress(&session_id, "summarizing");
+        session_manager.emit_summary_progress(&session_id, "summarizing").await;
         match crate::chat::summarize::run_summarization(&session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), &tags_mgr, &people_manager, &session_manager).await {
             Ok(_) => {
-                session_manager.emit_summary_completed(&session_id);
+                session_manager.refresh_files(&session_id).await;
+                session_manager.emit_summary_completed(&session_id).await;
                 info!("Summary generated for session {}", session_id);
             }
             Err(e) => {
                 error!("Summary failed for session {}: {}", session_id, e);
-                session_manager.emit_summary_failed(&session_id, &e);
+                session_manager.emit_summary_failed(&session_id, &e).await;
             }
         }
     });
@@ -1507,7 +1511,8 @@ async fn maybe_auto_summarize(
     let host = s.llm_host.clone();
     let model = s.summarization_model.clone().unwrap_or_else(|| s.llm_model.clone());
     let prompt = s.summarization_prompt.clone()
-        .unwrap_or_else(|| "Summarize this meeting transcript, highlighting key decisions, action items, and important discussion points.".to_string());
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(crate::settings::default_summarization_prompt);
     drop(s);
 
     let secrets = llm_secrets.read().await;
@@ -1522,16 +1527,17 @@ async fn maybe_auto_summarize(
     let dir = session_manager.session_dir(session_id);
     let session_info = session_manager.get_session(session_id).await;
 
-    session_manager.emit_summary_progress(session_id, "summarizing");
+    session_manager.emit_summary_progress(session_id, "summarizing").await;
 
     match crate::chat::summarize::run_summarization(session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), tags_manager, people_manager, session_manager).await {
         Ok(_) => {
-            session_manager.emit_summary_completed(session_id);
+            session_manager.refresh_files(session_id).await;
+            session_manager.emit_summary_completed(session_id).await;
             info!("[{}] Auto-summary generated", session_id);
         }
         Err(e) => {
             error!("[{}] Auto-summary failed: {}", session_id, e);
-            session_manager.emit_summary_failed(session_id, &e);
+            session_manager.emit_summary_failed(session_id, &e).await;
         }
     }
 }

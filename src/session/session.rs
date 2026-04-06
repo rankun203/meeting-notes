@@ -65,6 +65,8 @@ pub struct Session {
     pub notes: Option<String>,
     /// When true, auto-stop recording after system audio is silent for 1 minute.
     pub auto_stop: bool,
+    /// When summary generation started (in-memory only, not persisted).
+    pub summary_started_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +96,8 @@ pub struct SessionInfo {
     pub notices: Vec<Notice>,
     pub transcript_available: bool,
     pub summary_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_started_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processing_state: Option<String>,
     pub unconfirmed_speakers: u32,
@@ -189,6 +193,7 @@ impl Session {
             tags: Vec::new(),
             notes: None,
             auto_stop: false,
+            summary_started_at: None,
         }
     }
 
@@ -234,6 +239,7 @@ impl Session {
             tags: meta.tags.clone(),
             notes: meta.notes.clone(),
             auto_stop: meta.auto_stop,
+            summary_started_at: None,
         }
     }
 
@@ -317,6 +323,7 @@ impl Session {
             notices: self.notices.clone(),
             transcript_available,
             summary_available,
+            summary_started_at: self.summary_started_at,
             processing_state: self.processing_state.clone(),
             unconfirmed_speakers,
             source_meta: self.source_meta.clone(),

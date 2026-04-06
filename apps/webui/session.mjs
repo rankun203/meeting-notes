@@ -260,6 +260,29 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const regenRef = useRef(null);
   const [notesSaving, setNotesSaving] = useState(false);
   const notesTimer = useRef(null);
+  const [summaryElapsed, setSummaryElapsed] = useState(0);
+  const summaryTimerRef = useRef(null);
+
+  // Summary generation timer — derived from server-provided summary_started_at
+  useEffect(() => {
+    const startedAt = session?.summary_started_at;
+    if (startedAt) {
+      const calcElapsed = () => Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+      setSummaryElapsed(calcElapsed());
+      summaryTimerRef.current = setInterval(() => setSummaryElapsed(calcElapsed()), 1000);
+    } else {
+      clearInterval(summaryTimerRef.current);
+      setSummaryElapsed(0);
+    }
+    return () => clearInterval(summaryTimerRef.current);
+  }, [session?.summary_started_at]);
+
+  // Update page title to reflect current session
+  useEffect(() => {
+    const prev = document.title;
+    if (session?.name) document.title = `Meeting Notes - ${session.name}`;
+    return () => { document.title = prev; };
+  }, [session?.name]);
 
   // Reset state when switching sessions
   useEffect(() => {
@@ -504,6 +527,48 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
       parts.push(`${speaker} [${m}:${s.toString().padStart(2, '0')}]: ${seg.text}`);
     }
     downloadFile(`${session.name || session.id}.txt`, parts.join('\n'));
+  }
+
+  function exportSummaryMarkdown() {
+    setExportOpen(false);
+    if (!summary?.content) return;
+    downloadFile(`${session.name || session.id}_summary.md`, summary.content, 'text/markdown');
+  }
+
+  function exportSummaryHtml() {
+    setExportOpen(false);
+    if (!summary?.content) return;
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${(session.name || session.id).replace(/</g, '&lt;')}</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}
+h1,h2,h3{margin-top:1.5em}ul,ol{padding-left:1.5em}hr{border:none;border-top:1px solid #ddd;margin:1.5em 0}
+a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;font-size:0.9em}</style>
+</head><body>${renderMarkdown(summary.content)}</body></html>`;
+    downloadFile(`${session.name || session.id}_summary.html`, html, 'text/html');
+  }
+
+  function exportSummaryPdf() {
+    setExportOpen(false);
+    if (!summary?.content) return;
+    const html = renderMarkdown(summary.content);
+    const title = (session.name || session.id).replace(/</g, '&lt;');
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;left:-9999px;width:800px;height:600px';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write(`<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.8;color:#1a1a1a}
+h1,h2,h3{margin-top:1.5em}ul,ol{padding-left:1.5em}hr{border:none;border-top:1px solid #ddd;margin:1.5em 0}
+a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;font-size:0.9em}
+@media print{body{margin:0;max-width:none}@page{margin:1.5cm}}</style>
+</head><body>${html}</body></html>`);
+    doc.close();
+    iframe.onload = () => {
+      iframe.contentWindow.print();
+      setTimeout(() => document.body.removeChild(iframe), 1000);
+    };
   }
 
   function startRename() {
@@ -908,11 +973,43 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                     children: 'Re-transcribe',
                   }),
                 ]}),
-                activeTab === 'summary' && s.summary_available && regenPrompt == null && jsx('button', {
-                  onClick: startRegenerate,
-                  className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
-                  children: 'Re-generate',
-                }),
+                activeTab === 'summary' && s.summary_available && regenPrompt == null && jsxs('div', { className: 'flex items-baseline gap-2', children: [
+                  jsxs('div', { ref: exportRef, className: 'relative inline-block', children: [
+                    jsx('button', {
+                      onClick: () => setExportOpen(v => !v),
+                      className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
+                      children: 'Export',
+                    }),
+                    exportOpen && jsx('div', {
+                      className: 'absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-10 min-w-[180px]',
+                      children: [
+                        jsx('button', {
+                          key: 'md',
+                          onClick: exportSummaryMarkdown,
+                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
+                          children: 'Markdown .md',
+                        }),
+                        jsx('button', {
+                          key: 'html',
+                          onClick: exportSummaryHtml,
+                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
+                          children: 'HTML .html',
+                        }),
+                        jsx('button', {
+                          key: 'pdf',
+                          onClick: exportSummaryPdf,
+                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
+                          children: 'PDF (Print)',
+                        }),
+                      ],
+                    }),
+                  ]}),
+                  jsx('button', {
+                    onClick: startRegenerate,
+                    className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
+                    children: 'Re-generate',
+                  }),
+                ]}),
               ]}),
               // Tab content
               activeTab === 'transcript' && jsx(TranscriptViewer, {
@@ -966,7 +1063,11 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
                         : null,
                       jsxs('div', { className: 'flex items-center gap-3 py-4 justify-center', children: [
                         jsx('div', { className: 'w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin' }),
-                        jsx('p', { className: 'text-xs text-gray-500', children: s.summary_streaming ? 'Streaming...' : s.summary_processing === 'thinking' ? 'Thinking...' : 'Generating summary...' }),
+                        jsx('p', { className: 'text-xs text-gray-500', children:
+                          (s.summary_streaming ? 'Streaming' : s.summary_processing === 'thinking' ? 'Thinking' : 'Generating summary')
+                          + (summaryElapsed > 0 ? ` (${summaryElapsed}s)` : '')
+                          + '...',
+                        }),
                       ]}),
                     ]})
                   : summary?.content

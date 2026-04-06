@@ -87,6 +87,37 @@ fn default_threshold() -> f64 {
     0.75
 }
 
+pub fn default_summarization_prompt() -> String {
+    r#"Summarize this meeting transcript, highlighting key topics, their opinions and their conclusion. Do not insert opinions, just state the facts.
+
+Add a TODO list of necessary action items at top with corresponding owner, if there is no action items, say No action items.
+
+Final summary format:
+
+# {Title}
+
+{One sentence description}, {duration}.
+
+## Attendees
+
+- {Name 1}
+- {Name 2}
+
+## TODO
+
+- [ ] {Owner 1}: ...
+- [ ] {Owner 2}: ...
+
+## {Topic 1}
+
+{list down opinions of each attendee}
+{conclusion}
+
+## {Topic 2}
+
+..."#.to_string()
+}
+
 fn default_llm_host() -> String {
     "https://openrouter.ai/api/v1".to_string()
 }
@@ -105,7 +136,7 @@ impl Default for AppSettings {
             diarize: true,
             people_recognition: true,
             speaker_match_threshold: 0.75,
-            summarization_prompt: None,
+            summarization_prompt: Some(default_summarization_prompt()),
             llm_host: default_llm_host(),
             llm_model: default_llm_model(),
             summarization_model: None,

@@ -20,6 +20,8 @@ pub struct Person {
     pub name: String,
     #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub starred: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -33,6 +35,8 @@ pub struct PersonIndex {
 pub struct PersonIndexEntry {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub starred: bool,
     pub embedding_count: usize,
     #[serde(default)]
     pub last_seen: Option<DateTime<Utc>>,
@@ -145,12 +149,16 @@ impl PeopleManager {
                 PersonIndexEntry {
                     id: p.id.clone(),
                     name: p.name.clone(),
+                    starred: p.starred,
                     embedding_count: store.map_or(0, |s| s.samples.len()),
                     last_seen: store.and_then(|s| s.samples.last().map(|e| e.confirmed_at)),
                 }
             })
             .collect();
-        entries.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+        entries.sort_by(|a, b| {
+            b.starred.cmp(&a.starred)
+                .then_with(|| if a.starred { a.name.to_lowercase().cmp(&b.name.to_lowercase()) } else { b.last_seen.cmp(&a.last_seen) })
+        });
         entries
     }
 
@@ -165,6 +173,7 @@ impl PeopleManager {
             id: id.clone(),
             name,
             notes,
+            starred: false,
             created_at: now,
             updated_at: now,
         };
@@ -179,6 +188,7 @@ impl PeopleManager {
         id: &str,
         name: Option<String>,
         notes: Option<Option<String>>,
+        starred: Option<bool>,
     ) -> Result<Person, String> {
         let mut people = self.people.write().await;
         let person = people.get_mut(id).ok_or("person not found")?;
@@ -188,6 +198,9 @@ impl PeopleManager {
         }
         if let Some(notes) = notes {
             person.notes = notes;
+        }
+        if let Some(starred) = starred {
+            person.starred = starred;
         }
         person.updated_at = Utc::now();
 

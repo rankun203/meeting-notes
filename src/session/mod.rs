@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::{RwLock, broadcast};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -57,6 +57,7 @@ pub enum ServerEvent {
     SummaryProgress {
         id: String,
         status: String,
+        started_at: DateTime<Utc>,
     },
     SummaryDelta {
         id: String,
@@ -622,6 +623,21 @@ impl SessionManager {
         Ok(session.files.clone())
     }
 
+    /// Re-scan the session directory and update the files list.
+    pub async fn refresh_files(&self, id: &str) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(id) {
+            let dir = self.output_dir.join(id);
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                session.files = entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                self.emit(ServerEvent::SessionUpdated(session.info()));
+            }
+        }
+    }
+
     /// Set the processing state for a session.
     pub async fn set_processing_state(&self, id: &str, state: Option<String>) {
         let mut sessions = self.sessions.write().await;
@@ -660,20 +676,45 @@ impl SessionManager {
         });
     }
 
-    pub fn emit_summary_progress(&self, id: &str, status: &str) {
+    pub async fn emit_summary_progress(&self, id: &str, status: &str) {
+        let started_at;
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(id) {
+                if session.summary_started_at.is_none() {
+                    session.summary_started_at = Some(Utc::now());
+                }
+                started_at = session.summary_started_at.unwrap();
+            } else {
+                started_at = Utc::now();
+            }
+        }
         self.emit(ServerEvent::SummaryProgress {
             id: id.to_string(),
             status: status.to_string(),
+            started_at,
         });
     }
 
-    pub fn emit_summary_completed(&self, id: &str) {
+    pub async fn emit_summary_completed(&self, id: &str) {
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(id) {
+                session.summary_started_at = None;
+            }
+        }
         self.emit(ServerEvent::SummaryCompleted {
             id: id.to_string(),
         });
     }
 
-    pub fn emit_summary_failed(&self, id: &str, error: &str) {
+    pub async fn emit_summary_failed(&self, id: &str, error: &str) {
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(session) = sessions.get_mut(id) {
+                session.summary_started_at = None;
+            }
+        }
         self.emit(ServerEvent::SummaryFailed {
             id: id.to_string(),
             error: error.to_string(),

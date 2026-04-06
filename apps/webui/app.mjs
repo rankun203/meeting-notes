@@ -77,7 +77,7 @@ function App() {
         setTotal(prev => prev + 1);
         break;
       case 'session_updated':
-        setSessions(prev => prev.map(s => s.id === event.data.id ? event.data : s));
+        setSessions(prev => prev.map(s => s.id === event.data.id ? { ...s, ...event.data } : s));
         break;
       case 'session_deleted':
         setSessions(prev => prev.filter(s => s.id !== event.data.id));
@@ -127,7 +127,7 @@ function App() {
       case 'summary_progress':
         setSessions(prev => prev.map(s =>
           s.id === event.data.id
-            ? { ...s, summary_processing: event.data.status || true, summary_streaming: '' }
+            ? { ...s, summary_processing: event.data.status || true, summary_streaming: '', summary_started_at: event.data.started_at }
             : s
         ));
         break;

@@ -39,11 +39,21 @@ export function PeopleSidebar({ selectedId, onSelect, people, onRefresh }) {
           ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800'
           : 'hover:bg-gray-100 dark:hover:bg-gray-800/60 border border-transparent',
       ].join(' '),
-      children: jsxs('div', { children: [
-        jsx('p', { className: 'font-medium text-gray-700 dark:text-gray-300', children: p.name }),
-        jsxs('p', { className: 'text-[10px] text-gray-400 mt-0.5', children: [
-          `${p.embedding_count || 0} voice samples`,
-          p.last_seen ? ` · ${formatTime(p.last_seen)}` : '',
+      children: jsxs('div', { className: 'flex items-start gap-1', children: [
+        jsx('span', {
+          onClick: e => {
+            e.stopPropagation();
+            api(`/people/${p.id}`, { method: 'PATCH', body: JSON.stringify({ starred: !p.starred }) }).then(onRefresh);
+          },
+          className: 'cursor-pointer text-sm leading-none mt-0.5 flex-shrink-0 ' + (p.starred ? 'text-yellow-400' : 'text-gray-300 dark:text-gray-600 hover:text-yellow-400'),
+          children: p.starred ? '★' : '☆',
+        }),
+        jsxs('div', { className: 'min-w-0', children: [
+          jsx('p', { className: 'font-medium text-gray-700 dark:text-gray-300', children: p.name }),
+          jsxs('p', { className: 'text-[10px] text-gray-400 mt-0.5', children: [
+            `${p.embedding_count || 0} voice samples`,
+            p.last_seen ? ` · ${formatTime(p.last_seen)}` : '',
+          ]}),
         ]}),
       ]}),
     })),
