@@ -227,11 +227,17 @@ function renderMarkdown(content) {
 // Convert [MM:SS] citation markers into clickable links for a given session
 function convertCitations(content, sessionId) {
   if (!content) return content;
-  // Convert [MM:SS] and 【MM:SS】 to markdown links, add space between consecutive citations
-  return content.replace(/[\[【](\d+):(\d{2})[\]】](?!\()/g, (match, mins, secs) => {
-    const total = parseInt(mins) * 60 + parseInt(secs);
-    return `[${mins}:${secs}](/sessions/${sessionId}?content_panel=transcript&jump=${total})`;
-  }).replace(/\)\[/g, ') [');
+  // Convert [MM:SS-MM:SS] ranges (use start time), [MM:SS], and 【MM:SS】 to markdown links
+  return content
+    .replace(/[\[【](\d+):(\d{2})\s*[-–—‑\u2010-\u2015]\s*\d+:\d{2}[\]】](?!\()/g, (match, mins, secs) => {
+      const total = parseInt(mins) * 60 + parseInt(secs);
+      return `[${mins}:${secs}](/sessions/${sessionId}?content_panel=transcript&jump=${total})`;
+    })
+    .replace(/[\[【](\d+):(\d{2})[\]】](?!\()/g, (match, mins, secs) => {
+      const total = parseInt(mins) * 60 + parseInt(secs);
+      return `[${mins}:${secs}](/sessions/${sessionId}?content_panel=transcript&jump=${total})`;
+    })
+    .replace(/\)\[/g, ') [');
 }
 
 export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, onSelectPerson, routeQuery }) {

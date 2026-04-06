@@ -231,6 +231,20 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     });
   }
 
+  function onPause() {
+    const audios = getAudios();
+    if (!playingRef.current) return;
+    // If all audios are paused (e.g. system paused on AirPods disconnect), sync UI
+    if (audios.every(a => a.paused)) {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      setPlaying(false);
+      playingRef.current = false;
+      const t = audios[0]?.currentTime || 0;
+      setCurrentTime(t);
+      if (onTimeUpdate) onTimeUpdate(t);
+    }
+  }
+
   function onEnded() {
     const audios = getAudios();
     if (audios.every(a => a.ended || a.currentTime >= a.duration - 0.1)) {
@@ -258,6 +272,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
         muted: !!mutedTracks[i],
         onLoadedMetadata,
         onEnded,
+        onPause,
         className: 'hidden',
       });
     }),
