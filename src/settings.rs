@@ -88,7 +88,7 @@ fn default_threshold() -> f64 {
 }
 
 pub fn default_summarization_prompt() -> String {
-    r#"Summarize this meeting transcript, highlighting key topics, their opinions and their conclusion. Do not insert opinions, just state the facts.
+    r#"Summarize this meeting transcript, highlighting key topics, their opinions and their conclusion in list items. Do not insert opinions, just state the facts.
 
 Add a TODO list of necessary action items at top with corresponding owner, if there is no action items, say No action items.
 
@@ -96,7 +96,7 @@ Final summary format:
 
 # {Title}
 
-{One sentence description}, {duration}.
+{One sentence description}, meeting duration.
 
 ## Attendees
 
@@ -111,6 +111,7 @@ Final summary format:
 ## {Topic 1}
 
 {list down opinions of each attendee}
+
 {conclusion}
 
 ## {Topic 2}
