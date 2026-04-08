@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { jsx, jsxs, Fragment, formatTime } from '../utils.mjs';
-import { SparkleIcon, ContextIcon } from '../icons.mjs';
+import { SparkleIcon, ContextIcon, CloseIcon } from '../icons.mjs';
 
 // Lazy-load marked only when first needed
 let markedModule = null;
@@ -38,9 +38,56 @@ function ThinkingDots() {
   });
 }
 
-export function MessageThread({ messages, streamingContent, streamingPhase, onDeleteMessage }) {
+// Horizontal scrolling thinking bar — single line, no visible scrollbar, click to expand
+function ThinkingBar({ content, onClick }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth;
+  }, [content]);
+  if (!content) return null;
+  const flat = content.replace(/\n/g, ' ');
+  return jsx('div', {
+    ref,
+    onClick,
+    className: 'w-full overflow-x-auto no-scrollbar whitespace-nowrap text-[11px] text-gray-400 dark:text-gray-500 italic px-3 py-1.5 mb-1 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors select-none',
+    style: { scrollbarWidth: 'none' },
+    children: flat,
+  });
+}
+
+// Modal to show full thinking content
+function ThinkingModal({ content, onClose }) {
+  if (!content) return null;
+  return jsx('div', {
+    className: 'absolute inset-0 z-[20000] flex items-center justify-center bg-black/40 p-4',
+    onClick: (e) => { if (e.target === e.currentTarget) onClose(); },
+    children: jsx('div', {
+      className: 'bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-h-[80%] flex flex-col overflow-hidden',
+      children: jsxs(Fragment, { children: [
+        jsxs('div', {
+          className: 'flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0',
+          children: [
+            jsx('span', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Thinking' }),
+            jsx('button', {
+              onClick: onClose,
+              className: 'p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors',
+              children: jsx(CloseIcon, { className: 'w-4 h-4 text-gray-500' }),
+            }),
+          ],
+        }),
+        jsx('div', {
+          className: 'flex-1 overflow-y-auto px-4 py-3 text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap',
+          children: content,
+        }),
+      ]}),
+    }),
+  });
+}
+
+export function MessageThread({ messages, streamingContent, streamingThinking, streamingPhase, onDeleteMessage }) {
   const scrollRef = useRef(null);
   const [, forceRender] = useState(0);
+  const [thinkingModal, setThinkingModal] = useState(null); // null = closed, string = content
 
   // Lazy-load marked when component mounts
   useEffect(() => {
@@ -49,18 +96,30 @@ export function MessageThread({ messages, streamingContent, streamingPhase, onDe
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages.length, streamingContent]);
+  }, [messages.length, streamingContent, streamingThinking]);
+
+  // Keep modal content in sync while open and thinking is still streaming
+  useEffect(() => {
+    if (thinkingModal !== null && streamingThinking) {
+      setThinkingModal(streamingThinking);
+    }
+  }, [streamingThinking]);
 
   // Build display messages, appending streaming state
   const allMessages = useMemo(() => {
     const msgs = [...messages];
     if (streamingPhase === 'thinking') {
-      msgs.push({ role: 'assistant', id: '_thinking', _thinking: true, timestamp: new Date().toISOString() });
+      msgs.push({ role: 'assistant', id: '_thinking', _thinking: true, _thinkingContent: streamingThinking || '', timestamp: new Date().toISOString() });
     } else if (streamingContent !== null && streamingPhase === 'streaming') {
-      msgs.push({ role: 'assistant', id: '_streaming', content: streamingContent, _streaming: true, timestamp: new Date().toISOString() });
+      // Include thinking bar above the streaming content if there was thinking
+      if (streamingThinking) {
+        msgs.push({ role: 'assistant', id: '_streaming', content: streamingContent, _streaming: true, _thinkingContent: streamingThinking, timestamp: new Date().toISOString() });
+      } else {
+        msgs.push({ role: 'assistant', id: '_streaming', content: streamingContent, _streaming: true, timestamp: new Date().toISOString() });
+      }
     }
     return msgs;
-  }, [messages, streamingContent, streamingPhase]);
+  }, [messages, streamingContent, streamingThinking, streamingPhase]);
 
   if (!allMessages.length) {
     return jsx('div', {
@@ -75,7 +134,8 @@ export function MessageThread({ messages, streamingContent, streamingPhase, onDe
     });
   }
 
-  return jsx('div', {
+  return jsxs(Fragment, { children: [
+    jsx('div', {
     ref: scrollRef,
     className: 'flex-1 overflow-y-auto px-4 py-3 space-y-3',
     children: allMessages.map((msg) => {
@@ -121,9 +181,14 @@ export function MessageThread({ messages, streamingContent, streamingPhase, onDe
                   })
                 ),
               }),
+              // Thinking bar (shown during thinking phase or above streamed/final content)
+              !isUser && msg._thinkingContent && jsx(ThinkingBar, {
+                content: msg._thinkingContent,
+                onClick: () => setThinkingModal(msg._thinkingContent),
+              }),
               // Message bubble
               isThinking
-                ? jsx('div', {
+                ? !msg._thinkingContent && jsx('div', {
                     className: 'px-4 py-3 text-sm rounded-2xl rounded-bl-md bg-gray-100 dark:bg-gray-800 min-w-[60px]',
                     children: jsx(ThinkingDots, {}),
                   })
@@ -153,5 +218,10 @@ export function MessageThread({ messages, streamingContent, streamingPhase, onDe
         ]}),
       });
     }),
-  });
+  }),
+    thinkingModal !== null && jsx(ThinkingModal, {
+      content: thinkingModal,
+      onClose: () => setThinkingModal(null),
+    }),
+  ]});
 }

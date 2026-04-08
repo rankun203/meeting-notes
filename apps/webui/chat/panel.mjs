@@ -6,7 +6,7 @@ import { ConversationList } from './conversations.mjs';
 import { MessageThread } from './thread.mjs';
 import { InputComposer } from './composer.mjs';
 
-export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingPhase, mentionData, llmConfigured }) {
+export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured }) {
   const [listExpanded, setListExpanded] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const bSize = isMobile ? BUBBLE_SIZE_MOBILE : BUBBLE_SIZE;
@@ -75,14 +75,14 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
         ]}),
       }),
       jsx(ConversationList, {
-        conversations, activeId, activeConv,
+        conversations, activeId, activeConv, tokenUsage,
         onSelect: (id) => { onSelectConversation(id); setListExpanded(false); },
         onNew: onNewConversation,
         onDelete: onDeleteConversation,
         expanded: listExpanded,
         onToggleExpanded: () => setListExpanded(!listExpanded),
       }),
-      jsx(MessageThread, { messages: activeConv ? activeConv.messages : [], streamingContent, streamingPhase, onDeleteMessage }),
+      jsx(MessageThread, { messages: activeConv ? activeConv.messages : [], streamingContent, streamingThinking, streamingPhase, onDeleteMessage }),
       jsx(InputComposer, { onSend, onStop, streaming, mentionData, conversationId: activeId }),
     ]}),
   });

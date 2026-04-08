@@ -29,6 +29,8 @@ pub enum Message {
         id: String,
         content: String,
         timestamp: DateTime<Utc>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Value>,
     },
     #[serde(rename = "context_result")]
     ContextResult {

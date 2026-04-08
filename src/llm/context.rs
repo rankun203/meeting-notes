@@ -117,7 +117,7 @@ pub async fn retrieve_context(
             }
         }
 
-        let mut include_transcript = mode == "transcript" || mode == "both";
+        let include_transcript = mode == "transcript" || mode == "both";
         let include_summary = mode == "summary" || mode == "both";
 
         // Summary content
@@ -140,9 +140,9 @@ pub async fn retrieve_context(
                     }
                 }
             }
-            // Fall back to transcript if summary was requested but not available
+            // Skip session if summary was requested but not available
             if !summary_found && mode == "summary" {
-                include_transcript = true;
+                continue;
             }
         }
 

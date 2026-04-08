@@ -35,7 +35,7 @@ export const API = window.location.origin + '/api';
 export const PAGE_SIZE = 50;
 
 export const INPUT_CLS = 'w-full rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors';
-export const LABEL_CLS = 'block text-[11px] font-medium text-gray-400 dark:text-gray-500 mb-0.5 uppercase tracking-wider';
+export const LABEL_CLS = 'block text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-0.5 uppercase tracking-wider';
 
 export const SPEAKER_COLORS = [
   'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300',

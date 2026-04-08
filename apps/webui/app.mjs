@@ -127,7 +127,14 @@ function App() {
       case 'summary_progress':
         setSessions(prev => prev.map(s =>
           s.id === event.data.id
-            ? { ...s, summary_processing: event.data.status || true, summary_streaming: '', summary_started_at: event.data.started_at }
+            ? { ...s, summary_processing: event.data.status || true, summary_streaming: '', summary_thinking: '', summary_started_at: event.data.started_at }
+            : s
+        ));
+        break;
+      case 'summary_thinking':
+        setSessions(prev => prev.map(s =>
+          s.id === event.data.id
+            ? { ...s, summary_thinking: (s.summary_thinking || '') + event.data.delta }
             : s
         ));
         break;
@@ -141,7 +148,7 @@ function App() {
       case 'summary_completed':
         setSessions(prev => prev.map(s =>
           s.id === event.data.id
-            ? { ...s, summary_available: true, summary_processing: false }
+            ? { ...s, summary_available: true, summary_processing: false, summary_streaming: null, _summary: event.data.summary || null, _todos: event.data.todos || null }
             : s
         ));
         break;

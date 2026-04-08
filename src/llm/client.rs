@@ -12,6 +12,8 @@ pub struct LlmClient {
     api_key: String,
     model: String,
     http: Client,
+    /// OpenRouter provider sort preference ("price", "throughput", or "latency").
+    provider_sort: Option<String>,
 }
 
 impl LlmClient {
@@ -21,7 +23,13 @@ impl LlmClient {
             api_key,
             model,
             http: Client::new(),
+            provider_sort: None,
         }
+    }
+
+    pub fn with_provider_sort(mut self, sort: Option<String>) -> Self {
+        self.provider_sort = sort;
+        self
     }
 
     /// Stream chat completion responses, yielding content delta strings.
@@ -34,11 +42,15 @@ impl LlmClient {
     ) -> Result<impl Stream<Item = Result<String, String>>, String> {
         let url = format!("{}/chat/completions", self.host.trim_end_matches('/'));
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
+        if let Some(sort) = &self.provider_sort {
+            body["provider"] = serde_json::json!({ "sort": sort });
+        }
 
         let response = self.http
             .post(&url)
@@ -105,6 +117,13 @@ impl LlmClient {
                                                 }
                                             }
                                         }
+
+                                        // Check for usage info (final chunk with stream_options)
+                                        if let Some(usage) = json.get("usage") {
+                                            if let Ok(usage_str) = serde_json::to_string(usage) {
+                                                yield Ok(format!("\x02{}", usage_str)); // \x02 prefix = usage
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         warn!("Failed to parse SSE data: {}", e);
@@ -131,10 +150,13 @@ impl LlmClient {
     ) -> Result<String, String> {
         let url = format!("{}/chat/completions", self.host.trim_end_matches('/'));
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
         });
+        if let Some(sort) = &self.provider_sort {
+            body["provider"] = serde_json::json!({ "sort": sort });
+        }
 
         let response = self.http
             .post(&url)

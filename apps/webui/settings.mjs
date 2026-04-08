@@ -358,6 +358,34 @@ function LlmSettingsSection({ form, setForm, settings }) {
         width: 440,
       }),
     ]}),
+    form.llm_host.includes('openrouter.ai') && jsxs('div', { children: [
+      jsx('label', { className: LABEL_CLS, children: 'Provider Sort' }),
+      jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'How OpenRouter picks a provider for this model.' }),
+      jsx('select', {
+        value: form.openrouter_sort,
+        onChange: e => setForm(prev => ({ ...prev, openrouter_sort: e.target.value })),
+        className: INPUT_CLS,
+        children: [
+          jsx('option', { value: '', children: 'Default (load-balanced by price)' }),
+          jsx('option', { value: 'price', children: 'Price (lowest first)' }),
+          jsx('option', { value: 'throughput', children: 'Throughput (fastest first)' }),
+          jsx('option', { value: 'latency', children: 'Latency (lowest first)' }),
+        ],
+      }),
+    ]}),
+    jsxs('div', { children: [
+      jsx('label', { className: LABEL_CLS, children: 'Self Introduction' }),
+      jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'Tell the assistant about yourself — your role, team, or preferences. This is included in every chat.' }),
+      jsx('textarea', {
+        value: form.chat_self_intro,
+        onChange: e => setForm(prev => ({ ...prev, chat_self_intro: e.target.value })),
+        onInput: autoResize,
+        ref: el => { if (el) autoResize({ target: el }); },
+        placeholder: 'e.g. I\'m a frontend engineer on the payments team. I mostly care about action items assigned to me.',
+        rows: 1,
+        className: INPUT_CLS + ' overflow-hidden',
+      }),
+    ]}),
   ]});
 }
 
@@ -383,7 +411,10 @@ export function SettingsPage({ category, onSelectSession }) {
         llm_host: data.llm_host || 'https://openrouter.ai/api/v1',
         llm_model: data.llm_model || 'anthropic/claude-sonnet-4',
         llm_api_key: '',
+        chat_self_intro: data.chat_self_intro || '',
+        openrouter_sort: data.openrouter_sort || '',
         summarization_model: data.summarization_model || '',
+        summarization_openrouter_sort: data.summarization_openrouter_sort || '',
         auto_transcribe: data.auto_transcribe ?? true,
         auto_summarize: data.auto_summarize ?? false,
       });
@@ -418,6 +449,12 @@ export function SettingsPage({ category, onSelectSession }) {
         update.llm_model = form.llm_model;
       if (form.llm_api_key)
         update.llm_api_key = form.llm_api_key;
+      if (form.chat_self_intro !== (settings.chat_self_intro || ''))
+        update.chat_self_intro = form.chat_self_intro || null;
+      if (form.openrouter_sort !== (settings.openrouter_sort || ''))
+        update.openrouter_sort = form.openrouter_sort || null;
+      if (form.summarization_openrouter_sort !== (settings.summarization_openrouter_sort || ''))
+        update.summarization_openrouter_sort = form.summarization_openrouter_sort || null;
       if (form.summarization_model !== (settings.summarization_model || ''))
         update.summarization_model = form.summarization_model || null;
       if (form.auto_transcribe !== settings.auto_transcribe)
@@ -577,6 +614,21 @@ export function SettingsPage({ category, onSelectSession }) {
             anchorPoint: form._sumModelPicker.anchorPoint,
             placeholder: 'Search models...',
             width: 440,
+          }),
+        ]}),
+        form.llm_host.includes('openrouter.ai') && jsxs('div', { children: [
+          jsx('label', { className: LABEL_CLS, children: 'Provider Sort' }),
+          jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'How OpenRouter picks a provider for the summarization model.' }),
+          jsx('select', {
+            value: form.summarization_openrouter_sort,
+            onChange: e => setForm(prev => ({ ...prev, summarization_openrouter_sort: e.target.value })),
+            className: INPUT_CLS,
+            children: [
+              jsx('option', { value: '', children: 'Default (load-balanced by price)' }),
+              jsx('option', { value: 'price', children: 'Price (lowest first)' }),
+              jsx('option', { value: 'throughput', children: 'Throughput (fastest first)' }),
+              jsx('option', { value: 'latency', children: 'Latency (lowest first)' }),
+            ],
           }),
         ]}),
         jsxs('label', { className: 'flex items-center gap-3 cursor-pointer', children: [

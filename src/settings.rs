@@ -66,6 +66,18 @@ pub struct AppSettings {
     #[serde(default)]
     pub auto_summarize: bool,
 
+    /// Self-introduction injected into the chat system prompt (e.g. role, team, preferences).
+    #[serde(default)]
+    pub chat_self_intro: Option<String>,
+
+    /// OpenRouter provider sort for the chat model ("price", "throughput", or "latency").
+    #[serde(default)]
+    pub openrouter_sort: Option<String>,
+
+    /// OpenRouter provider sort for the summarization model.
+    #[serde(default)]
+    pub summarization_openrouter_sort: Option<String>,
+
     /// Path to the settings file (not serialized).
     #[serde(skip)]
     settings_path: PathBuf,
@@ -143,6 +155,9 @@ impl Default for AppSettings {
             summarization_model: None,
             auto_transcribe: true,
             auto_summarize: false,
+            chat_self_intro: None,
+            openrouter_sort: None,
+            summarization_openrouter_sort: None,
             settings_path: PathBuf::new(),
         }
     }
@@ -252,6 +267,15 @@ impl AppSettings {
                 self.auto_summarize = b;
             }
         }
+        if let Some(v) = update.get("chat_self_intro") {
+            self.chat_self_intro = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        }
+        if let Some(v) = update.get("openrouter_sort") {
+            self.openrouter_sort = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        }
+        if let Some(v) = update.get("summarization_openrouter_sort") {
+            self.summarization_openrouter_sort = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        }
         self.save()
     }
 
@@ -292,6 +316,9 @@ impl AppSettings {
             "summarization_model": self.summarization_model,
             "auto_transcribe": self.auto_transcribe,
             "auto_summarize": self.auto_summarize,
+            "chat_self_intro": self.chat_self_intro,
+            "openrouter_sort": self.openrouter_sort,
+            "summarization_openrouter_sort": self.summarization_openrouter_sort,
         })
     }
 

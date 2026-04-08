@@ -140,15 +140,17 @@ pub fn format_context(chunks: &[ContextChunk]) -> String {
 ///
 /// Includes the system prompt with context, then user/assistant messages
 /// from conversation history (skips ContextResult messages).
-pub fn build_messages(conversation: &Conversation, context_str: &str) -> Vec<Value> {
+pub fn build_messages(conversation: &Conversation, context_str: &str, self_intro: Option<&str>) -> Vec<Value> {
     let mut messages = Vec::new();
 
     // System message with context
-    let system_content = if context_str.is_empty() {
-        system_prompt().to_string()
-    } else {
-        format!("{}\n\n--- MEETING TRANSCRIPT CONTEXT ---\n{}", system_prompt(), context_str)
-    };
+    let mut system_content = system_prompt().to_string();
+    if let Some(intro) = self_intro.filter(|s| !s.trim().is_empty()) {
+        system_content.push_str(&format!("\n\n--- ABOUT THE USER ---\n{}", intro));
+    }
+    if !context_str.is_empty() {
+        system_content = format!("{}\n\n--- MEETING TRANSCRIPT CONTEXT ---\n{}", system_content, context_str);
+    }
 
     messages.push(serde_json::json!({
         "role": "system",
@@ -184,12 +186,16 @@ pub fn build_messages(conversation: &Conversation, context_str: &str) -> Vec<Val
 ///
 /// Renders the system prompt, context, and all user/assistant messages
 /// in a copy-pasteable format.
-pub fn format_as_text(conversation: &Conversation, context_str: &str) -> String {
+pub fn format_as_text(conversation: &Conversation, context_str: &str, self_intro: Option<&str>) -> String {
     let mut out = String::new();
 
     // System prompt + context
     out.push_str("=== SYSTEM ===\n\n");
     out.push_str(system_prompt());
+    if let Some(intro) = self_intro.filter(|s| !s.trim().is_empty()) {
+        out.push_str("\n\n--- ABOUT THE USER ---\n");
+        out.push_str(intro);
+    }
     if !context_str.is_empty() {
         out.push_str("\n\n--- MEETING TRANSCRIPT CONTEXT ---\n");
         out.push_str(context_str);

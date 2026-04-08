@@ -1446,6 +1446,7 @@ async fn summarize_session(
     let mut prompt = settings.summarization_prompt.clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(crate::settings::default_summarization_prompt);
+    let sum_sort = settings.summarization_openrouter_sort.clone();
     drop(settings);
 
     if let Some(extra) = additional {
@@ -1479,7 +1480,7 @@ async fn summarize_session(
 
     tokio::spawn(async move {
         session_manager.emit_summary_progress(&session_id, "summarizing").await;
-        match crate::chat::summarize::run_summarization(&session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), &tags_mgr, &people_manager, &session_manager).await {
+        match crate::chat::summarize::run_summarization(&session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), &tags_mgr, &people_manager, &session_manager, sum_sort.as_deref()).await {
             Ok(_) => {
                 session_manager.refresh_files(&session_id).await;
                 session_manager.emit_summary_completed(&session_id).await;
@@ -1513,6 +1514,7 @@ async fn maybe_auto_summarize(
     let prompt = s.summarization_prompt.clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(crate::settings::default_summarization_prompt);
+    let sum_sort = s.summarization_openrouter_sort.clone();
     drop(s);
 
     let secrets = llm_secrets.read().await;
@@ -1529,7 +1531,7 @@ async fn maybe_auto_summarize(
 
     session_manager.emit_summary_progress(session_id, "summarizing").await;
 
-    match crate::chat::summarize::run_summarization(session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), tags_manager, people_manager, session_manager).await {
+    match crate::chat::summarize::run_summarization(session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), tags_manager, people_manager, session_manager, sum_sort.as_deref()).await {
         Ok(_) => {
             session_manager.refresh_files(session_id).await;
             session_manager.emit_summary_completed(session_id).await;
@@ -1856,12 +1858,15 @@ async fn send_message(
 
     // Prepare LLM request
     let context_str = crate::llm::prompt::format_context(&context_chunks);
-    let llm_messages = crate::llm::prompt::build_messages(&conv, &context_str);
 
     let settings = state.settings.read().await;
     let host = settings.llm_host.clone();
     let model = settings.llm_model.clone();
+    let openrouter_sort = settings.openrouter_sort.clone();
+    let self_intro = settings.chat_self_intro.clone();
     drop(settings);
+
+    let llm_messages = crate::llm::prompt::build_messages(&conv, &context_str, self_intro.as_deref());
 
     let secrets = state.llm_secrets.read().await;
     let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
@@ -1894,10 +1899,13 @@ async fn send_message(
         }
 
         // Stream from LLM
-        let client = LlmClient::new(host, api_key, model);
+        let model_name = model.clone();
+        let client = LlmClient::new(host, api_key, model)
+            .with_provider_sort(openrouter_sort);
         match client.stream_chat(llm_messages).await {
             Ok(llm_stream) => {
                 let mut full_content = String::new();
+                let mut usage_value: Option<Value> = None;
                 let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
 
                 futures::pin_mut!(llm_stream);
@@ -1905,10 +1913,32 @@ async fn send_message(
                 while let Some(result) = llm_stream.next().await {
                     match result {
                         Ok(content) => {
-                            full_content.push_str(&content);
-                            yield Ok(Event::default()
-                                .event("delta")
-                                .data(json!({"content": content}).to_string()));
+                            if let Some(thinking) = content.strip_prefix('\x01') {
+                                yield Ok(Event::default()
+                                    .event("thinking")
+                                    .data(json!({"content": thinking}).to_string()));
+                            } else if let Some(usage_str) = content.strip_prefix('\x02') {
+                                if let Ok(u) = serde_json::from_str::<Value>(usage_str) {
+                                    let prompt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let completion = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let total = u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt + completion);
+                                    let cost = u.get("cost").and_then(|v| v.as_f64());
+                                    let cost_str = cost.map(|c| format!(", cost ${:.4}", c)).unwrap_or_default();
+                                    info!(
+                                        "[{}] Chat {} — {} prompt + {} completion = {} tokens{}",
+                                        conv_id, model_name, prompt, completion, total, cost_str
+                                    );
+                                }
+                                usage_value = serde_json::from_str(usage_str).ok();
+                                yield Ok(Event::default()
+                                    .event("usage")
+                                    .data(usage_str.to_string()));
+                            } else {
+                                full_content.push_str(&content);
+                                yield Ok(Event::default()
+                                    .event("delta")
+                                    .data(json!({"content": content}).to_string()));
+                            }
                         }
                         Err(e) => {
                             yield Ok(Event::default()
@@ -1926,6 +1956,7 @@ async fn send_message(
                             id: assistant_msg_id.clone(),
                             content: full_content,
                             timestamp: chrono::Utc::now(),
+                            usage: usage_value,
                         });
                         conv.updated_at = chrono::Utc::now();
                         if let Err(e) = conv_manager.save(&conv) {
@@ -1977,7 +2008,8 @@ async fn export_prompt(
         .unwrap_or_default();
 
     let context_str = crate::llm::prompt::format_context(&context_chunks);
-    let text = crate::llm::prompt::format_as_text(&conv, &context_str);
+    let self_intro = state.settings.read().await.chat_self_intro.clone();
+    let text = crate::llm::prompt::format_as_text(&conv, &context_str, self_intro.as_deref());
 
     Ok((
         StatusCode::OK,

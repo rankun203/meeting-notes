@@ -81,7 +81,7 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     setText(newText);
     const hasSummary = item.summary_available ?? false;
     const hasTranscript = item.transcript_available ?? true;
-    const defaultMode = hasSummary ? 'summary' : 'transcript';
+    const defaultMode = (item.kind === 'tag' || item.kind === 'person') ? 'summary' : (hasSummary ? 'summary' : 'transcript');
     setMentions(prev => [...prev, { kind: item.kind, id: item.id, label: item.label, context_mode: defaultMode, summary_available: hasSummary, transcript_available: hasTranscript }]);
     setShowMention(false);
 

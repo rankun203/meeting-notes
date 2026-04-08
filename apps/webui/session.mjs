@@ -224,6 +224,12 @@ function renderMarkdown(content) {
   return markedModule.parse(content);
 }
 
+function formatTokens(n) {
+  if (n == null) return '';
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
+}
+
 // Convert [MM:SS] citation markers into clickable links for a given session
 function convertCitations(content, sessionId) {
   if (!content) return content;
@@ -262,6 +268,8 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const notesTimer = useRef(null);
   const [summaryElapsed, setSummaryElapsed] = useState(0);
   const summaryTimerRef = useRef(null);
+  const [thinkingModal, setThinkingModal] = useState(null); // null = closed, string = content
+  const thinkingBarRef = useRef(null);
 
   // Summary generation timer — derived from server-provided summary_started_at
   useEffect(() => {
@@ -315,14 +323,36 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
     }
   }, [session?.id, routeQuery]);
 
+  // Auto-scroll thinking bar to end
+  useEffect(() => {
+    if (thinkingBarRef.current) thinkingBarRef.current.scrollLeft = thinkingBarRef.current.scrollWidth;
+  }, [session?.summary_thinking]);
+
+  // Keep modal content in sync while open and streaming
+  useEffect(() => {
+    if (thinkingModal !== null && session?.summary_thinking) {
+      setThinkingModal(session.summary_thinking);
+    }
+  }, [session?.summary_thinking]);
+
+  // Use summary pushed via WebSocket if available
+  const lastPushedSummaryRef = useRef(null);
+  useEffect(() => {
+    if (session?._summary && session._summary !== lastPushedSummaryRef.current) {
+      lastPushedSummaryRef.current = session._summary;
+      setSummary(session._summary);
+      setSummaryLoading(false);
+    }
+  }, [session?._summary]);
+
   // Load summary when tab switches or summary becomes available
   useEffect(() => {
     if (activeTab !== 'summary' || !session?.summary_available) {
       setSummary(null);
       return;
     }
+    if (summary) return; // Already have it (from WebSocket push or previous fetch)
     let cancelled = false;
-    // Only show loading spinner if we don't already have streamed content
     if (!session?.summary_streaming) {
       setSummaryLoading(true);
     }
@@ -1055,6 +1085,13 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                 // Summary content
                 s.summary_processing
                   ? jsxs('div', { children: [
+                      s.summary_thinking && jsx('div', {
+                        ref: thinkingBarRef,
+                        onClick: () => setThinkingModal(s.summary_thinking),
+                        className: 'w-full overflow-x-auto no-scrollbar whitespace-nowrap text-[11px] text-gray-400 dark:text-gray-500 italic px-3 py-1.5 mb-2 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors select-none',
+                        style: { scrollbarWidth: 'none' },
+                        children: s.summary_thinking.replace(/\n/g, ' '),
+                      }),
                       s.summary_streaming
                         ? jsx('div', {
                             className: 'md-content text-sm text-gray-900 dark:text-gray-100',
@@ -1071,51 +1108,62 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                       ]}),
                     ]})
                   : summary?.content
-                    ? jsx('div', {
-                        className: 'md-content text-sm text-gray-900 dark:text-gray-100',
-                        dangerouslySetInnerHTML: { __html: renderMarkdown(convertCitations(summary.content, s.id)) },
-                        ref: el => {
-                          if (!el) return;
-                          el.querySelectorAll('input[type="checkbox"]').forEach((cb, idx) => {
-                            cb.disabled = false;
-                            const toggle = () => {
-                              let md = summary.content;
-                              let n = 0;
-                              md = md.replace(/- \[([ xX])\]/g, (match, check) => {
-                                if (n++ === idx) return check.trim() ? '- [ ]' : '- [x]';
-                                return match;
-                              });
-                              const updated = { ...summary, content: md };
-                              setSummary(updated);
-                              api(`/sessions/${s.id}/summary`, { method: 'PATCH', body: JSON.stringify({ content: md }) });
-                            };
-                            cb.onclick = e => { e.stopPropagation(); toggle(); };
-                            // Make the whole <li> clickable
-                            const li = cb.closest('li');
-                            if (li) {
-                              li.style.cursor = 'pointer';
-                              li.onclick = e => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'A') toggle(); };
-                            }
-                          });
-                          // Intercept citation links for in-app navigation
-                          el.querySelectorAll('a[href*="/sessions/"]').forEach(a => {
-                            const href = a.getAttribute('href');
-                            if (href && href.includes('jump=')) {
-                              a.style.cursor = 'pointer';
-                              a.onclick = e => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                const url = new URL(href, window.location.origin);
-                                const jump = parseFloat(url.searchParams.get('jump'));
-                                if (!isNaN(jump) && playerRef.current) {
-                                  setActiveTab('transcript');
-                                  playerRef.current.seekAndPlay(jump);
-                                }
+                    ? jsxs(Fragment, { children: [
+                        jsx('div', {
+                          className: 'md-content text-sm text-gray-900 dark:text-gray-100',
+                          dangerouslySetInnerHTML: { __html: renderMarkdown(convertCitations(summary.content, s.id)) },
+                          ref: el => {
+                            if (!el) return;
+                            el.querySelectorAll('input[type="checkbox"]').forEach((cb, idx) => {
+                              cb.disabled = false;
+                              const toggle = () => {
+                                let md = summary.content;
+                                let n = 0;
+                                md = md.replace(/- \[([ xX])\]/g, (match, check) => {
+                                  if (n++ === idx) return check.trim() ? '- [ ]' : '- [x]';
+                                  return match;
+                                });
+                                const updated = { ...summary, content: md };
+                                setSummary(updated);
+                                api(`/sessions/${s.id}/todos/${idx}`, { method: 'PATCH' });
                               };
-                            }
-                          });
-                        },
-                      })
+                              cb.onclick = e => { e.stopPropagation(); toggle(); };
+                              // Make the whole <li> clickable
+                              const li = cb.closest('li');
+                              if (li) {
+                                li.style.cursor = 'pointer';
+                                li.onclick = e => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'A') toggle(); };
+                              }
+                            });
+                            // Intercept citation links for in-app navigation
+                            el.querySelectorAll('a[href*="/sessions/"]').forEach(a => {
+                              const href = a.getAttribute('href');
+                              if (href && href.includes('jump=')) {
+                                a.style.cursor = 'pointer';
+                                a.onclick = e => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const url = new URL(href, window.location.origin);
+                                  const jump = parseFloat(url.searchParams.get('jump'));
+                                  if (!isNaN(jump) && playerRef.current) {
+                                    setActiveTab('transcript');
+                                    playerRef.current.seekAndPlay(jump);
+                                  }
+                                };
+                              }
+                            });
+                          },
+                        }),
+                        summary.usage && jsx('div', {
+                          className: 'mt-4 pt-3 border-t border-gray-100 dark:border-gray-800 text-[11px] text-gray-400 dark:text-gray-500',
+                          children: [
+                            summary.model && `${summary.model}`,
+                            summary.usage.prompt_tokens != null && ` · ${formatTokens(summary.usage.prompt_tokens)} in`,
+                            summary.usage.completion_tokens != null && ` / ${formatTokens(summary.usage.completion_tokens)} out`,
+                            summary.usage.cost != null && ` · $${summary.usage.cost.toFixed(4)}`,
+                          ].filter(Boolean).join(''),
+                        }),
+                      ]})
                     : s.summary_streaming
                       ? jsx('div', {
                           className: 'md-content text-sm text-gray-900 dark:text-gray-100',
@@ -1176,6 +1224,30 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
             children: ['ID: ', s.id],
           }),
         ]}),
+      }),
+      thinkingModal !== null && jsx('div', {
+        className: 'fixed inset-0 z-[20000] flex items-center justify-center bg-black/40 p-6',
+        onClick: (e) => { if (e.target === e.currentTarget) setThinkingModal(null); },
+        children: jsx('div', {
+          className: 'bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden',
+          children: jsxs(Fragment, { children: [
+            jsxs('div', {
+              className: 'flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0',
+              children: [
+                jsx('span', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Thinking' }),
+                jsx('button', {
+                  onClick: () => setThinkingModal(null),
+                  className: 'p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors',
+                  children: jsx(CloseIcon, { className: 'w-4 h-4 text-gray-500' }),
+                }),
+              ],
+            }),
+            jsx('div', {
+              className: 'flex-1 overflow-y-auto px-4 py-3 text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap',
+              children: thinkingModal,
+            }),
+          ]}),
+        }),
       }),
     ]}),
   });

@@ -1,38 +1,15 @@
 import { jsx, jsxs, Fragment, formatTime, formatFileSize } from '../utils.mjs';
 import { PlusIcon } from '../icons.mjs';
 
-function countWords(activeConv) {
-  if (!activeConv || !activeConv.messages) return { total: 0, hasContext: false };
-  let total = 0;
-  let hasContext = false;
-  for (const m of activeConv.messages) {
-    const text = m.content || '';
-    if (text) total += text.split(/\s+/).filter(Boolean).length;
-    if (m.role === 'context_result' && m.chunks) {
-      for (const c of m.chunks) {
-        if (!c) continue;
-        if (c.note) { total += c.note.split(/\s+/).filter(Boolean).length; hasContext = true; }
-        if (c.segment) {
-          const t = c.segment.text || '';
-          if (t) { total += t.split(/\s+/).filter(Boolean).length; hasContext = true; }
-        }
-      }
-    }
-  }
-  return { total, hasContext };
+function formatTokens(n) {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
 }
 
-function formatWordCount(n, hasContext) {
-  const suffix = hasContext ? ' incl. context' : '';
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k words${suffix}`;
-  return `${n} words${suffix}`;
-}
-
-export function ConversationList({ conversations, activeId, activeConv, onSelect, onNew, onDelete, expanded, onToggleExpanded }) {
+export function ConversationList({ conversations, activeId, activeConv, tokenUsage, onSelect, onNew, onDelete, expanded, onToggleExpanded }) {
   if (!conversations.length) return null;
 
   const active = conversations.find(c => c.id === activeId);
-  const { total: words, hasContext } = countWords(activeConv);
 
   return jsx('div', {
     className: 'border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50',
@@ -59,7 +36,7 @@ export function ConversationList({ conversations, activeId, activeConv, onSelect
           children: [
             jsx('span', { className: 'font-medium text-gray-700 dark:text-gray-300 truncate flex-1 min-w-0', children: active.title || 'New conversation' }),
             jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: formatFileSize(active.size_bytes || 0) }),
-            words > 0 && jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: formatWordCount(words, hasContext) }),
+            tokenUsage && jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: `${formatTokens(tokenUsage.prompt_tokens)} in / ${formatTokens(tokenUsage.completion_tokens)} out` }),
           ],
         }),
       }),

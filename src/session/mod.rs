@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
 use tokio::sync::{RwLock, broadcast};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -63,8 +64,16 @@ pub enum ServerEvent {
         id: String,
         delta: String,
     },
+    SummaryThinking {
+        id: String,
+        delta: String,
+    },
     SummaryCompleted {
         id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        todos: Option<Value>,
     },
     SummaryFailed {
         id: String,
@@ -676,6 +685,13 @@ impl SessionManager {
         });
     }
 
+    pub fn emit_summary_thinking(&self, id: &str, delta: &str) {
+        self.emit(ServerEvent::SummaryThinking {
+            id: id.to_string(),
+            delta: delta.to_string(),
+        });
+    }
+
     pub async fn emit_summary_progress(&self, id: &str, status: &str) {
         let started_at;
         {
@@ -703,8 +719,18 @@ impl SessionManager {
                 session.summary_started_at = None;
             }
         }
+        let dir = self.session_dir(id);
+        // Read saved summary and todos so frontend has them immediately
+        let summary = std::fs::read_to_string(dir.join("summary.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let todos = std::fs::read_to_string(dir.join("todos.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
         self.emit(ServerEvent::SummaryCompleted {
             id: id.to_string(),
+            summary,
+            todos,
         });
     }
 

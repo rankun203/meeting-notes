@@ -235,6 +235,7 @@ pub async fn run_summarization(
     tags_manager: &TagsManager,
     people_manager: &PeopleManager,
     session_manager: &SessionManager,
+    provider_sort: Option<&str>,
 ) -> Result<(), String> {
     let language = session_info
         .map(|s| s.language.as_str())
@@ -264,7 +265,8 @@ pub async fn run_summarization(
 
     info!("[{}] Generating summary with model {}", session_id, model);
 
-    let client = LlmClient::new(host.to_string(), api_key.to_string(), model.to_string());
+    let client = LlmClient::new(host.to_string(), api_key.to_string(), model.to_string())
+        .with_provider_sort(provider_sort.map(|s| s.to_string()));
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
         json!({"role": "user", "content": format!("Here is the meeting transcript:\n\n{}", meeting_text)}),
@@ -278,6 +280,7 @@ pub async fn run_summarization(
     let mut content = String::new();
     let mut first_chunk = true;
     let mut was_thinking = false;
+    let mut usage_value: Option<Value> = None;
     while let Some(result) = stream.next().await {
         match result {
             Ok(delta) => {
@@ -290,7 +293,17 @@ pub async fn run_summarization(
                         was_thinking = true;
                         session_manager.emit_summary_progress(session_id, "thinking").await;
                     }
+                    let thinking_text = delta.trim_start_matches('\x01');
+                    if !thinking_text.is_empty() {
+                        session_manager.emit_summary_thinking(session_id, thinking_text);
+                    }
                     continue; // Don't include thinking in output
+                }
+
+                // \x02 prefix = usage info
+                if let Some(usage_str) = delta.strip_prefix('\x02') {
+                    usage_value = serde_json::from_str(usage_str).ok();
+                    continue;
                 }
 
                 if first_chunk {
@@ -315,12 +328,27 @@ pub async fn run_summarization(
         return Err("LLM returned empty response".to_string());
     }
 
-    let summary = json!({
+    let mut summary = json!({
         "content": content,
         "model": model,
         "messages": messages,
         "generated_at": Utc::now().to_rfc3339(),
     });
+
+    if let Some(ref usage) = usage_value {
+        let prompt = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let completion = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let total = usage.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt + completion);
+        let cost = usage.get("cost").and_then(|v| v.as_f64());
+        let cost_str = cost.map(|c| format!(", cost ${:.4}", c)).unwrap_or_default();
+        info!(
+            "[{}] Summary saved — {} prompt + {} completion = {} tokens{}",
+            session_id, prompt, completion, total, cost_str
+        );
+        summary["usage"] = usage.clone();
+    } else {
+        info!("[{}] Summary saved", session_id);
+    }
 
     let summary_path = session_dir.join("summary.json");
     let json_str = serde_json::to_string_pretty(&summary)
@@ -343,10 +371,5 @@ pub async fn run_summarization(
         info!("[{}] Extracted {} TODOs", session_id, todos.len());
     }
 
-    info!(
-        "[{}] Summary saved ({} words)",
-        session_id,
-        content.split_whitespace().count()
-    );
     Ok(())
 }

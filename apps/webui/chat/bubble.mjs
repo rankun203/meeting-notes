@@ -20,7 +20,9 @@ export function ChatBubble() {
   // Streaming state
   const [streaming, setStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState(null);
+  const [streamingThinking, setStreamingThinking] = useState(null);
   const [streamingPhase, setStreamingPhase] = useState(null); // 'thinking' | 'streaming' | null
+  const [tokenUsage, setTokenUsage] = useState(null); // { prompt_tokens, completion_tokens }
 
   // Mention data (cached)
   const [mentionData, setMentionData] = useState({ tags: [], people: [], sessions: [] });
@@ -201,7 +203,9 @@ export function ChatBubble() {
     setActiveConv(prev => prev ? { ...prev, messages: [...prev.messages, userMsg] } : { id: convId, messages: [userMsg] });
     setStreaming(true);
     setStreamingContent('');
+    setStreamingThinking('');
     setStreamingPhase('thinking');
+    setTokenUsage(null);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -223,6 +227,8 @@ export function ChatBubble() {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullContent = '';
+      let fullThinking = '';
+      let lastEvent = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -233,11 +239,19 @@ export function ChatBubble() {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (line.startsWith('event: ')) { lastEvent = line.slice(7).trim(); continue; }
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
+          const eventType = lastEvent || 'delta';
+          lastEvent = null;
           try {
             const parsed = JSON.parse(data);
-            if (parsed.content !== undefined) {
+            if (eventType === 'usage') {
+              setTokenUsage(parsed);
+            } else if (eventType === 'thinking' && parsed.content !== undefined) {
+              fullThinking += parsed.content;
+              setStreamingThinking(fullThinking);
+            } else if (parsed.content !== undefined) {
               fullContent += parsed.content;
               setStreamingPhase('streaming');
               setStreamingContent(fullContent);
@@ -261,6 +275,7 @@ export function ChatBubble() {
       }
 
       setStreamingContent(null);
+      setStreamingThinking(null);
       setStreaming(false);
       setStreamingPhase(null);
       await loadConversation(convId);
@@ -270,6 +285,7 @@ export function ChatBubble() {
       if (e.name === 'AbortError') {
         // Cancelled by user — keep whatever was streamed
         setStreamingContent(null);
+        setStreamingThinking(null);
         setStreaming(false);
         setStreamingPhase(null);
         await loadConversation(convId);
@@ -277,6 +293,7 @@ export function ChatBubble() {
         return;
       }
       setStreamingContent(null);
+      setStreamingThinking(null);
       setStreaming(false);
       setStreamingPhase(null);
       setActiveConv(prev => prev ? {
@@ -338,7 +355,7 @@ export function ChatBubble() {
       onDeleteMessage: handleDeleteMessage,
       onClose: closePanel, onMinimize: closePanel,
       bubblePos, isMobile, closing: panelClosing,
-      streaming, streamingContent, streamingPhase, mentionData, llmConfigured,
+      streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured,
     }),
   ]});
 }
