@@ -17,6 +17,7 @@ use tracing::{info, warn, error};
 use crate::chat::manager::ConversationManager;
 use crate::chat::types::{ContextCriteria, Mention, Message};
 use crate::filesdb::FilesDb;
+use crate::llm::claude_code::ClaudeCodeRunner;
 use crate::llm::client::LlmClient;
 use crate::llm::secrets::SharedSecrets;
 use crate::people::PeopleManager;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub tags_manager: TagsManager,
     pub conversation_manager: ConversationManager,
     pub llm_secrets: SharedSecrets,
+    pub claude_runner: ClaudeCodeRunner,
 }
 
 impl AppState {
@@ -1400,9 +1402,6 @@ async fn toggle_todo(
     std::fs::write(&todos_path, json_str)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
 
-    // Update todos.md
-    crate::markdown::write_todos_md(&dir, &todos);
-
     // Also update the summary.md and summary.json checkbox states
     let summary_json_path = dir.join("summary.json");
     if summary_json_path.exists() {
@@ -1748,6 +1747,7 @@ pub fn conversation_routes() -> Router<AppState> {
         .route("/conversations/{id}", delete(delete_conversation))
         .route("/conversations/{id}/messages", post(send_message))
         .route("/conversations/{id}/messages/{msg_id}", delete(delete_message))
+        .route("/conversations/{id}/claude-sync", post(sync_claude_messages))
         .route("/conversations/{id}/export-prompt", get(export_prompt))
         .route("/llm/models", get(list_models))
 }
@@ -1764,8 +1764,14 @@ async fn create_conversation(
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let title = body.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let conv = state.conversation_manager.create(title)
+    let chat_backend = body.get("chat_backend").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let mut conv = state.conversation_manager.create(title)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    if chat_backend.is_some() {
+        conv.chat_backend = chat_backend;
+        state.conversation_manager.save(&conv)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }
     Ok((StatusCode::CREATED, Json(serde_json::to_value(&conv).unwrap_or_default())))
 }
 
@@ -2037,6 +2043,66 @@ async fn send_message(
     Ok(Sse::new(stream))
 }
 
+/// Sync messages from a Claude Code session into an app conversation.
+/// Receives user + assistant messages and the claude session_id.
+async fn sync_claude_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut conv = state.conversation_manager.get(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+
+    if let Some(sid) = body.get("claude_session_id").and_then(|v| v.as_str()) {
+        conv.claude_session_id = Some(sid.to_string());
+    }
+
+    if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
+        let now = chrono::Utc::now();
+        for msg in messages {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let msg_id = msg.get("id").and_then(|v| v.as_str())
+                .unwrap_or(&format!("msg_{}", now.timestamp_nanos_opt().unwrap_or(0)))
+                .to_string();
+
+            if content.is_empty() { continue; }
+
+            match role {
+                "user" => {
+                    // Parse mentions if present
+                    let mentions: Vec<crate::chat::types::Mention> = msg.get("mentions")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    conv.messages.push(Message::User {
+                        id: msg_id, content, mentions, timestamp: now,
+                    });
+                }
+                "assistant" => {
+                    conv.messages.push(Message::Assistant {
+                        id: msg_id, content, timestamp: now, usage: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    conv.updated_at = chrono::Utc::now();
+    if conv.title.is_empty() {
+        if let Some(first_user) = conv.messages.iter().find(|m| matches!(m, Message::User { .. })) {
+            if let Message::User { content, .. } = first_user {
+                conv.title = content.chars().take(60).collect();
+            }
+        }
+    }
+
+    state.conversation_manager.save(&conv)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn delete_message(
     State(state): State<AppState>,
     Path((id, msg_id)): Path<(String, String)>,
@@ -2073,6 +2139,160 @@ async fn export_prompt(
         [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         text,
     ))
+}
+
+// --- Claude Code routes ---
+
+pub fn claude_routes() -> Router<AppState> {
+    Router::new()
+        .route("/claude/status", get(claude_status))
+        .route("/claude/send", post(claude_send))
+        .route("/claude/stop", post(claude_stop))
+        .route("/claude/sessions", get(claude_list_sessions))
+        .route("/claude/sessions/{id}", get(claude_get_session))
+        .route("/claude/approve-tools", post(claude_approve_tools))
+}
+
+async fn claude_status(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let available = ClaudeCodeRunner::is_available().await;
+    let running = state.claude_runner.is_running().await;
+    Json(json!({
+        "available": available,
+        "running": running,
+    }))
+}
+
+async fn claude_send(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)> {
+    let prompt = body.get("prompt").and_then(|v| v.as_str())
+        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "prompt is required"}))))?
+        .to_string();
+    let session_id = body.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    // Resolve @ mentions to detailed context for Claude Code
+    let mentions_context = if let Some(mentions) = body.get("mentions").and_then(|v| v.as_array()) {
+        let mut lines = Vec::new();
+        for m in mentions {
+            let mtype = m.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let label = m.get("label").and_then(|v| v.as_str()).unwrap_or(id);
+            match mtype {
+                "session" => {
+                    lines.push(format!("- Session \"{}\" (id: {})", label, id));
+                }
+                "person" => {
+                    let person = state.people_manager.get_person(id).await;
+                    let name = person.as_ref().map(|p| p.name.as_str()).unwrap_or(label);
+                    lines.push(format!("- Person \"{}\" (id: {})", name, id));
+                }
+                "tag" => {
+                    let tag = state.tags_manager.get_tag(label).await;
+                    let notes = tag.as_ref().and_then(|t| t.notes.as_deref()).unwrap_or("");
+                    if notes.is_empty() {
+                        lines.push(format!("- Tag \"{}\"", label));
+                    } else {
+                        lines.push(format!("- Tag \"{}\": {}", label, notes));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(format!("Referenced:\n{}", lines.join("\n")))
+        }
+    } else {
+        None
+    };
+
+    let claude_model = state.settings.read().await.claude_code_model.clone();
+
+    // Mentions context prepended to the prompt
+    let combined_context = mentions_context;
+
+    // Build the full prompt so we can include it in the stream for export
+    let full_prompt = match &combined_context {
+        Some(ctx) => format!("{}\n\n---\n{}", ctx, prompt),
+        None => prompt.clone(),
+    };
+
+    let mut rx = state.claude_runner.run(
+        &prompt,
+        session_id.as_deref(),
+        combined_context.as_deref(),
+        claude_model.as_deref(),
+    ).await.map_err(|e| (StatusCode::CONFLICT, Json(json!({"error": e}))))?;
+
+    let stream = async_stream::stream! {
+        // Emit the full prompt (with resolved mentions) so the frontend can export it
+        yield Ok(Event::default().event("prompt").data(json!({"full_prompt": full_prompt}).to_string()));
+
+        while let Some(event) = rx.recv().await {
+            let (event_name, data) = match &event {
+                crate::llm::claude_code::ClaudeEvent::Init { .. } => ("init", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::Delta { .. } => ("delta", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::ToolUse { .. } => ("tool_use", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::Done { .. } => ("done", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::Error { .. } => ("error", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::PermissionRequest { .. } => ("permission_request", serde_json::to_string(&event).unwrap()),
+            };
+            yield Ok(Event::default().event(event_name).data(data));
+        }
+    };
+
+    Ok(Sse::new(stream))
+}
+
+async fn claude_stop(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let stopped = state.claude_runner.stop().await;
+    Json(json!({ "stopped": stopped }))
+}
+
+async fn claude_approve_tools(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let tools: Vec<String> = body.get("tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let permanent = body.get("permanent").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    if tools.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "no tools specified"}))));
+    }
+
+    if permanent {
+        state.claude_runner.approve_tools_permanent(&tools)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }
+    // Always add to session approved (permanent includes session)
+    state.claude_runner.approve_tools_session(&tools).await;
+
+    Ok(Json(json!({ "approved": tools, "permanent": permanent })))
+}
+
+async fn claude_list_sessions(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let sessions = state.claude_runner.list_sessions();
+    Json(json!({ "sessions": sessions }))
+}
+
+async fn claude_get_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let messages = state.claude_runner.load_session(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
+    Ok(Json(json!({ "session_id": id, "messages": messages })))
 }
 
 async fn list_models(

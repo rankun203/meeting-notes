@@ -10,6 +10,12 @@ pub struct Conversation {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub messages: Vec<Message>,
+    /// "openrouter" (default) or "claude_code"
+    #[serde(default)]
+    pub chat_backend: Option<String>,
+    /// Claude Code session ID for --resume
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
 }
 
 /// A message in a conversation. Tagged by role for JSON serialization.
@@ -190,4 +196,8 @@ pub struct ConversationSummary {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
 }

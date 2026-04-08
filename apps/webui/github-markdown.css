@@ -132,6 +132,7 @@
   font-size: 14px;
   line-height: 1.5;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 .md-content .octicon {
@@ -173,6 +174,8 @@
   background-color: transparent;
   color: var(--fgColor-accent);
   text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .md-content abbr[title] {
@@ -472,7 +475,8 @@
   margin-bottom: 0;
   font-family: var(--fontStack-monospace, ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace);
   font-size: 12px;
-  word-wrap: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .md-content .octicon {
@@ -842,8 +846,8 @@
 .md-content pre>code {
   padding: 0;
   margin: 0;
-  word-break: normal;
-  white-space: pre;
+  word-break: break-all;
+  white-space: pre-wrap;
   background: transparent;
   border: 0;
 }
@@ -876,7 +880,8 @@
   margin: 0;
   overflow: visible;
   line-height: inherit;
-  word-wrap: normal;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
   background-color: transparent;
   border: 0;
 }

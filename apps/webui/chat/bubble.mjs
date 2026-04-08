@@ -30,6 +30,19 @@ export function ChatBubble() {
   // LLM configured status
   const [llmConfigured, setLlmConfigured] = useState(false);
 
+  // Chat backend: 'openrouter' or 'claude_code'
+  const [chatBackend, setChatBackend] = useState('openrouter');
+  // Claude Code session ID for --resume
+  const [claudeSessionId, setClaudeSessionId] = useState(null);
+  // Tool activity for Claude Code (accumulates during a response)
+  const [toolActivities, setToolActivities] = useState([]);
+  // Full prompts sent to Claude Code (for export)
+  const claudePromptsRef = useRef([]);
+  // Track tool activities during streaming (ref for access in finalize)
+  const toolActivitiesRef = useRef([]);
+  // Pending permission requests (persists across conversation reloads)
+  const [pendingPermissions, setPendingPermissions] = useState([]);
+
   // Bubble position
   const [snapIndex, setSnapIndex] = useState(loadSnap);
   const [bubblePos, setBubblePos] = useState(() => {
@@ -43,10 +56,20 @@ export function ChatBubble() {
   const [hovering, setHovering] = useState(false);
   const abortRef = useRef(null);
 
+  const chatBackendRef = useRef(chatBackend);
+  useEffect(() => { chatBackendRef.current = chatBackend; }, [chatBackend]);
+
   const refreshConvList = useCallback(async () => {
     try {
       const data = await api('/conversations');
-      setConvList(data.conversations || []);
+      const backend = chatBackendRef.current;
+      // Filter by backend
+      const filtered = (data.conversations || []).filter(c =>
+        backend === 'claude_code'
+          ? c.chat_backend === 'claude_code'
+          : !c.chat_backend || c.chat_backend === 'openrouter'
+      );
+      setConvList(filtered);
     } catch {}
   }, []);
 
@@ -55,14 +78,22 @@ export function ChatBubble() {
     try {
       const conv = await api(`/conversations/${id}`);
       setActiveConv(conv);
+      if (conv.claude_session_id) {
+        setClaudeSessionId(conv.claude_session_id);
+      }
     } catch { setActiveConv(null); }
   }, []);
 
   // Load mention data when panel opens
   useEffect(() => {
     if (!panelOpen) return;
-    refreshConvList();
-    api('/settings').then(s => setLlmConfigured(!!s.llm_api_key_set)).catch(() => {});
+    api('/settings').then(s => {
+      setLlmConfigured(!!s.llm_api_key_set);
+      const backend = s.chat_backend || 'openrouter';
+      setChatBackend(backend);
+      chatBackendRef.current = backend;
+      refreshConvList();
+    }).catch(() => { refreshConvList(); });
     Promise.all([
       api('/tags').catch(() => ({ tags: [] })),
       api('/people').catch(() => ({ people: [] })),
@@ -77,7 +108,7 @@ export function ChatBubble() {
   }, [panelOpen]);
 
   useEffect(() => {
-    if (activeId) loadConversation(activeId);
+    if (activeId && !streaming) loadConversation(activeId);
   }, [activeId]);
 
   useEffect(() => {
@@ -183,6 +214,209 @@ export function ChatBubble() {
 
   function handleStop() {
     if (abortRef.current) abortRef.current.abort();
+    if (chatBackend === 'claude_code') {
+      api('/claude/stop', { method: 'POST' }).catch(() => {});
+    }
+  }
+
+  async function handleSendClaude(content, mentions) {
+    if (streaming) return;
+
+    // Create app conversation lazily on first message
+    let convId = activeId;
+    if (!convId) {
+      try {
+        const conv = await api('/conversations', { method: 'POST', body: JSON.stringify({ title: content.slice(0, 60), chat_backend: 'claude_code' }) });
+        convId = conv.id;
+        setActiveId(convId);
+        setActiveConv(conv);
+      } catch { return; }
+    }
+
+    const userMsg = { role: 'user', id: 'pending_' + Date.now(), content, mentions, timestamp: new Date().toISOString() };
+    setActiveConv(prev => prev
+      ? { ...prev, messages: [...prev.messages, userMsg] }
+      : { id: convId, title: content.slice(0, 60), messages: [userMsg] });
+    setStreaming(true);
+    setStreamingContent('');
+    setStreamingPhase('streaming');
+    setToolActivities([]);
+    toolActivitiesRef.current = [];
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await fetch(`${API}/claude/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: content,
+          session_id: claudeSessionId,
+          mentions: mentions?.length ? mentions : undefined,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullContent = '';
+      let lastEvent = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) { lastEvent = line.slice(7).trim(); continue; }
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6);
+          const eventType = lastEvent || 'delta';
+          lastEvent = null;
+          try {
+            const parsed = JSON.parse(data);
+            if (eventType === 'prompt') {
+              claudePromptsRef.current.push(parsed.full_prompt);
+            } else if (eventType === 'init') {
+              setClaudeSessionId(parsed.session_id);
+            } else if (eventType === 'delta' && parsed.content) {
+              fullContent += parsed.content;
+              setStreamingContent(fullContent);
+            } else if (eventType === 'tool_use') {
+              const ta = { tool: parsed.tool, summary: parsed.input_summary };
+              toolActivitiesRef.current.push(ta);
+              setToolActivities(prev => [...prev, ta]);
+            } else if (eventType === 'permission_request') {
+              const tools = parsed.tools || [];
+              if (tools.length > 0) {
+                setPendingPermissions(prev => {
+                  // Dedupe by tool name
+                  const existing = new Set(prev.flatMap(p => p.tools));
+                  const newTools = tools.filter(t => !existing.has(t));
+                  return newTools.length > 0 ? [...prev, { id: Date.now(), tools: newTools }] : prev;
+                });
+              }
+            } else if (eventType === 'done') {
+              setClaudeSessionId(parsed.session_id);
+              setTokenUsage(parsed.cost_usd != null ? { cost_usd: parsed.cost_usd } : null);
+            } else if (eventType === 'error') {
+              throw new Error(parsed.error);
+            }
+          } catch (parseErr) {
+            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
+          }
+        }
+      }
+
+      // Finalize: add assistant message to local state (with tool activities preserved)
+      const finalTools = toolActivitiesRef.current.length > 0 ? [...toolActivitiesRef.current] : undefined;
+      setStreamingContent(null);
+      setStreaming(false);
+      setStreamingPhase(null);
+      setToolActivities([]);
+      if (fullContent) {
+        setActiveConv(prev => prev ? {
+          ...prev,
+          messages: [...prev.messages, { role: 'assistant', id: 'claude_' + Date.now(), content: fullContent, _toolActivities: finalTools, timestamp: new Date().toISOString() }]
+        } : prev);
+      }
+      // Persist to app conversation system
+      if (convId) {
+        const syncMessages = [
+          { role: 'user', id: userMsg.id, content, mentions },
+        ];
+        if (fullContent) {
+          syncMessages.push({ role: 'assistant', id: 'claude_' + Date.now(), content: fullContent });
+        }
+        await api(`/conversations/${convId}/claude-sync`, {
+          method: 'POST',
+          body: JSON.stringify({
+            claude_session_id: claudeSessionId,
+            messages: syncMessages,
+          }),
+        }).catch(() => {});
+        await loadConversation(convId);
+        await refreshConvList();
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        setStreamingContent(null);
+        setStreaming(false);
+        setStreamingPhase(null);
+        setToolActivities([]);
+        return;
+      }
+      setStreamingContent(null);
+      setStreaming(false);
+      setStreamingPhase(null);
+      setToolActivities([]);
+      setActiveConv(prev => prev ? {
+        ...prev,
+        messages: [...prev.messages, { role: 'assistant', id: 'err_' + Date.now(), content: `Error: ${e.message}`, timestamp: new Date().toISOString() }]
+      } : prev);
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  async function handleApproveTools(tools, permanent) {
+    try {
+      await api('/claude/approve-tools', {
+        method: 'POST',
+        body: JSON.stringify({ tools, permanent }),
+      });
+      // Remove from pending
+      setPendingPermissions(prev => prev.filter(p => !p.tools.every(t => tools.includes(t))));
+      // Auto-retry: re-send the last user message
+      if (!streaming && activeConv?.messages?.length) {
+        const lastUser = [...activeConv.messages].reverse().find(m => m.role === 'user');
+        if (lastUser) {
+          handleSendClaude(lastUser.content, lastUser.mentions || []);
+        }
+      }
+    } catch (e) {
+      alert('Failed to approve: ' + e.message);
+    }
+  }
+
+  function handleExportClaude() {
+    const conv = activeConv;
+    if (!conv || !conv.messages?.length) return;
+    const prompts = claudePromptsRef.current;
+    let out = '';
+    let promptIdx = 0;
+    for (const msg of conv.messages) {
+      if (msg.role === 'user') {
+        out += `\n=== USER ===\n\n`;
+        // Use the full prompt (with references) if available
+        if (promptIdx < prompts.length) {
+          out += prompts[promptIdx] + '\n';
+          promptIdx++;
+        } else {
+          out += (msg.content || '') + '\n';
+        }
+      } else if (msg.role === 'assistant') {
+        out += `\n=== ASSISTANT ===\n\n`;
+        out += (msg.content || '') + '\n';
+      }
+    }
+    const blob = new Blob([out.trim() + '\n'], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claude-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function handleSend(content, mentions) {
@@ -349,13 +583,18 @@ export function ChatBubble() {
     panelOpen && jsx(ChatPanel, {
       conversations: convList, activeConv, activeId,
       onSelectConversation: handleSelectConversation,
-      onNewConversation: handleNewConversation,
+      onNewConversation: () => { handleNewConversation(); if (chatBackend === 'claude_code') { setClaudeSessionId(null); claudePromptsRef.current = []; } },
       onDeleteConversation: handleDeleteConversation,
-      onSend: handleSend, onStop: handleStop,
+      onSend: chatBackend === 'claude_code' ? handleSendClaude : handleSend,
+      onStop: handleStop,
       onDeleteMessage: handleDeleteMessage,
       onClose: closePanel, onMinimize: closePanel,
       bubblePos, isMobile, closing: panelClosing,
       streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured,
+      chatBackend, toolActivities,
+      onExport: chatBackend === 'claude_code' ? handleExportClaude : null,
+      onApproveTools: chatBackend === 'claude_code' ? handleApproveTools : null,
+      pendingPermissions,
     }),
   ]});
 }

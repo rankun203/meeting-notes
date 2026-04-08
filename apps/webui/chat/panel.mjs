@@ -6,7 +6,7 @@ import { ConversationList } from './conversations.mjs';
 import { MessageThread } from './thread.mjs';
 import { InputComposer } from './composer.mjs';
 
-export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured }) {
+export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured, chatBackend, toolActivities, onExport, onApproveTools, pendingPermissions }) {
   const [listExpanded, setListExpanded] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const bSize = isMobile ? BUBBLE_SIZE_MOBILE : BUBBLE_SIZE;
@@ -36,7 +36,7 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
                 children: jsx(SparkleIcon, { className: 'w-4 h-4 text-white' }),
               }),
               jsxs('div', { children: [
-                jsx('div', { className: 'text-sm font-semibold leading-tight', children: 'Meeting Notes' }),
+                jsx('div', { className: 'text-sm font-semibold leading-tight', children: chatBackend === 'claude_code' ? 'Claude Code' : 'Meeting Notes' }),
                 jsxs('div', {
                   className: 'flex items-center gap-1 text-[10px] text-blue-100',
                   children: [
@@ -82,8 +82,28 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
         expanded: listExpanded,
         onToggleExpanded: () => setListExpanded(!listExpanded),
       }),
-      jsx(MessageThread, { messages: activeConv ? activeConv.messages : [], streamingContent, streamingThinking, streamingPhase, onDeleteMessage }),
-      jsx(InputComposer, { onSend, onStop, streaming, mentionData, conversationId: activeId }),
+      jsx(MessageThread, { messages: activeConv ? activeConv.messages : [], streamingContent, streamingThinking, streamingPhase, onDeleteMessage, toolActivities }),
+      pendingPermissions && pendingPermissions.length > 0 && jsx('div', {
+        className: 'flex-shrink-0 border-t border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 space-y-2',
+        children: pendingPermissions.map(p => jsxs('div', {
+          key: p.id,
+          className: 'flex items-center gap-2 flex-wrap',
+          children: [
+            jsx('span', { className: 'text-xs text-amber-800 dark:text-amber-200 break-all flex-1', children: p.tools.join(', ') }),
+            onApproveTools && jsx('button', {
+              onClick: () => onApproveTools(p.tools, false),
+              className: 'px-2 py-0.5 rounded text-[10px] font-medium bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200 hover:bg-amber-300 dark:hover:bg-amber-700 flex-shrink-0',
+              children: 'Allow once',
+            }),
+            onApproveTools && jsx('button', {
+              onClick: () => onApproveTools(p.tools, true),
+              className: 'px-2 py-0.5 rounded text-[10px] font-medium bg-amber-600 text-white hover:bg-amber-700 flex-shrink-0',
+              children: 'Always allow',
+            }),
+          ],
+        })),
+      }),
+      jsx(InputComposer, { onSend, onStop, streaming, mentionData, conversationId: activeId, onExport }),
     ]}),
   });
 }

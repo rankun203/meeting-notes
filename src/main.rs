@@ -119,7 +119,11 @@ async fn main() {
 
             let conversation_manager = ConversationManager::new(&data_dir);
 
-            // Generate markdown index files
+            // Generate CLAUDE.md and markdown index files
+            {
+                let self_intro = shared_settings.read().await.chat_self_intro.clone();
+                meeting_notes_daemon::markdown::write_claude_md(&data_dir, self_intro.as_deref());
+            }
             {
                 use meeting_notes_daemon::markdown;
                 let mut sessions = manager.session_entries().await;
@@ -146,9 +150,11 @@ async fn main() {
                 shared_secrets.clone(), tags_manager.clone(),
             ).await;
 
+            let claude_runner = meeting_notes_daemon::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
+
             let app = server::create_router(
                 manager, people_manager, shared_settings, files_db, tags_manager,
-                conversation_manager, shared_secrets, web_ui,
+                conversation_manager, shared_secrets, claude_runner, web_ui,
             );
 
             let addr = format!("{}:{}", host, port);

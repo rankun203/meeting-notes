@@ -73,7 +73,7 @@ Do not insert opinions — state the facts. Follow the same language as the sess
 
 - Include a TODO section with action items and owners near the top, right after attendees. If there are no action items, write \"No action items.\"
 - Use markdown checkbox syntax: `- [ ] **Owner**: task description` (incomplete) or `- [x] **Owner**: task description` (completed). One item per owner; if ambiguous, assign to the most likely owner; if shared, create separate items per person.
-- Cite every key point, decision, action item, or claim with an inline [MM:SS] timestamp from the transcript. Chain multiple: [12:45][15:20].
+- Cite every key point, decision, action item, or claim with an inline [MM:SS] timestamp from the transcript. Always add a space before the first timestamp: `text [12:45]` not `text[12:45]`. Chain multiple: [12:45][15:20].
 - When providing Chinese content, add a space between Chinese characters and English letters or Arabic numerals.");
 
     // 4. User customizations (from Settings > Pipeline > Prompt)
@@ -399,7 +399,6 @@ pub async fn run_summarization(
             .map_err(|e| format!("Failed to serialize todos: {e}"))?;
         std::fs::write(&todos_path, todos_json)
             .map_err(|e| format!("Failed to write todos.json: {e}"))?;
-        crate::markdown::write_todos_md(session_dir, &todos_value);
         info!("[{}] Extracted {} TODOs", session_id, todos.len());
     }
 

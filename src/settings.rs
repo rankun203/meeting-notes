@@ -78,6 +78,14 @@ pub struct AppSettings {
     #[serde(default)]
     pub summarization_openrouter_sort: Option<String>,
 
+    /// Chat backend: "openrouter" (default) or "claude_code".
+    #[serde(default = "default_chat_backend")]
+    pub chat_backend: String,
+
+    /// Claude Code model (e.g. "sonnet", "opus", "haiku", or full name).
+    #[serde(default)]
+    pub claude_code_model: Option<String>,
+
     /// Path to the settings file (not serialized).
     #[serde(skip)]
     settings_path: PathBuf,
@@ -101,6 +109,10 @@ fn default_threshold() -> f64 {
 
 pub fn default_summarization_prompt() -> String {
     String::new()
+}
+
+fn default_chat_backend() -> String {
+    "openrouter".to_string()
 }
 
 fn default_llm_host() -> String {
@@ -130,6 +142,8 @@ impl Default for AppSettings {
             chat_self_intro: None,
             openrouter_sort: None,
             summarization_openrouter_sort: None,
+            chat_backend: default_chat_backend(),
+            claude_code_model: None,
             settings_path: PathBuf::new(),
         }
     }
@@ -248,6 +262,14 @@ impl AppSettings {
         if let Some(v) = update.get("summarization_openrouter_sort") {
             self.summarization_openrouter_sort = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
         }
+        if let Some(v) = update.get("chat_backend") {
+            if let Some(s) = v.as_str() {
+                self.chat_backend = s.to_string();
+            }
+        }
+        if let Some(v) = update.get("claude_code_model") {
+            self.claude_code_model = v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        }
         self.save()
     }
 
@@ -291,6 +313,8 @@ impl AppSettings {
             "chat_self_intro": self.chat_self_intro,
             "openrouter_sort": self.openrouter_sort,
             "summarization_openrouter_sort": self.summarization_openrouter_sort,
+            "chat_backend": self.chat_backend,
+            "claude_code_model": self.claude_code_model,
         })
     }
 

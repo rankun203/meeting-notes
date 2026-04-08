@@ -373,19 +373,6 @@ function LlmSettingsSection({ form, setForm, settings }) {
         ],
       }),
     ]}),
-    jsxs('div', { children: [
-      jsx('label', { className: LABEL_CLS, children: 'Self Introduction' }),
-      jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'Tell the assistant about yourself — your role, team, or preferences. This is included in every chat.' }),
-      jsx('textarea', {
-        value: form.chat_self_intro,
-        onChange: e => setForm(prev => ({ ...prev, chat_self_intro: e.target.value })),
-        onInput: autoResize,
-        ref: el => { if (el) autoResize({ target: el }); },
-        placeholder: 'e.g. I\'m a frontend engineer on the payments team. I mostly care about action items assigned to me.',
-        rows: 1,
-        className: INPUT_CLS + ' overflow-hidden',
-      }),
-    ]}),
   ]});
 }
 
@@ -417,6 +404,8 @@ export function SettingsPage({ category, onSelectSession }) {
         summarization_openrouter_sort: data.summarization_openrouter_sort || '',
         auto_transcribe: data.auto_transcribe ?? true,
         auto_summarize: data.auto_summarize ?? false,
+        chat_backend: data.chat_backend || 'openrouter',
+        claude_code_model: data.claude_code_model || '',
       });
       setLoading(false);
     }).catch(e => { setLoading(false); setMessage(`Error: ${e.message}`); });
@@ -461,6 +450,10 @@ export function SettingsPage({ category, onSelectSession }) {
         update.auto_transcribe = form.auto_transcribe;
       if (form.auto_summarize !== settings.auto_summarize)
         update.auto_summarize = form.auto_summarize;
+      if (form.chat_backend !== (settings.chat_backend || 'openrouter'))
+        update.chat_backend = form.chat_backend;
+      if (form.claude_code_model !== (settings.claude_code_model || ''))
+        update.claude_code_model = form.claude_code_model || null;
       if (Object.keys(update).length === 0) {
         setMessage('No changes to save');
         setSaving(false);
@@ -530,6 +523,58 @@ export function SettingsPage({ category, onSelectSession }) {
       ]}),
       jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
       jsx(LlmSettingsSection, { form, setForm, settings }),
+      jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
+      jsxs('div', { className: 'space-y-4', children: [
+        jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Chat Backend' }),
+        jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Choose which backend powers the chat panel.' }),
+        jsxs('div', { className: 'space-y-2', children: [
+          jsxs('label', { className: 'flex items-start gap-3 cursor-pointer', children: [
+            jsx('input', {
+              type: 'radio', name: 'chat_backend', value: 'openrouter',
+              checked: form.chat_backend === 'openrouter',
+              onChange: () => setForm(prev => ({ ...prev, chat_backend: 'openrouter' })),
+              className: 'w-4 h-4 mt-1 text-blue-600 focus:ring-blue-500',
+            }),
+            jsxs('div', { children: [
+              jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Meetings Chat' }),
+              jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Uses configured LLM via OpenRouter with meeting context' }),
+            ]}),
+          ]}),
+          jsxs('label', { className: 'flex items-start gap-3 cursor-pointer', children: [
+            jsx('input', {
+              type: 'radio', name: 'chat_backend', value: 'claude_code',
+              checked: form.chat_backend === 'claude_code',
+              onChange: () => setForm(prev => ({ ...prev, chat_backend: 'claude_code' })),
+              className: 'w-4 h-4 mt-1 text-blue-600 focus:ring-blue-500',
+            }),
+            jsxs('div', { children: [
+              jsx('span', { className: 'text-sm text-gray-700 dark:text-gray-300', children: 'Claude Code' }),
+              jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500', children: 'Uses locally installed Claude Code CLI with direct file access' }),
+            ]}),
+          ]}),
+        ]}),
+        form.chat_backend === 'claude_code' && jsxs('div', { className: 'space-y-1 mt-3', children: [
+          jsx('label', { className: LABEL_CLS, children: 'Model' }),
+          jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'Model alias (sonnet, opus, haiku) or full name. Leave empty for default.' }),
+          jsx('input', {
+            type: 'text', value: form.claude_code_model || '',
+            onChange: e => setForm(prev => ({ ...prev, claude_code_model: e.target.value })),
+            placeholder: 'e.g. sonnet, opus, claude-sonnet-4-6',
+            className: INPUT_CLS,
+          }),
+        ]}),
+        jsxs('div', { className: 'space-y-1 mt-3', children: [
+          jsx('label', { className: LABEL_CLS, children: 'Self Introduction' }),
+          jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-500 mb-1', children: 'Tell the assistant about yourself — your role, team, or preferences. This is included in every chat.' }),
+          jsx('textarea', {
+            value: form.chat_self_intro,
+            onChange: e => setForm(prev => ({ ...prev, chat_self_intro: e.target.value })),
+            placeholder: 'e.g. I\'m a frontend engineer on the payments team.',
+            rows: 1,
+            className: INPUT_CLS,
+          }),
+        ]}),
+      ]}),
     ]}),
 
     pipeline: jsxs('div', { className: 'space-y-6', children: [

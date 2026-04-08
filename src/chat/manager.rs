@@ -69,6 +69,8 @@ impl ConversationManager {
                                 created_at: conv.created_at,
                                 updated_at: conv.updated_at,
                                 size_bytes,
+                                chat_backend: conv.chat_backend.clone(),
+                                claude_session_id: conv.claude_session_id.clone(),
                             });
                         }
                         Err(e) => warn!("Failed to parse conversation {:?}: {}", path, e),
@@ -123,6 +125,8 @@ impl ConversationManager {
             created_at: now,
             updated_at: now,
             messages: Vec::new(),
+            chat_backend: None,
+            claude_session_id: None,
         };
         self.save(&conv)?;
         info!("Created conversation {}", id);

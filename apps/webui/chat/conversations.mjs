@@ -69,7 +69,8 @@ export function ConversationList({ conversations, activeId, activeConv, tokenUsa
                 className: 'flex flex-col items-end flex-shrink-0 gap-0.5',
                 children: [
                   jsx('span', { className: 'text-[10px] text-gray-400 dark:text-gray-500', children: formatTime(conv.updated_at) }),
-                  conv.size_bytes && jsx('span', { className: 'text-[9px] text-gray-400', children: formatFileSize(conv.size_bytes) }),
+                  conv.message_count ? jsx('span', { className: 'text-[9px] text-gray-400', children: `${conv.message_count} msgs` })
+                    : conv.size_bytes && jsx('span', { className: 'text-[9px] text-gray-400', children: formatFileSize(conv.size_bytes) }),
                 ],
               }),
               conv.id !== activeId && jsx('button', {

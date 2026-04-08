@@ -3,7 +3,7 @@ import { jsx, jsxs, Fragment, API } from '../utils.mjs';
 import { SendIcon, SpinnerIcon, ExportIcon, StopSquareIcon } from '../icons.mjs';
 import { MentionPopup } from './mentions.mjs';
 
-export function InputComposer({ onSend, onStop, streaming, mentionData, conversationId }) {
+export function InputComposer({ onSend, onStop, streaming, mentionData, conversationId, onExport }) {
   const [text, setText] = useState('');
   const [mentions, setMentions] = useState([]);
   const [showMention, setShowMention] = useState(false);
@@ -106,11 +106,15 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
   function send() {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
-    const cleanContent = stripMentions(trimmed, mentions);
-    onSend(cleanContent || trimmed, mentions);
+    // In Claude Code mode (onExport present), keep @mentions in the text
+    const content = onExport ? trimmed : (stripMentions(trimmed, mentions) || trimmed);
+    onSend(content, mentions);
     setText('');
     setMentions([]);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.focus();
+    }
   }
 
   const [shakeIdx, setShakeIdx] = useState(null);
@@ -205,6 +209,10 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
           }),
           conversationId && jsx('button', {
             onClick: async () => {
+              if (onExport) {
+                onExport();
+                return;
+              }
               try {
                 const res = await fetch(`${API}/conversations/${conversationId}/export-prompt`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);

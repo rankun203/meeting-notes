@@ -14,7 +14,12 @@ function ensureMarked(cb) {
   markedLoading = true;
   import('marked').then(mod => {
     markedModule = mod.marked;
-    markedModule.setOptions({ breaks: true, gfm: true });
+    const renderer = new mod.Renderer();
+    const origLink = renderer.link.bind(renderer);
+    renderer.link = function({ href, title, text }) {
+      return `<a href="${href}"${title ? ` title="${title}"` : ''} target="_blank" rel="noopener noreferrer">${text}</a>`;
+    };
+    markedModule.setOptions({ breaks: true, gfm: true, renderer });
     for (const fn of markedWaiters) fn();
     markedWaiters.length = 0;
   });
@@ -84,7 +89,7 @@ function ThinkingModal({ content, onClose }) {
   });
 }
 
-export function MessageThread({ messages, streamingContent, streamingThinking, streamingPhase, onDeleteMessage }) {
+export function MessageThread({ messages, streamingContent, streamingThinking, streamingPhase, onDeleteMessage, toolActivities }) {
   const scrollRef = useRef(null);
   const [, forceRender] = useState(0);
   const [thinkingModal, setThinkingModal] = useState(null); // null = closed, string = content
@@ -96,7 +101,7 @@ export function MessageThread({ messages, streamingContent, streamingThinking, s
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages.length, streamingContent, streamingThinking]);
+  }, [messages.length, streamingContent, streamingThinking, toolActivities]);
 
   // Keep modal content in sync while open and thinking is still streaming
   useEffect(() => {
@@ -115,11 +120,11 @@ export function MessageThread({ messages, streamingContent, streamingThinking, s
       if (streamingThinking) {
         msgs.push({ role: 'assistant', id: '_streaming', content: streamingContent, _streaming: true, _thinkingContent: streamingThinking, timestamp: new Date().toISOString() });
       } else {
-        msgs.push({ role: 'assistant', id: '_streaming', content: streamingContent, _streaming: true, timestamp: new Date().toISOString() });
+        msgs.push({ role: 'assistant', id: '_streaming', content: streamingContent, _streaming: true, _toolActivities: toolActivities || [], timestamp: new Date().toISOString() });
       }
     }
     return msgs;
-  }, [messages, streamingContent, streamingThinking, streamingPhase]);
+  }, [messages, streamingContent, streamingThinking, streamingPhase, toolActivities]);
 
   if (!allMessages.length) {
     return jsx('div', {
@@ -186,6 +191,28 @@ export function MessageThread({ messages, streamingContent, streamingThinking, s
                 content: msg._thinkingContent,
                 onClick: () => setThinkingModal(msg._thinkingContent),
               }),
+              // Tool activity indicators (Claude Code) — above message bubble
+              msg._toolActivities && msg._toolActivities.length > 0 && jsx('div', {
+                className: 'flex flex-col gap-0.5 mb-1',
+                children: msg._toolActivities.map((ta, idx) => {
+                  const fullText = `${ta.tool}${ta.summary ? ': ' + ta.summary : ''}`;
+                  const isLast = isStreaming && idx === msg._toolActivities.length - 1;
+                  return jsx('div', {
+                    key: idx,
+                    className: 'flex items-start gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium text-gray-500 dark:text-gray-400 cursor-default',
+                    title: fullText,
+                    children: [
+                      jsx('span', {
+                        className: `inline-block w-1.5 h-1.5 mt-[3px] flex-shrink-0 rounded-full ${isLast ? 'bg-amber-400 animate-pulse' : 'bg-gray-300 dark:bg-gray-600'}`,
+                      }),
+                      jsx('span', {
+                        className: 'line-clamp-2 break-all',
+                        children: fullText,
+                      }),
+                    ],
+                  });
+                }),
+              }),
               // Message bubble
               isThinking
                 ? !msg._thinkingContent && jsx('div', {
@@ -195,10 +222,11 @@ export function MessageThread({ messages, streamingContent, streamingThinking, s
                 : isUser
                   ? jsx('div', {
                       className: 'px-3 py-2 text-sm rounded-2xl rounded-br-md bg-blue-600 text-white',
+                      style: { overflowWrap: 'anywhere' },
                       children: msg.content,
                     })
-                  : jsx('div', {
-                      className: 'px-3 py-2 text-sm rounded-2xl rounded-bl-md bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 min-w-[120px] md-content',
+                  : (msg.content || !isStreaming) && jsx('div', {
+                      className: 'px-3 py-2 text-sm rounded-2xl rounded-bl-md bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 min-w-[120px] md-content break-words overflow-x-auto',
                       dangerouslySetInnerHTML: { __html: renderMarkdown(msg.content || '') },
                     }),
               // Status line

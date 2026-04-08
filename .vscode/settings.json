@@ -1,10 +1,16 @@
 {
     "cSpell.words": [
+        "backref",
+        "brackethighlighter",
         "cuda",
         "filesdb",
+        "nums",
+        "octicon",
+        "prettylights",
         "pyannote",
         "pyproject",
         "runpod",
+        "sublimelinter",
         "whisperx"
     ]
 }
