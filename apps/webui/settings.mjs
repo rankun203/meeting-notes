@@ -641,12 +641,13 @@ export function SettingsPage({ category, onSelectSession }) {
         ]}),
         jsxs('div', { children: [
           jsx('label', { className: LABEL_CLS, children: 'Prompt' }),
+          jsx('p', { className: 'text-xs text-gray-500 dark:text-gray-400 -mt-0.5 mb-1', children: 'Additional instructions appended to the built-in summary prompt.' }),
           jsx('textarea', {
             value: form.summarization_prompt,
             onChange: e => setForm(prev => ({ ...prev, summarization_prompt: e.target.value })),
             onInput: autoResize,
             ref: el => { if (el) autoResize({ target: el }); },
-            placeholder: 'e.g. Summarize this meeting transcript, highlighting key topics, opinions of each attendee, and conclusions.',
+            placeholder: 'e.g. Always include a section about risks and blockers.',
             rows: 1,
             className: INPUT_CLS + ' overflow-hidden',
           }),

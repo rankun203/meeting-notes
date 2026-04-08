@@ -28,36 +28,66 @@ pub struct SummarizationContext<'a> {
 
 /// Build the full system prompt for summarization.
 ///
-/// Combines the user-configured prompt with session metadata:
-/// language, current local time, session start time.
+/// Contains the complete default instructions. The user's custom prompt
+/// (from the PROMPT settings field) is appended as additional instructions
+/// if non-empty.
 pub fn build_system_prompt(user_prompt: &str, ctx: &SummarizationContext) -> String {
-    let mut prompt = user_prompt.to_string();
+    // 1. Task
+    let mut prompt = String::from(
+"You are a meeting summarizer. Given a transcript, produce a structured summary. \
+Do not insert opinions — state the facts. Follow the same language as the session.");
 
-    if !user_prompt.contains("TODO") {
-        prompt.push_str("\n\nIMPORTANT: You MUST also include a TODO section listing action items with owners. \
-If there are no action items, write `No action items.` under the TODO heading. \
-Place the TODO section near the top of the summary, right after the attendees/participants section.");
+    // 2. Output format
+    prompt.push_str("
+
+## Output format
+
+# {Title}
+
+{One sentence description}, meeting duration.
+
+## Attendees
+
+- {Name 1}
+- {Name 2}
+
+## TODO
+
+- [ ] **{Owner 1}**: ...
+- [ ] **{Owner 2}**: ...
+
+## {Topic 1}
+
+{list down opinions of each attendee}
+
+{conclusion}
+
+## {Topic 2}
+
+...");
+
+    // 3. Rules
+    prompt.push_str("
+
+## Rules
+
+- Include a TODO section with action items and owners near the top, right after attendees. If there are no action items, write \"No action items.\"
+- Use markdown checkbox syntax: `- [ ] **Owner**: task description` (incomplete) or `- [x] **Owner**: task description` (completed). One item per owner; if ambiguous, assign to the most likely owner; if shared, create separate items per person.
+- Cite every key point, decision, action item, or claim with an inline [MM:SS] timestamp from the transcript. Chain multiple: [12:45][15:20].
+- When providing Chinese content, add a space between Chinese characters and English letters or Arabic numerals.");
+
+    // 4. User customizations (from Settings > Pipeline > Prompt)
+    let user_extra = user_prompt.trim();
+    if !user_extra.is_empty() {
+        prompt.push_str("\n\n## Additional instructions\n\n");
+        prompt.push_str(user_extra);
     }
 
-    prompt.push_str("\n\nWhen listing action items or TODOs, \
-use markdown checkbox syntax: `- [ ] **Owner**: task description` for incomplete and `- [x] **Owner**: task description` for completed. \
-Each action item corresponds to exactly one owner. \
-If ownership is ambiguous, put it to the most likely owner. If multiple people share responsibility, create separate items for each person.");
-
-    // Citation instructions
-    prompt.push_str(
-        "\n\nFor every key point, decision, action item, or claim, add citations using the exact [MM:SS] timestamp from the transcript line it came from. \
-Place citations inline at the end of the relevant sentence or item. \
-When a claim spans multiple moments, chain them: [12:45][15:20]. \
-Example: The team decided to use React for the frontend. [12:45][14:02]"
-    );
-
-    prompt.push_str(&format!("\n\nLanguage: {}", ctx.language));
-
+    // 5. Session metadata
     let now_local = Local::now();
-    prompt.push_str(&format!(
-        "\nCurrent time: {}",
-        now_local.format("%A, %Y-%m-%d %H:%M %Z")
+    prompt.push_str(&format!("\n\nLanguage: {}\nCurrent time: {}",
+        ctx.language,
+        now_local.format("%A, %Y-%m-%d %H:%M %Z"),
     ));
 
     prompt

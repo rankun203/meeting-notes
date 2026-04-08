@@ -1444,9 +1444,7 @@ async fn summarize_session(
     let host = settings.llm_host.clone();
     let model = settings.summarization_model.clone()
         .unwrap_or_else(|| settings.llm_model.clone());
-    let mut prompt = settings.summarization_prompt.clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(crate::settings::default_summarization_prompt);
+    let mut prompt = settings.summarization_prompt.clone().unwrap_or_default();
     let sum_sort = settings.summarization_openrouter_sort.clone();
     drop(settings);
 
@@ -1512,9 +1510,7 @@ async fn maybe_auto_summarize(
     }
     let host = s.llm_host.clone();
     let model = s.summarization_model.clone().unwrap_or_else(|| s.llm_model.clone());
-    let prompt = s.summarization_prompt.clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(crate::settings::default_summarization_prompt);
+    let prompt = s.summarization_prompt.clone().unwrap_or_default();
     let sum_sort = s.summarization_openrouter_sort.clone();
     drop(s);
 
