@@ -349,7 +349,8 @@ async fn get_config() -> Json<Value> {
                 "description": "Language for transcription",
                 "options": [
                     { "value": "en", "label": "English" },
-                    { "value": "zh", "label": "Chinese" },
+                    { "value": "zh-cn", "label": "Chinese (Simplified)" },
+                    { "value": "zh-tw", "label": "Chinese (Traditional)" },
                     { "value": "ja", "label": "Japanese" },
                     { "value": "ko", "label": "Korean" },
                     { "value": "es", "label": "Spanish" },

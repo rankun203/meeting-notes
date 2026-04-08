@@ -588,7 +588,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
     const doc = iframe.contentDocument;
     doc.open();
     doc.write(`<!DOCTYPE html>
-<html lang="zh"><head><meta charset="utf-8"><title>${title}</title>
+<html lang="${session.language || 'en'}"><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","WenQuanYi Micro Hei",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:800px;margin:2rem auto;padding:0 1rem;line-height:1.8;color:#1a1a1a}
 h1,h2,h3{margin-top:1.5em}ul,ol{padding-left:1.5em}hr{border:none;border-top:1px solid #ddd;margin:1.5em 0}
 a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;font-size:0.9em}

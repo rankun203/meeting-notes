@@ -15,9 +15,34 @@ import numpy as np
 import requests
 import whisperx
 
+from opencc import OpenCC
+
 from audio_extraction.pipeline import TranscriptionPipeline
 
 logger = logging.getLogger(__name__)
+
+# Chinese variant converters (lazy-initialized)
+_zh_converters: dict[str, OpenCC] = {}
+
+def _get_zh_converter(language: str) -> OpenCC | None:
+    """Return an OpenCC converter for zh-cn / zh-tw, or None."""
+    # tw2sp = Traditional (TW phrases) → Simplified, s2twp = Simplified → Traditional (TW phrases)
+    config = {"zh-cn": "tw2sp", "zh-tw": "s2twp"}.get(language)
+    if config is None:
+        return None
+    if language not in _zh_converters:
+        _zh_converters[language] = OpenCC(config)
+    return _zh_converters[language]
+
+
+def _convert_zh_segments(segments: list[dict], converter: OpenCC) -> None:
+    """Convert segment text in-place using an OpenCC converter."""
+    for seg in segments:
+        if "text" in seg:
+            seg["text"] = converter.convert(seg["text"])
+        for word in seg.get("words", []):
+            if "word" in word:
+                word["word"] = converter.convert(word["word"])
 
 # Initialize pipeline once (models stay loaded across requests on the same worker)
 _pipeline: TranscriptionPipeline | None = None
@@ -116,11 +141,17 @@ def handler(event: dict) -> dict:
     inp = event["input"]
     tracks = inp["tracks"]
     language = inp.get("language", "en")
+    # WhisperX only understands base language codes (e.g. "zh"), not
+    # regional variants like "zh-cn" / "zh-tw".  Strip the variant so
+    # whisperx gets a code it recognises; the original language value is
+    # preserved in the session metadata for downstream use (e.g. summaries).
+    whisperx_language = language.split("-")[0] if "-" in language else language
     diarize = inp.get("diarize", True)
     min_speakers = inp.get("min_speakers")
     max_speakers = inp.get("max_speakers")
 
-    logger.info("Job started: %d tracks, language=%s, diarize=%s", len(tracks), language, diarize)
+    logger.info("Job started: %d tracks, language=%s (whisperx=%s), diarize=%s",
+                len(tracks), language, whisperx_language, diarize)
     if diarize and not os.environ.get("HF_TOKEN"):
         logger.error("diarize=true but HF_TOKEN env var is not set! Diarization will be skipped.")
     job_t0 = time.time()
@@ -149,13 +180,19 @@ def handler(event: dict) -> dict:
                 result = pipeline.process_track(
                     audio_path=audio_path,
                     audio=audio,
-                    language=language,
+                    language=whisperx_language,
                     diarize=diarize,
                     speaker_prefix=prefix,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                 )
                 track_elapsed = time.time() - track_t0
+
+                # Convert Chinese characters to the requested variant
+                zh_converter = _get_zh_converter(language)
+                if zh_converter is not None:
+                    _convert_zh_segments(result.get("segments", []), zh_converter)
+                    logger.info("OpenCC %s conversion applied", language)
 
                 segs = len(result.get("segments", []))
                 embs = len(result.get("speaker_embeddings", {}))
