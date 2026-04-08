@@ -97,6 +97,44 @@ try:
 except Exception:
     logger.exception("Failed to log system info")
 
+
+def cuda_smoke_test() -> bool:
+    """Run a CUDA smoke test in a subprocess to verify the GPU actually works.
+
+    Uses a subprocess so we don't initialize the CUDA runtime in the main
+    process (CUDA is not fork-safe, and RunPod forks a heartbeat process).
+    """
+    logger.info("Running CUDA smoke test...")
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import ctranslate2; "
+                "n = ctranslate2.get_cuda_device_count(); "
+                "assert n > 0, f'No CUDA devices found (got {n})'; "
+                "print(f'OK: {n} CUDA device(s)')",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            logger.info("CUDA smoke test passed: %s", result.stdout.strip())
+            return True
+        else:
+            logger.error("CUDA smoke test FAILED (exit %d): %s",
+                         result.returncode, (result.stderr or result.stdout).strip())
+            return False
+    except subprocess.TimeoutExpired:
+        logger.error("CUDA smoke test FAILED: timed out after 30s")
+        return False
+    except Exception as e:
+        logger.error("CUDA smoke test FAILED: %s", e)
+        return False
+
+
+if not cuda_smoke_test():
+    logger.critical("CUDA is not functional — worker cannot process jobs. Exiting.")
+    sys.exit(1)
+
 import runpod
 from audio_extraction.handler import handler
 
