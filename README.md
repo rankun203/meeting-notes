@@ -96,10 +96,10 @@ Open `http://127.0.0.1:33487` in your browser.
 - [x] Full meeting transcription
 - [x] Speaker diarization
 - [x] People management
-- [ ] Tags management
+- [x] Tags management
+- [x] Chat with X (a particular meeting, person, tag)
+- [x] Meeting summary and TODO extraction
 - [ ] Search
-- [ ] Meeting summary and TODO extraction
-- [ ] Chat with X (a particular meeting, person, tag)
 - [ ] Logseq plugin
 - [ ] Obsidian plugin
 - [ ] Windows support
