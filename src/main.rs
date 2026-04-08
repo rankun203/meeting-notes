@@ -119,6 +119,26 @@ async fn main() {
 
             let conversation_manager = ConversationManager::new(&data_dir);
 
+            // Generate markdown index files
+            {
+                use meeting_notes_daemon::markdown;
+                let mut sessions = manager.session_entries().await;
+                let mut people = people_manager.person_entries().await;
+                let people_dir = people_manager.people_dir().to_path_buf();
+                let rec_dir = recordings_dir.clone();
+                let (rec_index_bytes, people_index_bytes) =
+                    tokio::task::spawn_blocking(move || {
+                        let r = markdown::write_recordings_index(&rec_dir, &mut sessions);
+                        let p = markdown::write_people_index(&people_dir, &mut people);
+                        (r, p)
+                    }).await.unwrap();
+                info!(
+                    "Updated markdown indexes: recordings/index.md ({}), people/index.md ({})",
+                    markdown::human_size(rec_index_bytes),
+                    markdown::human_size(people_index_bytes),
+                );
+            }
+
             // Resume any pending extraction jobs from before restart
             server::routes::resume_pending_extractions(
                 manager.clone(), people_manager.clone(),

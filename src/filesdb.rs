@@ -128,11 +128,15 @@ impl FilesDb {
     /// Store a transcript (writes to disk, updates cache and indexes).
     pub async fn put_transcript(&self, session_id: &str, data: Value) -> Result<(), String> {
         // Write to disk
-        let path = self.recordings_dir.join(session_id).join("transcript.json");
+        let session_dir = self.recordings_dir.join(session_id);
+        let path = session_dir.join("transcript.json");
         let json = serde_json::to_string_pretty(&data)
             .map_err(|e| format!("serialize transcript: {}", e))?;
         std::fs::write(&path, json)
             .map_err(|e| format!("write transcript: {}", e))?;
+
+        // Write transcript.md
+        crate::markdown::write_transcript_md(&session_dir, &data);
 
         // Update cache
         let cached = Self::build_cache(session_id, data);

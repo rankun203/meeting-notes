@@ -362,6 +362,22 @@ impl PeopleManager {
             .map_err(|e| format!("failed to create person dir: {e}"))?;
         write_json(&dir.join("embeddings.json"), store)
     }
+
+    /// Export all people as entries for index generation.
+    pub async fn person_entries(&self) -> Vec<crate::markdown::PersonEntry> {
+        let people = self.people.read().await;
+        people.values().map(|p| crate::markdown::PersonEntry {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            starred: p.starred,
+            created_at: p.created_at,
+        }).collect()
+    }
+
+    /// Returns the people directory path.
+    pub fn people_dir(&self) -> &Path {
+        &self.people_dir
+    }
 }
 
 fn recompute_centroid(store: &mut EmbeddingStore) {

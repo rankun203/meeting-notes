@@ -39,6 +39,32 @@ pub struct AppState {
     pub llm_secrets: SharedSecrets,
 }
 
+impl AppState {
+    /// Regenerate the recordings/index.md file in the background.
+    fn refresh_recordings_index(&self) {
+        let recordings_dir = self.files_db.recordings_dir().to_path_buf();
+        let session_manager = self.session_manager.clone();
+        tokio::spawn(async move {
+            let mut sessions = session_manager.session_entries().await;
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
+            }).await;
+        });
+    }
+
+    /// Regenerate the people/index.md file in the background.
+    fn refresh_people_index(&self) {
+        let people_manager = self.people_manager.clone();
+        tokio::spawn(async move {
+            let mut people = people_manager.person_entries().await;
+            let people_dir = people_manager.people_dir().to_path_buf();
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::markdown::write_people_index(&people_dir, &mut people);
+            }).await;
+        });
+    }
+}
+
 pub fn session_routes() -> Router<AppState> {
     Router::new()
         .route("/sessions", post(create_session))
@@ -85,6 +111,7 @@ async fn create_session(
     Json(config): Json<SessionConfig>,
 ) -> (StatusCode, Json<SessionInfo>) {
     let info = state.session_manager.create_session(config).await;
+    state.refresh_recordings_index();
     (StatusCode::CREATED, Json(info))
 }
 
@@ -156,6 +183,7 @@ async fn rename_session(
             .await
             .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
     }
+    state.refresh_recordings_index();
     state.session_manager
         .get_session(&id)
         .await
@@ -170,11 +198,15 @@ async fn delete_session(
     // Remove transcript from cache before deleting session files
     state.files_db.remove_transcript(&id).await;
 
-    state.session_manager
+    let result = state.session_manager
         .delete_session(&id)
         .await
         .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_recordings_index();
+    }
+    result
 }
 
 async fn start_recording(
@@ -253,6 +285,7 @@ async fn stop_recording(
                             maybe_auto_summarize(
                                 &session_id, &session_manager,
                                 &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
+                                &files_db,
                             ).await;
                         }
                         Err(e) => {
@@ -646,12 +679,16 @@ async fn create_person(
     State(state): State<AppState>,
     Json(body): Json<CreatePersonRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    state
+    let result = state
         .people_manager
         .create_person(body.name, body.notes)
         .await
         .map(|p| (StatusCode::CREATED, Json(serde_json::to_value(p).unwrap())))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_people_index();
+    }
+    result
 }
 
 async fn get_person(
@@ -681,24 +718,32 @@ async fn update_person(
     Path(id): Path<String>,
     Json(body): Json<UpdatePersonRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    state
+    let result = state
         .people_manager
         .update_person(&id, body.name, body.notes, body.starred)
         .await
         .map(|p| Json(serde_json::to_value(p).unwrap()))
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_people_index();
+    }
+    result
 }
 
 async fn delete_person(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    state
+    let result = state
         .people_manager
         .delete_person(&id)
         .await
         .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_people_index();
+    }
+    result
 }
 
 async fn get_person_sessions(
@@ -890,6 +935,7 @@ async fn set_session_tags(
 
     let info = state.session_manager.update_session_tags(&id, tags).await
         .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    state.refresh_recordings_index();
     Ok(Json(serde_json::to_value(info).unwrap()))
 }
 
@@ -979,6 +1025,7 @@ async fn transcribe_session(
                 maybe_auto_summarize(
                     &session_id, &session_manager,
                     &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
+                    &files_db,
                 ).await;
             }
             Err(e) => {
@@ -1353,6 +1400,9 @@ async fn toggle_todo(
     std::fs::write(&todos_path, json_str)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
 
+    // Update todos.md
+    crate::markdown::write_todos_md(&dir, &todos);
+
     // Also update the summary.md and summary.json checkbox states
     let summary_json_path = dir.join("summary.json");
     if summary_json_path.exists() {
@@ -1475,6 +1525,7 @@ async fn summarize_session(
     let session_manager = state.session_manager.clone();
     let people_manager = state.people_manager.clone();
     let tags_mgr = state.tags_manager.clone();
+    let files_db = state.files_db.clone();
     let session_id = id.clone();
 
     tokio::spawn(async move {
@@ -1483,6 +1534,10 @@ async fn summarize_session(
             Ok(_) => {
                 session_manager.refresh_files(&session_id).await;
                 session_manager.emit_summary_completed(&session_id).await;
+                // Refresh recordings index with new summary description
+                let recordings_dir = files_db.recordings_dir().to_path_buf();
+                let mut sessions = session_manager.session_entries().await;
+                crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
                 info!("Summary generated for session {}", session_id);
             }
             Err(e) => {
@@ -1503,6 +1558,7 @@ async fn maybe_auto_summarize(
     llm_secrets: &SharedSecrets,
     tags_manager: &TagsManager,
     people_manager: &PeopleManager,
+    files_db: &FilesDb,
 ) {
     let s = settings.read().await;
     if !s.auto_summarize {
@@ -1532,6 +1588,10 @@ async fn maybe_auto_summarize(
         Ok(_) => {
             session_manager.refresh_files(session_id).await;
             session_manager.emit_summary_completed(session_id).await;
+            // Refresh recordings index with new summary description
+            let recordings_dir = files_db.recordings_dir().to_path_buf();
+            let mut sessions = session_manager.session_entries().await;
+            crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
             info!("[{}] Auto-summary generated", session_id);
         }
         Err(e) => {
@@ -1657,7 +1717,7 @@ pub async fn resume_pending_extractions(
                             sm.emit_transcription_completed(&session_id, unconfirmed);
                             info!("[{}] Resumed transcription completed", session_id);
 
-                            maybe_auto_summarize(&session_id, &sm, &stg, &secrets, &tm, &pm).await;
+                            maybe_auto_summarize(&session_id, &sm, &stg, &secrets, &tm, &pm, &fdb).await;
                         }
                         Err(e) => {
                             error!("[{}] Resumed transcription post-processing failed: {}", session_id, e);

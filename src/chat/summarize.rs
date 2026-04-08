@@ -393,11 +393,13 @@ pub async fn run_summarization(
     // Extract TODOs and save per-session
     let todos = extract_todos(&content, people_manager).await;
     if !todos.is_empty() {
+        let todos_value = json!({"items": todos});
         let todos_path = session_dir.join("todos.json");
-        let todos_json = serde_json::to_string_pretty(&json!({"items": todos}))
+        let todos_json = serde_json::to_string_pretty(&todos_value)
             .map_err(|e| format!("Failed to serialize todos: {e}"))?;
         std::fs::write(&todos_path, todos_json)
             .map_err(|e| format!("Failed to write todos.json: {e}"))?;
+        crate::markdown::write_todos_md(session_dir, &todos_value);
         info!("[{}] Extracted {} TODOs", session_id, todos.len());
     }
 

@@ -113,8 +113,14 @@ impl SessionManager {
         let path = session.config.output_dir.join("metadata.json");
         let json = serde_json::to_string_pretty(&meta)
             .map_err(|e| format!("failed to serialize metadata: {}", e))?;
-        std::fs::write(&path, json)
+        std::fs::write(&path, &json)
             .map_err(|e| format!("failed to write metadata: {}", e))?;
+
+        // Write metadata.md with YAML frontmatter
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+            crate::markdown::write_metadata_md(&session.config.output_dir, &val);
+        }
+
         Ok(())
     }
 
@@ -869,6 +875,25 @@ impl SessionManager {
             session.config.language.clone(),
             session.source_meta.clone(),
         ))
+    }
+
+    /// Export all sessions as entries for index generation.
+    pub async fn session_entries(&self) -> Vec<crate::markdown::SessionEntry> {
+        let sessions = self.sessions.read().await;
+        sessions.values().map(|s| {
+            let duration_secs = Session::compute_duration(
+                &s.config.output_dir, &s.files, s.config.mp3.bitrate_kbps,
+            );
+            crate::markdown::SessionEntry {
+                id: s.id.clone(),
+                name: s.name.clone(),
+                language: s.config.language.clone(),
+                tags: s.tags.clone(),
+                created_at: s.created_at,
+                duration_secs,
+                state: format!("{:?}", s.state).to_lowercase(),
+            }
+        }).collect()
     }
 }
 

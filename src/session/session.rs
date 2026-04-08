@@ -336,7 +336,7 @@ impl Session {
     /// Compute duration from audio files (max across all tracks).
     /// WAV: reads 44-byte header only (fast). MP3: estimates from file size and bitrate.
     /// Opus: reads last Ogg page granule position for exact duration.
-    fn compute_duration(dir: &std::path::Path, files: &[String], mp3_bitrate_kbps: u32) -> Option<f64> {
+    pub(crate) fn compute_duration(dir: &std::path::Path, files: &[String], mp3_bitrate_kbps: u32) -> Option<f64> {
         let mut max_dur: Option<f64> = None;
         for f in files {
             let path = dir.join(f);
