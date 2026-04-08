@@ -11,7 +11,16 @@ export function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageC
       jsxs('div', { className: 'flex items-center justify-between', children: [
         jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Meeting Notes' }),
         jsx('button', {
-          onClick: () => setShowNew(!showNew),
+          onClick: () => {
+            const recording = sessions.find(s => s.state === 'recording');
+            if (recording && currentView !== 'sessions') {
+              onViewChange('sessions');
+              onSelect(recording.id);
+            } else {
+              if (currentView !== 'sessions') onViewChange('sessions');
+              setShowNew(!showNew);
+            }
+          },
           className: showNew
             ? 'w-7 h-7 flex items-center justify-center rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors'
             : 'w-7 h-7 flex items-center justify-center rounded-full bg-red-500 hover:bg-red-600 text-white transition-colors',

@@ -192,7 +192,7 @@ function App() {
       navigateTo(buildPath('sessions', autoId), true); // replaceState, not pushState
     }
     hadInitialId.current = false; // only suppress once
-  }, [sessions]);
+  }, [sessions, currentView]);
 
   function handleSelect(id) {
     navigateTo(buildPath('sessions', id));
@@ -229,7 +229,7 @@ function App() {
     onCreated: async () => { setOffset(0); await refresh(0); },
     showNew, setShowNew,
     currentView,
-    onViewChange: (v) => navigateTo(buildPath(v)),
+    onViewChange: (v) => { if (v !== 'sessions') setShowNew(false); navigateTo(buildPath(v)); },
     people,
     selectedPersonId,
     setSelectedPersonId: (id) => navigateTo(buildPath('people', id)),
