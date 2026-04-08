@@ -29,6 +29,7 @@ mod platform {
         sample_rate: u32,
         engine: Option<Retained<AnyObject>>,
         running: Arc<AtomicBool>,
+        device_lost: Arc<AtomicBool>,
         sender_handle: Arc<Mutex<Option<Sender<AudioChunk>>>>,
         /// Stored to prevent deallocation while engine is alive.
         _observer: Option<Retained<AnyObject>>,
@@ -46,6 +47,7 @@ mod platform {
                 sample_rate,
                 engine: None,
                 running: Arc::new(AtomicBool::new(false)),
+                device_lost: Arc::new(AtomicBool::new(false)),
                 sender_handle: Arc::new(Mutex::new(None)),
                 _observer: None,
             }
@@ -57,6 +59,7 @@ mod platform {
             if self.running.load(Ordering::SeqCst) {
                 return Err(AudioError::AlreadyRecording);
             }
+            self.device_lost.store(false, Ordering::SeqCst);
 
             // Create AVAudioEngine
             let engine: Retained<AnyObject> = unsafe {
@@ -198,28 +201,19 @@ mod platform {
                 return Err(AudioError::DeviceError("AVAudioEngine failed to start".into()));
             }
 
-            // Register for AVAudioEngineConfigurationChangeNotification to auto-restart
-            // when Teams or other apps modify the audio device graph.
-            let engine_for_observer = engine.clone();
+            // Register for AVAudioEngineConfigurationChangeNotification to flag
+            // device loss. The session ticker (every 2s) detects the flag and
+            // performs a full stop+start cycle, creating a fresh engine that
+            // picks up the new default input device with the correct format.
+            let device_lost_for_observer = self.device_lost.clone();
             let running_for_observer = self.running.clone();
             let observer_block = RcBlock::new(move |_notification: NonNull<AnyObject>| {
                 if !running_for_observer.load(Ordering::Relaxed) {
                     return;
                 }
                 warn!("AVAudioEngine configuration changed (audio device graph modified)");
-                warn!("Auto-restarting AVAudioEngine...");
-
-                // The engine has stopped itself. Restart it — tap persists.
-                unsafe {
-                    let _: () = msg_send![&engine_for_observer, prepare];
-                    let mut err: *mut AnyObject = std::ptr::null_mut();
-                    let ok: Bool = msg_send![&engine_for_observer, startAndReturnError: &mut err];
-                    if ok.as_bool() {
-                        info!("AVAudioEngine restarted successfully after config change");
-                    } else {
-                        warn!("AVAudioEngine restart failed after config change");
-                    }
-                }
+                warn!("Flagging device as lost for session ticker recovery");
+                device_lost_for_observer.store(true, Ordering::SeqCst);
             });
 
             let observer: Option<Retained<AnyObject>> = unsafe {
@@ -288,6 +282,10 @@ mod platform {
 
         fn name(&self) -> &str {
             "microphone"
+        }
+
+        fn is_device_lost(&self) -> bool {
+            self.device_lost.load(Ordering::SeqCst)
         }
     }
 }

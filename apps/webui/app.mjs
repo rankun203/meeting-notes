@@ -89,13 +89,28 @@ function App() {
           s.id === event.data.id ? { ...s, file_sizes: event.data.file_sizes, auto_stop_remaining_secs: event.data.auto_stop_remaining_secs ?? null } : s
         ));
         break;
-      case 'session_notice':
+      case 'session_notice': {
+        const notice = event.data.notice;
+        const sessionId = event.data.id;
+        const noticeId = `${Date.now()}_${Math.random()}`;
+        notice._id = noticeId;
         setSessions(prev => prev.map(s =>
-          s.id === event.data.id
-            ? { ...s, notices: [...(s.notices || []), event.data.notice] }
+          s.id === sessionId
+            ? { ...s, notices: [...(s.notices || []), notice] }
             : s
         ));
+        // Auto-dismiss info notices after 5 seconds
+        if (notice.level === 'info') {
+          setTimeout(() => {
+            setSessions(prev => prev.map(s =>
+              s.id === sessionId
+                ? { ...s, notices: (s.notices || []).filter(n => n._id !== noticeId) }
+                : s
+            ));
+          }, 5000);
+        }
         break;
+      }
       case 'session_notices':
         setSessions(prev => prev.map(s =>
           s.id === event.data.id

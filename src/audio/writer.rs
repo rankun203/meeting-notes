@@ -19,6 +19,34 @@ const FLUSH_INTERVAL_CHUNKS: u64 = 100;
 /// -60 dBFS ≈ 0.001 amplitude.
 const SILENCE_RMS_THRESHOLD: f32 = 0.001;
 
+/// Resample interleaved audio from `from_rate` to `to_rate` using linear interpolation.
+/// Returns the input unchanged if rates match.
+fn resample_linear(input: &[f32], channels: u16, from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate {
+        return input.to_vec();
+    }
+
+    let ratio = to_rate as f64 / from_rate as f64;
+    let ch = channels as usize;
+    let input_frames = input.len() / ch;
+    let output_frames = (input_frames as f64 * ratio).ceil() as usize;
+    let mut output = Vec::with_capacity(output_frames * ch);
+
+    for i in 0..output_frames {
+        let src_pos = i as f64 / ratio;
+        let src_idx = src_pos as usize;
+        let frac = (src_pos - src_idx as f64) as f32;
+
+        for c in 0..ch {
+            let s0 = input.get(src_idx * ch + c).copied().unwrap_or(0.0);
+            let s1 = input.get((src_idx + 1) * ch + c).copied().unwrap_or(s0);
+            output.push(s0 + (s1 - s0) * frac);
+        }
+    }
+
+    output
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioFormat {
@@ -99,6 +127,8 @@ pub trait AudioWriter: Send + 'static {
 
 pub struct WavAudioWriter {
     writer: WavWriter<BufWriter<std::fs::File>>,
+    sample_rate: u32,
+    channels: u16,
 }
 
 impl WavAudioWriter {
@@ -113,13 +143,14 @@ impl WavAudioWriter {
             .map_err(|e| AudioError::DeviceError(format!("failed to create file: {}", e)))?;
         let buf_writer = BufWriter::new(file);
         let writer = WavWriter::new(buf_writer, spec)?;
-        Ok(Self { writer })
+        Ok(Self { writer, sample_rate, channels })
     }
 }
 
 impl AudioWriter for WavAudioWriter {
     fn write_chunk(&mut self, chunk: &AudioChunk) -> Result<(), AudioError> {
-        for &sample in &chunk.samples {
+        let samples = resample_linear(&chunk.samples, self.channels, chunk.sample_rate, self.sample_rate);
+        for &sample in &samples {
             self.writer.write_sample(sample)?;
         }
         Ok(())
@@ -142,6 +173,7 @@ pub struct Mp3AudioWriter {
     encoder: mp3lame_encoder::Encoder,
     file: BufWriter<std::fs::File>,
     channels: u16,
+    sample_rate: u32,
 }
 
 fn bitrate_from_kbps(kbps: u32) -> Result<Bitrate, AudioError> {
@@ -191,6 +223,7 @@ impl Mp3AudioWriter {
             encoder,
             file: BufWriter::new(file),
             channels,
+            sample_rate: input_sample_rate,
         })
     }
 }
@@ -200,7 +233,8 @@ impl AudioWriter for Mp3AudioWriter {
         use std::io::Write;
 
         let mut mp3_out = Vec::new();
-        let input = &chunk.samples;
+        let resampled = resample_linear(&chunk.samples, self.channels, chunk.sample_rate, self.sample_rate);
+        let input = &resampled;
         mp3_out.reserve(mp3lame_encoder::max_required_buffer_size(input.len()));
 
         let result = match self.channels {
@@ -341,33 +375,6 @@ impl OpusAudioWriter {
         Ok(())
     }
 
-    /// Resample samples from input_sample_rate to opus_sample_rate using linear interpolation.
-    fn resample(&self, input: &[f32]) -> Vec<f32> {
-        if self.input_sample_rate == self.opus_sample_rate {
-            return input.to_vec();
-        }
-
-        let ratio = self.opus_sample_rate as f64 / self.input_sample_rate as f64;
-        let channels = self.channels as usize;
-        let input_frames = input.len() / channels;
-        let output_frames = (input_frames as f64 * ratio).ceil() as usize;
-        let mut output = Vec::with_capacity(output_frames * channels);
-
-        for i in 0..output_frames {
-            let src_pos = i as f64 / ratio;
-            let src_idx = src_pos as usize;
-            let frac = (src_pos - src_idx as f64) as f32;
-
-            for ch in 0..channels {
-                let s0 = input.get(src_idx * channels + ch).copied().unwrap_or(0.0);
-                let s1 = input.get((src_idx + 1) * channels + ch).copied().unwrap_or(s0);
-                output.push(s0 + (s1 - s0) * frac);
-            }
-        }
-
-        output
-    }
-
     fn encode_pending_frames(&mut self) -> Result<(), AudioError> {
         use ogg::writing::PacketWriteEndInfo;
 
@@ -399,7 +406,7 @@ impl AudioWriter for OpusAudioWriter {
             self.write_headers()?;
         }
 
-        let resampled = self.resample(&chunk.samples);
+        let resampled = resample_linear(&chunk.samples, self.channels, chunk.sample_rate, self.opus_sample_rate);
         self.pending.extend_from_slice(&resampled);
         self.encode_pending_frames()?;
 
