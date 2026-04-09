@@ -3,7 +3,7 @@ import { jsx, jsxs, Fragment, API } from '../utils.mjs';
 import { SendIcon, SpinnerIcon, ExportIcon, StopSquareIcon } from '../icons.mjs';
 import { MentionPopup } from './mentions.mjs';
 
-export function InputComposer({ onSend, onStop, streaming, mentionData, conversationId, onExport }) {
+export function InputComposer({ onSend, onStop, streaming, mentionData, conversationId, onSendToClaudeCode }) {
   const [text, setText] = useState('');
   const [mentions, setMentions] = useState([]);
   const [showMention, setShowMention] = useState(false);
@@ -76,7 +76,7 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
     const before = text.slice(0, cursor);
     const atIdx = before.lastIndexOf('@');
     const after = text.slice(cursor);
-    const tag = `@${item.kind}:${item.label} `;
+    const tag = item.kind === 'session' ? `@${item.kind}:${item.label} (${item.id}) ` : `@${item.kind}:${item.label} `;
     const newText = before.slice(0, atIdx) + tag + after;
     setText(newText);
     const hasSummary = item.summary_available ?? false;
@@ -97,6 +97,10 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
   function stripMentions(str, mentionList) {
     let result = str;
     for (const m of mentionList) {
+      if (m.kind === 'session') {
+        result = result.replace(`@${m.kind}:${m.label} (${m.id}) `, '');
+        result = result.replace(`@${m.kind}:${m.label} (${m.id})`, '');
+      }
       result = result.replace(`@${m.kind}:${m.label} `, '');
       result = result.replace(`@${m.kind}:${m.label}`, '');
     }
@@ -106,8 +110,8 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
   function send() {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
-    // In Claude Code mode (onExport present), keep @mentions in the text
-    const content = onExport ? trimmed : (stripMentions(trimmed, mentions) || trimmed);
+    // In Claude Code mode, keep @mentions in the text as Claude Code reads them inline
+    const content = onSendToClaudeCode ? trimmed : (stripMentions(trimmed, mentions) || trimmed);
     onSend(content, mentions);
     setText('');
     setMentions([]);
@@ -209,8 +213,8 @@ export function InputComposer({ onSend, onStop, streaming, mentionData, conversa
           }),
           conversationId && jsx('button', {
             onClick: async () => {
-              if (onExport) {
-                onExport();
+              if (onSendToClaudeCode) {
+                onSendToClaudeCode();
                 return;
               }
               try {

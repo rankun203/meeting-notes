@@ -6,7 +6,7 @@ import { ConversationList } from './conversations.mjs';
 import { MessageThread } from './thread.mjs';
 import { InputComposer } from './composer.mjs';
 
-export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured, chatBackend, toolActivities, onExport, onApproveTools, pendingPermissions }) {
+export function ChatPanel({ conversations, activeConv, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onSend, onStop, onDeleteMessage, onClose, onMinimize, bubblePos, isMobile, closing, streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured, chatBackend, toolActivities, onSendToClaudeCode, onApproveTools, pendingPermissions }) {
   const [listExpanded, setListExpanded] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const bSize = isMobile ? BUBBLE_SIZE_MOBILE : BUBBLE_SIZE;
@@ -103,7 +103,7 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
           ],
         })),
       }),
-      jsx(InputComposer, { onSend, onStop, streaming, mentionData, conversationId: activeId, onExport }),
+      jsx(InputComposer, { onSend, onStop, streaming, mentionData, conversationId: activeId, onSendToClaudeCode }),
     ]}),
   });
 }

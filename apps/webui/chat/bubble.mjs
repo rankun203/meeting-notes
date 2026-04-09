@@ -592,7 +592,7 @@ export function ChatBubble() {
       bubblePos, isMobile, closing: panelClosing,
       streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured,
       chatBackend, toolActivities,
-      onExport: chatBackend === 'claude_code' ? handleExportClaude : null,
+      onSendToClaudeCode: chatBackend === 'claude_code' ? handleExportClaude : null,
       onApproveTools: chatBackend === 'claude_code' ? handleApproveTools : null,
       pendingPermissions,
     }),
