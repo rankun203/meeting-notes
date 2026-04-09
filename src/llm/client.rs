@@ -118,6 +118,15 @@ impl LlmClient {
                                             }
                                         }
 
+                                        // Check for finish_reason
+                                        if let Some(reason) = json.get("choices")
+                                            .and_then(|c| c.get(0))
+                                            .and_then(|c| c.get("finish_reason"))
+                                            .and_then(|r| r.as_str())
+                                        {
+                                            yield Ok(format!("\x03{}", reason)); // \x03 prefix = finish_reason
+                                        }
+
                                         // Check for usage info (final chunk with stream_options)
                                         if let Some(usage) = json.get("usage") {
                                             if let Ok(usage_str) = serde_json::to_string(usage) {

@@ -196,6 +196,21 @@ pub fn format_meeting_transcript(
 ///
 /// Parses lines matching `- [ ] ...` or `- [x] ...`, extracts the person name
 /// (typically bold at the start), and looks up their person_id.
+/// Try to match a name string against known people (case-insensitive prefix match).
+fn match_person(name: &str, all_people: &[crate::people::PersonIndexEntry]) -> (Option<String>, Option<String>) {
+    let name_lower = name.to_lowercase();
+    for p in all_people {
+        let p_lower = p.name.to_lowercase();
+        if p_lower == name_lower
+            || p_lower.starts_with(&name_lower)
+            || name_lower.starts_with(&p_lower)
+        {
+            return (Some(p.name.clone()), Some(p.id.clone()));
+        }
+    }
+    (Some(name.to_string()), None)
+}
+
 async fn extract_todos(content: &str, people_manager: &PeopleManager) -> Vec<Value> {
     // Cache all people for name matching
     let all_people = people_manager.list_people().await;
@@ -209,39 +224,56 @@ async fn extract_todos(content: &str, people_manager: &PeopleManager) -> Vec<Val
         let text = cap[2].trim().to_string();
 
         // Try to extract person name from bold prefix: **Name** – task text
-        let mut person_name: Option<String> = None;
-        let mut person_id: Option<String> = None;
         let mut task_text = text.clone();
 
         if let Some(bold_cap) = re_bold.captures(&text) {
-            let name = bold_cap[1].trim().to_string();
-            // Find matching person (case-insensitive prefix match)
-            let name_lower = name.to_lowercase();
-            for p in &all_people {
-                if p.name.to_lowercase() == name_lower
-                    || p.name.to_lowercase().starts_with(&name_lower)
-                    || name_lower.starts_with(&p.name.to_lowercase())
-                {
-                    person_id = Some(p.id.clone());
-                    person_name = Some(p.name.clone());
-                    break;
-                }
-            }
-            if person_name.is_none() {
-                person_name = Some(name);
-            }
+            let raw_name = bold_cap[1].trim().to_string();
             // Extract the task portion after the name
             let after_bold = &text[bold_cap.get(0).unwrap().end()..];
             task_text = after_bold.trim_start_matches(&[' ', '–', '—', '-', ':'][..]).trim().to_string();
-        }
 
-        todos.push(json!({
-            "text": task_text,
-            "full_text": text,
-            "completed": completed,
-            "person_name": person_name,
-            "person_id": person_id,
-        }));
+            // Split on / , & and to handle multi-person TODOs like "Ian Jiang/Kun/Elliott"
+            let name_parts: Vec<&str> = regex::Regex::new(r"[/,&]|\band\b")
+                .unwrap()
+                .split(&raw_name)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if name_parts.len() > 1 {
+                // Create a separate TODO entry per person
+                for part in &name_parts {
+                    let (person_name, person_id) = match_person(part, &all_people);
+                    todos.push(json!({
+                        "text": task_text,
+                        "full_text": text,
+                        "completed": completed,
+                        "person_name": person_name,
+                        "person_id": person_id,
+                    }));
+                }
+                continue;
+            }
+
+            // Single person
+            let (person_name, person_id) = match_person(&raw_name, &all_people);
+            todos.push(json!({
+                "text": task_text,
+                "full_text": text,
+                "completed": completed,
+                "person_name": person_name,
+                "person_id": person_id,
+            }));
+        } else {
+            // No bold name found
+            todos.push(json!({
+                "text": task_text,
+                "full_text": text,
+                "completed": completed,
+                "person_name": null,
+                "person_id": null,
+            }));
+        }
     }
 
     todos
@@ -311,6 +343,7 @@ pub async fn run_summarization(
     let mut first_chunk = true;
     let mut was_thinking = false;
     let mut usage_value: Option<Value> = None;
+    let mut finish_reason: Option<String> = None;
     while let Some(result) = stream.next().await {
         match result {
             Ok(delta) => {
@@ -328,6 +361,12 @@ pub async fn run_summarization(
                         session_manager.emit_summary_thinking(session_id, thinking_text);
                     }
                     continue; // Don't include thinking in output
+                }
+
+                // \x03 prefix = finish_reason
+                if let Some(reason) = delta.strip_prefix('\x03') {
+                    finish_reason = Some(reason.to_string());
+                    continue;
                 }
 
                 // \x02 prefix = usage info
@@ -363,6 +402,7 @@ pub async fn run_summarization(
         "model": model,
         "messages": messages,
         "generated_at": Utc::now().to_rfc3339(),
+        "finish_reason": finish_reason.as_deref().unwrap_or("unknown"),
     });
 
     if let Some(ref usage) = usage_value {
@@ -371,13 +411,21 @@ pub async fn run_summarization(
         let total = usage.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt + completion);
         let cost = usage.get("cost").and_then(|v| v.as_f64());
         let cost_str = cost.map(|c| format!(", cost ${:.4}", c)).unwrap_or_default();
+        let reason_str = finish_reason.as_deref().unwrap_or("unknown");
         info!(
-            "[{}] Summary saved — {} prompt + {} completion = {} tokens{}",
-            session_id, prompt, completion, total, cost_str
+            "[{}] Summary saved (finish_reason: {}) — {} prompt + {} completion = {} tokens{}",
+            session_id, reason_str, prompt, completion, total, cost_str
         );
+        if reason_str == "length" {
+            warn!("[{}] Summary may be truncated — model hit max token limit", session_id);
+        }
         summary["usage"] = usage.clone();
     } else {
-        info!("[{}] Summary saved", session_id);
+        let reason_str = finish_reason.as_deref().unwrap_or("unknown");
+        info!("[{}] Summary saved (finish_reason: {})", session_id, reason_str);
+        if reason_str == "length" {
+            warn!("[{}] Summary may be truncated — model hit max token limit", session_id);
+        }
     }
 
     let summary_path = session_dir.join("summary.json");
