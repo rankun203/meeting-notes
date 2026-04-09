@@ -360,6 +360,7 @@ impl SessionManager {
                 .flatten()
                 .flatten()
                 .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|name| !name.starts_with('.'))
                 .collect();
 
             let session = Session::from_metadata(&metadata, &self.output_dir, files);
@@ -647,6 +648,7 @@ impl SessionManager {
                 session.files = entries
                     .flatten()
                     .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|name| !name.starts_with('.'))
                     .collect();
                 self.emit(ServerEvent::SessionUpdated(session.info()));
             }

@@ -226,7 +226,7 @@ export function MessageThread({ messages, streamingContent, streamingThinking, s
                       children: msg.content,
                     })
                   : (msg.content || !isStreaming) && jsx('div', {
-                      className: 'px-3 py-2 text-sm rounded-2xl rounded-bl-md bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 min-w-[120px] md-content break-words overflow-x-auto',
+                      className: 'px-3 py-2 text-sm rounded-2xl rounded-bl-md bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 min-w-0 md-content',
                       dangerouslySetInnerHTML: { __html: renderMarkdown(msg.content || '') },
                     }),
               // Status line

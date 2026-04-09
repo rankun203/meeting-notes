@@ -133,6 +133,12 @@
   line-height: 1.5;
   word-wrap: break-word;
   overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.md-content * {
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
 .md-content .octicon {
