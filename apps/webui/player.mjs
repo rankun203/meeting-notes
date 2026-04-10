@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { jsx, jsxs, Fragment, API, fmtTime } from './utils.mjs';
 import { SourceIcon, PlayIcon, PauseIcon, StopSquareIcon, FastForwardIcon } from './icons.mjs';
 
@@ -208,8 +208,41 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     if (onTimeUpdate) onTimeUpdate(t);
   }
 
-  function onSeekInput(e) {
-    seekTo(parseFloat(e.target.value));
+  // -- Seek slider drag state --
+  const seekBarRef = useRef(null);
+  const draggingRef = useRef(false);
+  const [dragTime, setDragTime] = useState(null);
+
+  function seekFromPointer(e) {
+    const bar = seekBarRef.current;
+    if (!bar || !duration) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const t = ratio * duration;
+    setDragTime(t);
+    seekTo(t);
+  }
+
+  const onPointerMove = useCallback((e) => {
+    if (!draggingRef.current) return;
+    seekFromPointer(e);
+  }, [duration]);
+
+  const onPointerUp = useCallback((e) => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    seekFromPointer(e);
+    setDragTime(null);
+    document.removeEventListener('pointermove', onPointerMove);
+    document.removeEventListener('pointerup', onPointerUp);
+  }, [duration]);
+
+  function onSeekPointerDown(e) {
+    e.preventDefault();
+    draggingRef.current = true;
+    seekFromPointer(e);
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
   }
 
   function stopAll() {
@@ -326,11 +359,26 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
       }),
       // Time
       jsx('span', { className: 'text-xs font-mono text-gray-500 dark:text-gray-400 w-10 text-right flex-shrink-0', children: fmtTime(currentTime) }),
-      // Seek bar
-      jsx('input', {
-        type: 'range', min: 0, max: duration || 1, step: 0.1, value: currentTime,
-        onInput: onSeekInput,
-        className: 'flex-1 h-1.5 rounded-full appearance-none bg-gray-200 dark:bg-gray-700 cursor-pointer accent-blue-600',
+      // Seek bar (custom slider for proper drag-outside-track behavior)
+      jsx('div', {
+        ref: seekBarRef,
+        onPointerDown: onSeekPointerDown,
+        className: 'flex-1 h-5 flex items-center cursor-pointer relative group',
+        children: jsx('div', {
+          className: 'w-full h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 relative',
+          children: jsxs(Fragment, { children: [
+            // Filled portion
+            jsx('div', {
+              className: 'absolute inset-y-0 left-0 rounded-full bg-blue-600',
+              style: { width: `${((dragTime != null ? dragTime : currentTime) / (duration || 1)) * 100}%` },
+            }),
+            // Thumb
+            jsx('div', {
+              className: 'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-blue-600 shadow-sm -ml-1.5',
+              style: { left: `${((dragTime != null ? dragTime : currentTime) / (duration || 1)) * 100}%` },
+            }),
+          ]}),
+        }),
       }),
       jsx('span', { className: 'text-xs font-mono text-gray-500 dark:text-gray-400 w-10 flex-shrink-0', children: fmtTime(duration) }),
     ]}),
