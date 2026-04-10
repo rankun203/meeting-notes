@@ -344,6 +344,7 @@ pub async fn run_summarization(
     let mut was_thinking = false;
     let mut usage_value: Option<Value> = None;
     let mut finish_reason: Option<String> = None;
+    let mut provider: Option<String> = None;
     while let Some(result) = stream.next().await {
         match result {
             Ok(delta) => {
@@ -372,6 +373,12 @@ pub async fn run_summarization(
                 // \x02 prefix = usage info
                 if let Some(usage_str) = delta.strip_prefix('\x02') {
                     usage_value = serde_json::from_str(usage_str).ok();
+                    continue;
+                }
+
+                // \x04 prefix = provider info
+                if let Some(p) = delta.strip_prefix('\x04') {
+                    provider = Some(p.to_string());
                     continue;
                 }
 
@@ -412,9 +419,10 @@ pub async fn run_summarization(
         let cost = usage.get("cost").and_then(|v| v.as_f64());
         let cost_str = cost.map(|c| format!(", cost ${:.4}", c)).unwrap_or_default();
         let reason_str = finish_reason.as_deref().unwrap_or("unknown");
+        let provider_str = provider.as_deref().unwrap_or("unknown");
         info!(
-            "[{}] Summary saved (finish_reason: {}) — {} prompt + {} completion = {} tokens{}",
-            session_id, reason_str, prompt, completion, total, cost_str
+            "[{}] Summary saved (finish_reason: {}, provider: {}) — {} prompt + {} completion = {} tokens{}",
+            session_id, reason_str, provider_str, prompt, completion, total, cost_str
         );
         if reason_str == "length" {
             warn!("[{}] Summary may be truncated — model hit max token limit", session_id);
@@ -422,7 +430,8 @@ pub async fn run_summarization(
         summary["usage"] = usage.clone();
     } else {
         let reason_str = finish_reason.as_deref().unwrap_or("unknown");
-        info!("[{}] Summary saved (finish_reason: {})", session_id, reason_str);
+        let provider_str = provider.as_deref().unwrap_or("unknown");
+        info!("[{}] Summary saved (finish_reason: {}, provider: {})", session_id, reason_str, provider_str);
         if reason_str == "length" {
             warn!("[{}] Summary may be truncated — model hit max token limit", session_id);
         }

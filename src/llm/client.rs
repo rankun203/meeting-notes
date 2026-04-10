@@ -71,6 +71,7 @@ impl LlmClient {
 
         let stream = async_stream::stream! {
             let mut buffer = String::new();
+            let mut content_started = false;
 
             futures::pin_mut!(byte_stream);
 
@@ -100,19 +101,27 @@ impl LlmClient {
                                             .and_then(|c| c.get(0))
                                             .and_then(|c| c.get("delta"));
 
-                                        // Check for reasoning/thinking content (extended thinking models)
                                         if let Some(delta) = delta {
+                                            // Check for reasoning/thinking content (extended thinking models).
+                                            // Once regular content has started, treat any further
+                                            // reasoning tokens as content — some providers keep
+                                            // sending the reasoning field after switching to content.
                                             let reasoning = delta.get("reasoning_content")
                                                 .or_else(|| delta.get("reasoning"))
                                                 .and_then(|r| r.as_str());
                                             if let Some(r) = reasoning {
                                                 if !r.is_empty() {
-                                                    yield Ok(format!("\x01{}", r)); // \x01 prefix = thinking
+                                                    if content_started {
+                                                        yield Ok(r.to_string());
+                                                    } else {
+                                                        yield Ok(format!("\x01{}", r)); // \x01 prefix = thinking
+                                                    }
                                                 }
                                             }
 
                                             if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                                                 if !content.is_empty() {
+                                                    content_started = true;
                                                     yield Ok(content.to_string());
                                                 }
                                             }
@@ -132,6 +141,11 @@ impl LlmClient {
                                             if let Ok(usage_str) = serde_json::to_string(usage) {
                                                 yield Ok(format!("\x02{}", usage_str)); // \x02 prefix = usage
                                             }
+                                        }
+
+                                        // Check for provider info (OpenRouter)
+                                        if let Some(provider) = json.get("provider").and_then(|p| p.as_str()) {
+                                            yield Ok(format!("\x04{}", provider)); // \x04 prefix = provider
                                         }
                                     }
                                     Err(e) => {
