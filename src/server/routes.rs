@@ -14,7 +14,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::{info, warn, error};
 
-use crate::chat::manager::ConversationManager;
 use crate::chat::types::{ContextCriteria, Mention, Message};
 use crate::filesdb::FilesDb;
 use crate::llm::claude_code::ClaudeCodeRunner;
@@ -28,44 +27,12 @@ use crate::settings::SharedSettings;
 use crate::tags::TagsManager;
 use crate::understanding::{ExtractionClient, ExtractionOutput, TrackInput};
 
-/// Shared state for routes.
-#[derive(Clone)]
-pub struct AppState {
-    pub session_manager: SessionManager,
-    pub people_manager: PeopleManager,
-    pub settings: SharedSettings,
-    pub files_db: FilesDb,
-    pub tags_manager: TagsManager,
-    pub conversation_manager: ConversationManager,
-    pub llm_secrets: SharedSecrets,
-    pub claude_runner: ClaudeCodeRunner,
-}
+use crate::services;
 
-impl AppState {
-    /// Regenerate the recordings/index.md file in the background.
-    fn refresh_recordings_index(&self) {
-        let recordings_dir = self.files_db.recordings_dir().to_path_buf();
-        let session_manager = self.session_manager.clone();
-        tokio::spawn(async move {
-            let mut sessions = session_manager.session_entries().await;
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
-            }).await;
-        });
-    }
-
-    /// Regenerate the people/index.md file in the background.
-    fn refresh_people_index(&self) {
-        let people_manager = self.people_manager.clone();
-        tokio::spawn(async move {
-            let mut people = people_manager.person_entries().await;
-            let people_dir = people_manager.people_dir().to_path_buf();
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::markdown::write_people_index(&people_dir, &mut people);
-            }).await;
-        });
-    }
-}
+// `AppState` now lives in `services::state`. Re-exported here so existing
+// callers inside this file (and in `server::mod`) keep compiling unchanged
+// while the rest of the service-layer refactor lands incrementally.
+pub use crate::services::AppState;
 
 pub fn session_routes() -> Router<AppState> {
     Router::new()
@@ -108,200 +75,124 @@ pub fn session_routes() -> Router<AppState> {
         .route("/config", get(get_config))
 }
 
+// ---- Session handlers (now thin shims over `services::sessions`) ----
+
 async fn create_session(
     State(state): State<AppState>,
     Json(config): Json<SessionConfig>,
-) -> (StatusCode, Json<SessionInfo>) {
-    let info = state.session_manager.create_session(config).await;
-    state.refresh_recordings_index();
-    (StatusCode::CREATED, Json(info))
-}
-
-#[derive(Deserialize)]
-struct ListParams {
-    limit: Option<usize>,
-    offset: Option<usize>,
+) -> Result<(StatusCode, Json<SessionInfo>), services::ServiceError> {
+    let info = services::sessions::create_session(&state, config).await?;
+    Ok((StatusCode::CREATED, Json(info)))
 }
 
 async fn list_sessions(
     State(state): State<AppState>,
-    Query(params): Query<ListParams>,
-) -> Json<Value> {
-    let limit = params.limit.unwrap_or(20);
-    let offset = params.offset.unwrap_or(0);
-    let hidden_tags = state.tags_manager.hidden_tag_names().await;
-    let (mut sessions, total) = state.session_manager.list_sessions(limit, offset, &hidden_tags).await;
-    // Enrich with unconfirmed speaker counts from cache
-    for s in &mut sessions {
-        s.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&s.id).await;
-    }
-    Json(json!({
-        "sessions": sessions,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }))
+    Query(params): Query<services::sessions::ListParams>,
+) -> Result<Json<services::sessions::SessionListPage>, services::ServiceError> {
+    let page = services::sessions::list_sessions(&state, params).await?;
+    Ok(Json(page))
 }
 
 async fn get_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
-    let mut info = state.session_manager
-        .get_session(&id)
-        .await
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
-    info.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&id).await;
+) -> Result<Json<SessionInfo>, services::ServiceError> {
+    let info = services::sessions::get_session(&state, &id).await?;
     Ok(Json(info))
 }
 
 async fn rename_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
-    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-        state.session_manager
-            .rename_session(&id, name.to_string())
-            .await
-            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
-    }
-    if let Some(lang) = body.get("language").and_then(|v| v.as_str()) {
-        state.session_manager
-            .update_session_language(&id, lang.to_string())
-            .await
-            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
-    }
-    if body.get("notes").is_some() {
-        let notes = body.get("notes").unwrap().as_str().map(|s| s.to_string());
-        state.session_manager
-            .update_session_notes(&id, notes)
-            .await
-            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
-    }
-    if let Some(auto_stop) = body.get("auto_stop").and_then(|v| v.as_bool()) {
-        state.session_manager
-            .set_auto_stop(&id, auto_stop)
-            .await
-            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
-    }
-    state.refresh_recordings_index();
-    state.session_manager
-        .get_session(&id)
-        .await
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))
+    Json(input): Json<services::sessions::UpdateSessionInput>,
+) -> Result<Json<SessionInfo>, services::ServiceError> {
+    let info = services::sessions::update_session(&state, &id, input).await?;
+    Ok(Json(info))
 }
 
 async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    // Remove transcript from cache before deleting session files
-    state.files_db.remove_transcript(&id).await;
-
-    let result = state.session_manager
-        .delete_session(&id)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
-    if result.is_ok() {
-        state.refresh_recordings_index();
-    }
-    result
+) -> Result<StatusCode, services::ServiceError> {
+    services::sessions::delete_session(&state, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn start_recording(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    state.session_manager
-        .start_recording(&id)
-        .await
-        .map(|files| Json(json!({"status": "recording", "files": files})))
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))
+) -> Result<Json<services::sessions::RecordingStarted>, services::ServiceError> {
+    let out = services::sessions::start_recording(&state, &id).await?;
+    Ok(Json(out))
 }
 
 async fn stop_recording(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let files = state.session_manager
-        .stop_recording(&id)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+) -> Result<Json<services::sessions::RecordingStopped>, services::ServiceError> {
+    // Clones captured so the auto-transcribe closure can be spawned onto
+    // a background tokio task that outlives the HTTP handler.
+    let session_manager = state.session_manager.clone();
+    let people_manager = state.people_manager.clone();
+    let files_db = state.files_db.clone();
+    let settings_clone = state.settings.clone();
+    let llm_secrets = state.llm_secrets.clone();
+    let tags_mgr = state.tags_manager.clone();
 
-    // Auto-transcribe if enabled
-    let settings = state.settings.read().await;
-    let should_auto_transcribe = settings.auto_transcribe && settings.is_extraction_configured();
-    let extraction_url = settings.audio_extraction_url.clone();
-    let extraction_key = settings.audio_extraction_api_key.clone();
-    let file_drop_url = settings.file_drop_url.clone();
-    let file_drop_api_key = settings.file_drop_api_key.clone();
-    let diarize = settings.diarize;
-    let people_recognition = settings.people_recognition;
-    let match_threshold = settings.speaker_match_threshold;
-    drop(settings);
+    let out = services::sessions::stop_recording(&state, &id, move |req| {
+        tokio::spawn(async move {
+            let result = run_transcription_pipeline(
+                &req.session_id,
+                &req.session_dir,
+                &req.language,
+                &req.source_meta,
+                &req.extraction_url,
+                &req.extraction_key,
+                &req.file_drop_url,
+                &req.file_drop_api_key,
+                req.diarize,
+                req.people_recognition,
+                req.match_threshold,
+                &session_manager,
+                &people_manager,
+                &files_db,
+            )
+            .await;
 
-    if should_auto_transcribe {
-        if let Ok((session_dir, language, source_meta)) = state
-            .session_manager
-            .get_session_extraction_info(&id)
-            .await
-        {
-            // Only auto-transcribe if not already processing
-            let already_processing = state.session_manager.get_session(&id).await
-                .map(|s| s.processing_state.is_some())
-                .unwrap_or(false);
+            match result {
+                Ok(unconfirmed) => {
+                    session_manager
+                        .set_processing_state(&req.session_id, None)
+                        .await;
+                    session_manager
+                        .emit_transcription_completed(&req.session_id, unconfirmed);
+                    services::sessions::log_auto_transcribe_completed(&req.session_id);
 
-            if !already_processing {
-                state.session_manager
-                    .set_processing_state(&id, Some("starting".to_string()))
+                    maybe_auto_summarize(
+                        &req.session_id,
+                        &session_manager,
+                        &settings_clone,
+                        &llm_secrets,
+                        &tags_mgr,
+                        &people_manager,
+                        &files_db,
+                    )
                     .await;
-
-                let session_manager = state.session_manager.clone();
-                let people_manager = state.people_manager.clone();
-                let files_db = state.files_db.clone();
-                let settings_clone = state.settings.clone();
-                let llm_secrets = state.llm_secrets.clone();
-                let tags_mgr = state.tags_manager.clone();
-                let session_id = id.clone();
-                let eu = extraction_url.unwrap();
-                let ek = extraction_key.unwrap();
-
-                tokio::spawn(async move {
-                    let result = run_transcription_pipeline(
-                        &session_id, &session_dir, &language, &source_meta,
-                        &eu, &ek, &file_drop_url, &file_drop_api_key,
-                        diarize, people_recognition, match_threshold,
-                        &session_manager, &people_manager, &files_db,
-                    ).await;
-
-                    match result {
-                        Ok(unconfirmed) => {
-                            session_manager.set_processing_state(&session_id, None).await;
-                            session_manager.emit_transcription_completed(&session_id, unconfirmed);
-                            info!("Auto-transcription completed for session {}", session_id);
-
-                            // Auto-summarize if enabled
-                            maybe_auto_summarize(
-                                &session_id, &session_manager,
-                                &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
-                                &files_db,
-                            ).await;
-                        }
-                        Err(e) => {
-                            error!("Auto-transcription failed for session {}: {}", session_id, e);
-                            session_manager.set_processing_state(&session_id, None).await;
-                            session_manager.emit_transcription_failed(&session_id, &e);
-                        }
-                    }
-                });
+                }
+                Err(e) => {
+                    services::sessions::log_auto_transcribe_failed(&req.session_id, &e);
+                    session_manager
+                        .set_processing_state(&req.session_id, None)
+                        .await;
+                    session_manager
+                        .emit_transcription_failed(&req.session_id, &e);
+                }
             }
-        }
-    }
+        });
+    })
+    .await?;
 
-    Ok(Json(json!({"status": "stopped", "files": files})))
+    Ok(Json(out))
 }
 
 async fn get_files(
