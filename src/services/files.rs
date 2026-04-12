@@ -10,6 +10,22 @@ use super::error::{ServiceError, ServiceResult};
 use super::state::AppState;
 use crate::waveform::WaveformData;
 
+/// Read the raw bytes of a session file. Used by the Tauri command
+/// layer to load audio into a Blob URL (bypassing the asset protocol
+/// entirely) when the built-in <audio> decoder has trouble streaming
+/// via `asset://` — it's safer to hold the whole file in JS memory
+/// than debug codec-specific buffering edge cases.
+#[tracing::instrument(level = "info", skip_all)]
+pub async fn read_file_bytes(
+    state: &AppState,
+    id: &str,
+    filename: &str,
+) -> ServiceResult<Vec<u8>> {
+    let path = resolve_session_file(state, id, filename).await?;
+    std::fs::read(&path)
+        .map_err(|e| ServiceError::Internal(format!("read file: {e}")))
+}
+
 #[tracing::instrument(level = "info", skip_all)]
 pub async fn list_files(state: &AppState, id: &str) -> ServiceResult<Vec<String>> {
     state

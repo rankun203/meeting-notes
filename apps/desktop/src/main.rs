@@ -184,6 +184,7 @@ fn main() {
             commands::files::mn_list_files,
             commands::files::mn_resolve_session_file,
             commands::files::mn_get_waveform,
+            commands::files::mn_read_session_file,
             commands::transcripts::mn_get_transcript,
             commands::transcripts::mn_delete_transcript,
             commands::transcripts::mn_get_attribution,
