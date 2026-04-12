@@ -93,12 +93,24 @@
   }
 }
 
-/* Make the default font render at the system-native size/weight. */
-html, body {
+/* Make the default font render at the system-native size/weight.
+ *
+ * IMPORTANT: font-size is applied to <body> only, NOT <html>. Tailwind's
+ * utility classes (`text-xs`, `text-sm`, `p-4`, etc.) use `rem` units
+ * under the hood, and `1rem` equals the `html` element's font-size. If
+ * we set `html { font-size: 13px }`, every single Tailwind rem-based
+ * size silently shrinks (e.g. `text-xs` drops from 12 px → 9.75 px and
+ * the autoResize() line-height calculation collapses textareas to a
+ * single line). Keeping `html` at the browser default (16 px) preserves
+ * Tailwind math; only the body inherits our 13 px base for plain text.
+ */
+html {
   font-family: var(--mn-font);
-  font-size: var(--mn-text-sm);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+body {
+  font-size: var(--mn-text-sm);
 }
 
 /* Native-feeling scrollbars inside the Tauri webview. */
