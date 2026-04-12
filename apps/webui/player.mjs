@@ -228,14 +228,42 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     if (maxDur > 0) setDuration(maxDur);
   }
 
+  // Pick the most-advanced currentTime across every non-ended track.
+  // This matters when one track is shorter than another (e.g. the
+  // system-audio file has nothing recorded for a 30 s stretch and
+  // the codec cut the file short) — the UI should keep advancing
+  // off whichever track is still playing, not lock onto audios[0].
+  function mostAdvancedTime() {
+    const audios = getAudios();
+    if (audios.length === 0) return 0;
+    let max = 0;
+    for (const a of audios) {
+      const t = a.currentTime || 0;
+      if (t > max) max = t;
+    }
+    return max;
+  }
+
   function updateTime() {
     const audios = getAudios();
     if (audios.length > 0) {
-      const t = audios[0].currentTime || 0;
+      const t = mostAdvancedTime();
       setCurrentTime(t);
       if (onTimeUpdate) onTimeUpdate(t);
     }
     if (playingRef.current) rafRef.current = requestAnimationFrame(updateTime);
+  }
+
+  // Fallback driver — `timeupdate` fires ~4 Hz while the <audio> is
+  // playing. It's coarser than RAF but survives any scenario that
+  // stops the RAF loop (tab hidden, React state churn). Having both
+  // in parallel means the seek slider never locks up even if the RAF
+  // chain breaks for any reason.
+  function onTimeUpdateEvent() {
+    if (!playingRef.current) return;
+    const t = mostAdvancedTime();
+    setCurrentTime(t);
+    if (onTimeUpdate) onTimeUpdate(t);
   }
 
   function togglePlay() {
@@ -366,6 +394,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
         muted: !!mutedTracks[i],
         onLoadedMetadata,
         onDurationChange: refreshDuration,
+        onTimeUpdate: onTimeUpdateEvent,
         onEnded,
         onPause,
         className: 'hidden',

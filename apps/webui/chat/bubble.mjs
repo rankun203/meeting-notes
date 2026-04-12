@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { jsx, jsxs, Fragment, api, API, useIsMobile } from '../utils.mjs';
+import { jsx, jsxs, Fragment, api, API, apiClaudeSend, apiSendMessage, useIsMobile } from '../utils.mjs';
 import { ChatIcon, CloseIcon } from '../icons.mjs';
 import { BUBBLE_SNAP_KEY, BUBBLE_SIZE, BUBBLE_SIZE_MOBILE, getSnapPoints, nearestSnap, loadSnap } from './constants.mjs';
 import { ChatPanel } from './panel.mjs';
@@ -246,61 +246,43 @@ export function ChatBubble() {
     setToolActivities([]);
     toolActivitiesRef.current = [];
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch(`${API}/claude/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    // Wrap the callback-based apiClaudeSend in a Promise so the rest
+    // of this function can keep its imperative shape. The helper works
+    // on both transports (SSE in the daemon-served browser, Tauri
+    // `Channel<ClaudeStreamEvent>` in the desktop app) so this single
+    // code path handles both.
+    let fullContent = '';
+    let aborted = false;
+    const streamPromise = new Promise((resolve, reject) => {
+      const stop = apiClaudeSend(
+        {
           prompt: content,
           session_id: claudeSessionId,
           mentions: mentions?.length ? mentions : undefined,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullContent = '';
-      let lastEvent = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) { lastEvent = line.slice(7).trim(); continue; }
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          const eventType = lastEvent || 'delta';
-          lastEvent = null;
-          try {
-            const parsed = JSON.parse(data);
-            if (eventType === 'prompt') {
-              claudePromptsRef.current.push(parsed.full_prompt);
-            } else if (eventType === 'init') {
-              setClaudeSessionId(parsed.session_id);
-            } else if (eventType === 'delta' && parsed.content) {
-              fullContent += parsed.content;
-              setStreamingContent(fullContent);
-            } else if (eventType === 'tool_use') {
-              const ta = { tool: parsed.tool, summary: parsed.input_summary };
+        },
+        (event) => {
+          if (aborted) return;
+          switch (event.type) {
+            case 'prompt':
+              claudePromptsRef.current.push(event.full_prompt);
+              break;
+            case 'init':
+              setClaudeSessionId(event.session_id);
+              break;
+            case 'delta':
+              if (event.content) {
+                fullContent += event.content;
+                setStreamingContent(fullContent);
+              }
+              break;
+            case 'tool_use': {
+              const ta = { tool: event.tool, summary: event.input_summary };
               toolActivitiesRef.current.push(ta);
               setToolActivities(prev => [...prev, ta]);
-            } else if (eventType === 'permission_request') {
-              const tools = parsed.tools || [];
+              break;
+            }
+            case 'permission_request': {
+              const tools = event.tools || [];
               if (tools.length > 0) {
                 const lastActivity = toolActivitiesRef.current[toolActivitiesRef.current.length - 1];
                 const preview = lastActivity ? `${lastActivity.tool}: ${lastActivity.summary}` : null;
@@ -310,17 +292,35 @@ export function ChatBubble() {
                   return newTools.length > 0 ? [...prev, { id: Date.now(), tools: newTools, preview }] : prev;
                 });
               }
-            } else if (eventType === 'done') {
-              setClaudeSessionId(parsed.session_id);
-              setTokenUsage(parsed.cost_usd != null ? { cost_usd: parsed.cost_usd } : null);
-            } else if (eventType === 'error') {
-              throw new Error(parsed.error);
+              break;
             }
-          } catch (parseErr) {
-            if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr;
+            case 'done':
+              setClaudeSessionId(event.session_id);
+              setTokenUsage(event.cost_usd != null ? { cost_usd: event.cost_usd } : null);
+              resolve();
+              break;
+            case 'error':
+              reject(new Error(event.error || 'claude_send error'));
+              break;
           }
         }
-      }
+      );
+      // Expose the abort handle so the stop button + session switches
+      // can cancel a running stream. We stash both the abort fn and a
+      // flag the event handler honours, because Tauri Channels can't
+      // actually interrupt an already-spawned Rust command — we just
+      // stop reacting to further events.
+      abortRef.current = {
+        abort() {
+          aborted = true;
+          try { stop(); } catch {}
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        },
+      };
+    });
+
+    try {
+      await streamPromise;
 
       // Finalize: add assistant message to local state (with tool activities preserved)
       const finalTools = toolActivitiesRef.current.length > 0 ? [...toolActivitiesRef.current] : undefined;
@@ -446,80 +446,76 @@ export function ChatBubble() {
     setStreamingPhase('thinking');
     setTokenUsage(null);
 
-    const controller = new AbortController();
-    abortRef.current = controller;
+    // Wrap the callback-based apiSendMessage in a Promise so the rest
+    // of this function can keep its imperative shape. Works on both
+    // transports (SSE in daemon/browser, Tauri Channel<ChatEvent> in
+    // the desktop app).
+    let aborted = false;
+    const streamPromise = new Promise((resolve, reject) => {
+      const stop = apiSendMessage(
+        convId,
+        { content, mentions },
+        (event) => {
+          if (aborted) return;
+          switch (event.type) {
+            case 'context_loaded':
+              setActiveConv(prev => prev ? {
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'context_result',
+                  id: 'ctx_' + Date.now(),
+                  chunks: new Array(event.chunk_count || 0),
+                  timestamp: new Date().toISOString(),
+                }],
+              } : prev);
+              break;
+            case 'usage': {
+              // Strip the `type` field so the downstream consumer only
+              // sees the raw usage payload (prompt_tokens, etc.).
+              const { type, ...usage } = event;
+              setTokenUsage(usage);
+              break;
+            }
+            case 'thinking':
+              if (event.content !== undefined) {
+                // We keep a running local copy in the handler closure via
+                // the setState updater function so React schedules the
+                // merge correctly under fast bursts.
+                setStreamingThinking(prev => (prev || '') + event.content);
+              }
+              break;
+            case 'delta':
+              if (event.content !== undefined) {
+                setStreamingPhase('streaming');
+                setStreamingContent(prev => (prev || '') + event.content);
+              }
+              break;
+            case 'done':
+              resolve();
+              break;
+            case 'error':
+              reject(new Error(event.error || 'chat error'));
+              break;
+          }
+        }
+      );
+      abortRef.current = {
+        abort() {
+          aborted = true;
+          try { stop(); } catch {}
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        },
+      };
+    });
 
     try {
-      const res = await fetch(`${API}/conversations/${convId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, mentions }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullContent = '';
-      let fullThinking = '';
-      let lastEvent = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) { lastEvent = line.slice(7).trim(); continue; }
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          const eventType = lastEvent || 'delta';
-          lastEvent = null;
-          try {
-            const parsed = JSON.parse(data);
-            if (eventType === 'usage') {
-              setTokenUsage(parsed);
-            } else if (eventType === 'thinking' && parsed.content !== undefined) {
-              fullThinking += parsed.content;
-              setStreamingThinking(fullThinking);
-            } else if (parsed.content !== undefined) {
-              fullContent += parsed.content;
-              setStreamingPhase('streaming');
-              setStreamingContent(fullContent);
-            } else if (parsed.error) {
-              setStreamingContent(null);
-              setStreaming(false);
-              setStreamingPhase(null);
-              setActiveConv(prev => prev ? {
-                ...prev,
-                messages: [...prev.messages, { role: 'assistant', id: 'err_' + Date.now(), content: `Error: ${parsed.error}`, timestamp: new Date().toISOString() }]
-              } : prev);
-              return;
-            } else if (parsed.chunk_count !== undefined) {
-              setActiveConv(prev => prev ? {
-                ...prev,
-                messages: [...prev.messages, { role: 'context_result', id: 'ctx_' + Date.now(), chunks: new Array(parsed.chunk_count), timestamp: new Date().toISOString() }]
-              } : prev);
-            }
-          } catch {}
-        }
-      }
-
+      await streamPromise;
       setStreamingContent(null);
       setStreamingThinking(null);
       setStreaming(false);
       setStreamingPhase(null);
       await loadConversation(convId);
       await refreshConvList();
-
     } catch (e) {
       if (e.name === 'AbortError') {
         // Cancelled by user — keep whatever was streamed
