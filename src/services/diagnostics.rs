@@ -50,7 +50,9 @@ pub struct LogTail {
     pub lines: Vec<String>,
 }
 
-#[tracing::instrument(level = "info", skip_all)]
+// Intentionally NOT instrumented. Diagnostics are meta-operations
+// that the user polls while looking at the log itself — logging each
+// call would flood the very file the UI is tailing.
 pub fn get_info(state: &AppState) -> ServiceResult<DiagnosticsInfo> {
     let logs_dir = state.tracing.logs_dir();
     let current = state.tracing.current_log_path();
@@ -79,7 +81,7 @@ pub fn get_info(state: &AppState) -> ServiceResult<DiagnosticsInfo> {
     })
 }
 
-#[tracing::instrument(level = "info", skip_all)]
+// Intentionally NOT instrumented — see `get_info`.
 /// Read from the log file in one of two modes:
 ///
 ///   - **Window mode** (`after` is `None`): return the last `n` lines
