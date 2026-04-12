@@ -5,11 +5,66 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Meeting Notes</title>
   <link rel="preconnect" href="https://esm.sh" />
+  <link rel="stylesheet" href="/tokens.css" />
   <link rel="stylesheet" href="/github-markdown.css" />
   <script src="/vendor/tailwind.js"></script>
   <script>
+    // Bind the design-system tokens (defined in tokens.css as CSS custom
+    // properties) into Tailwind's `mn-*` utility namespace, so components
+    // can write `bg-mn-bg text-mn-text border-mn-border` and stay in sync
+    // with the single source of truth without a build step.
     tailwind.config = {
       darkMode: 'media',
+      theme: {
+        extend: {
+          colors: {
+            mn: {
+              bg:             'var(--mn-bg)',
+              elevated:       'var(--mn-bg-elevated)',
+              sidebar:        'var(--mn-bg-sidebar)',
+              hover:          'var(--mn-bg-hover)',
+              border:         'var(--mn-border)',
+              'border-strong':'var(--mn-border-strong)',
+              text:           'var(--mn-text)',
+              'text-dim':     'var(--mn-text-dim)',
+              'text-faint':   'var(--mn-text-faint)',
+              accent:         'var(--mn-accent)',
+              'accent-weak':  'var(--mn-accent-weak)',
+              'accent-text':  'var(--mn-accent-text)',
+              danger:         'var(--mn-danger)',
+              warn:           'var(--mn-warn)',
+              success:        'var(--mn-success)',
+              recording:      'var(--mn-recording)',
+              seal:           'var(--mn-seal-red)',
+              'seal-soft':    'var(--mn-seal-red-soft)',
+            },
+          },
+          fontFamily: {
+            mn:        ['var(--mn-font)'],
+            'mn-mono': ['var(--mn-font-mono)'],
+          },
+          fontSize: {
+            '2xs':  'var(--mn-text-2xs)',
+            'mn-xs':'var(--mn-text-xs)',
+            'mn-sm':'var(--mn-text-sm)',
+            'mn':   'var(--mn-text-base)',
+            'mn-lg':'var(--mn-text-lg)',
+            'mn-xl':'var(--mn-text-xl)',
+            'mn-2xl':'var(--mn-text-2xl)',
+          },
+          borderRadius: {
+            'mn-sm': 'var(--mn-radius-sm)',
+            'mn-md': 'var(--mn-radius-md)',
+            'mn-lg': 'var(--mn-radius-lg)',
+            'mn-xl': 'var(--mn-radius-xl)',
+          },
+          boxShadow: {
+            'mn-sm':      'var(--mn-shadow-sm)',
+            'mn-md':      'var(--mn-shadow-md)',
+            'mn-popover': 'var(--mn-shadow-popover)',
+          },
+        },
+      },
     }
   </script>
   <style>
@@ -66,6 +121,9 @@
       }
     }
   </script>
+  <!-- Loaded before app.mjs so window.__mn is in place when components mount.
+       No-op in a regular browser — falls through to fetch(). -->
+  <script type="module" src="/tauri-bridge.mjs"></script>
   <script type="module" src="/app.mjs"></script>
 </body>
 </html>

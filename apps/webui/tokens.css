@@ -1,0 +1,113 @@
+/*
+ * VoiceRecords (主簿) — design system tokens.
+ *
+ * CSS custom properties for color, typography, spacing, radii, and
+ * elevation. Both the Tauri desktop webview and the daemon-served
+ * browser UI read from this file. Every piece of UI chrome should
+ * eventually come from one of these tokens; direct hard-coded colors
+ * are a migration target, not a style.
+ *
+ * Philosophy (borrowed from 1Password 8 on macOS):
+ *   - Neutral palette. One accent color. Vibrant states earn attention.
+ *   - 4 px spacing grid.
+ *   - System fonts everywhere — no webfonts.
+ *   - First-class dark mode. Every token has a dark pair.
+ */
+
+:root {
+  /* ── Color — neutral scale ───────────────────────────────── */
+  --mn-bg:             #f7f7f8;
+  --mn-bg-elevated:    #ffffff;
+  --mn-bg-sidebar:     rgba(246, 246, 248, 0.72);
+  --mn-bg-hover:       rgba(0, 0, 0, 0.04);
+  --mn-border:         #e5e5ea;
+  --mn-border-strong:  #d1d1d6;
+  --mn-text:           #1c1c1e;
+  --mn-text-dim:       #6e6e73;
+  --mn-text-faint:     #a1a1a6;
+
+  /* ── Accent + status ─────────────────────────────────────── */
+  --mn-accent:         #0a84ff;
+  --mn-accent-weak:    rgba(10, 132, 255, 0.12);
+  --mn-accent-text:    #ffffff;
+  --mn-danger:         #ff3b30;
+  --mn-warn:           #ff9500;
+  --mn-success:        #30d158;
+  --mn-recording:      #ff453a;
+
+  /* ── 主 seal — brand accent for emphasis elements ────────── */
+  --mn-seal-red:       #c62828;
+  --mn-seal-red-soft:  rgba(198, 40, 40, 0.12);
+
+  /* ── Typography ──────────────────────────────────────────── */
+  --mn-font:      -apple-system, "SF Pro Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --mn-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* Sizes match macOS system text scale */
+  --mn-text-2xs:  11px;   /* captions, tooltips */
+  --mn-text-xs:   12px;   /* secondary labels */
+  --mn-text-sm:   13px;   /* default macOS UI size */
+  --mn-text-base: 15px;   /* body */
+  --mn-text-lg:   17px;   /* section titles */
+  --mn-text-xl:   22px;   /* page titles */
+  --mn-text-2xl:  28px;   /* hero / empty-state */
+
+  /* ── Spacing — 4 px grid ─────────────────────────────────── */
+  --mn-space-1:  4px;
+  --mn-space-2:  8px;
+  --mn-space-3:  12px;
+  --mn-space-4:  16px;
+  --mn-space-5:  24px;
+  --mn-space-6:  32px;
+  --mn-space-7:  48px;
+
+  /* ── Radii ───────────────────────────────────────────────── */
+  --mn-radius-sm: 4px;
+  --mn-radius-md: 6px;
+  --mn-radius-lg: 10px;
+  --mn-radius-xl: 14px;
+
+  /* ── Elevation (restrained — native apps avoid heavy shadows) ── */
+  --mn-shadow-sm:      0 1px 2px rgba(0, 0, 0, 0.04);
+  --mn-shadow-md:      0 4px 16px rgba(0, 0, 0, 0.08);
+  --mn-shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --mn-bg:             #1c1c1e;
+    --mn-bg-elevated:    #2c2c2e;
+    --mn-bg-sidebar:     rgba(30, 30, 32, 0.72);
+    --mn-bg-hover:       rgba(255, 255, 255, 0.06);
+    --mn-border:         #38383a;
+    --mn-border-strong:  #48484a;
+    --mn-text:           #f2f2f7;
+    --mn-text-dim:       #98989d;
+    --mn-text-faint:     #636366;
+    --mn-accent-weak:    rgba(10, 132, 255, 0.22);
+    --mn-seal-red-soft:  rgba(198, 40, 40, 0.22);
+
+    --mn-shadow-sm:      0 1px 2px rgba(0, 0, 0, 0.4);
+    --mn-shadow-md:      0 4px 16px rgba(0, 0, 0, 0.5);
+    --mn-shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* Make the default font render at the system-native size/weight. */
+html, body {
+  font-family: var(--mn-font);
+  font-size: var(--mn-text-sm);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Native-feeling scrollbars inside the Tauri webview. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--mn-border-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--mn-text-faint); background-clip: padding-box; border: 2px solid transparent; }
+::-webkit-scrollbar-track { background: transparent; }

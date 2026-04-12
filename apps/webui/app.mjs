@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsx, jsxs, Fragment, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
+import { LocaleProvider } from './i18n.mjs';
 import { parseRoute, buildPath } from './router.mjs';
 import { SessionDetail } from './session.mjs';
 import { PersonDetail } from './people.mjs';
@@ -308,4 +309,6 @@ function App() {
   ]});
 }
 
-createRoot(document.getElementById('root')).render(jsx(App, {}));
+createRoot(document.getElementById('root')).render(
+  jsx(LocaleProvider, { children: jsx(App, {}) })
+);
