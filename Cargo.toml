@@ -1,7 +1,18 @@
+[workspace]
+members = [".", "apps/file-drop"]
+resolver = "2"
+
 [package]
 name = "meeting-notes-daemon"
 version = "0.1.0"
 edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "meeting-notes-daemon"
+path = "src/main.rs"
 
 [dependencies]
 regex = "1"
