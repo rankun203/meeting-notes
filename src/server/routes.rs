@@ -2263,20 +2263,31 @@ async fn claude_approve_tools(
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
-    let permanent = body.get("permanent").and_then(|v| v.as_bool()).unwrap_or(false);
+    let scope = body.get("scope").and_then(|v| v.as_str()).unwrap_or(
+        if body.get("permanent").and_then(|v| v.as_bool()).unwrap_or(false) { "permanent" } else { "once" }
+    );
 
     if tools.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "no tools specified"}))));
     }
 
-    if permanent {
-        state.claude_runner.approve_tools_permanent(&tools)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    match scope {
+        "permanent" => {
+            state.claude_runner.approve_tools_permanent(&tools)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+            state.claude_runner.approve_tools_session(&tools).await;
+        }
+        "session" => {
+            state.claude_runner.approve_tools_session(&tools).await;
+        }
+        _ => {
+            // "once": add to session list so the immediate retry works,
+            // removed automatically after the next run completes.
+            state.claude_runner.approve_tools_once(&tools).await;
+        }
     }
-    // Always add to session approved (permanent includes session)
-    state.claude_runner.approve_tools_session(&tools).await;
 
-    Ok(Json(json!({ "approved": tools, "permanent": permanent })))
+    Ok(Json(json!({ "approved": tools, "scope": scope })))
 }
 
 async fn claude_list_sessions(

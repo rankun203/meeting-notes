@@ -219,7 +219,7 @@ export function ChatBubble() {
     }
   }
 
-  async function handleSendClaude(content, mentions) {
+  async function handleSendClaude(content, mentions, { internal = false } = {}) {
     if (streaming) return;
 
     // Create app conversation lazily on first message
@@ -233,10 +233,13 @@ export function ChatBubble() {
       } catch { return; }
     }
 
-    const userMsg = { role: 'user', id: 'pending_' + Date.now(), content, mentions, timestamp: new Date().toISOString() };
-    setActiveConv(prev => prev
-      ? { ...prev, messages: [...prev.messages, userMsg] }
-      : { id: convId, title: content.slice(0, 60), messages: [userMsg] });
+    const userMsgId = 'pending_' + Date.now();
+    if (!internal) {
+      const userMsg = { role: 'user', id: userMsgId, content, mentions, timestamp: new Date().toISOString() };
+      setActiveConv(prev => prev
+        ? { ...prev, messages: [...prev.messages, userMsg] }
+        : { id: convId, title: content.slice(0, 60), messages: [userMsg] });
+    }
     setStreaming(true);
     setStreamingContent('');
     setStreamingPhase('streaming');
@@ -299,11 +302,12 @@ export function ChatBubble() {
             } else if (eventType === 'permission_request') {
               const tools = parsed.tools || [];
               if (tools.length > 0) {
+                const lastActivity = toolActivitiesRef.current[toolActivitiesRef.current.length - 1];
+                const preview = lastActivity ? `${lastActivity.tool}: ${lastActivity.summary}` : null;
                 setPendingPermissions(prev => {
-                  // Dedupe by tool name
                   const existing = new Set(prev.flatMap(p => p.tools));
                   const newTools = tools.filter(t => !existing.has(t));
-                  return newTools.length > 0 ? [...prev, { id: Date.now(), tools: newTools }] : prev;
+                  return newTools.length > 0 ? [...prev, { id: Date.now(), tools: newTools, preview }] : prev;
                 });
               }
             } else if (eventType === 'done') {
@@ -332,9 +336,10 @@ export function ChatBubble() {
       }
       // Persist to app conversation system
       if (convId) {
-        const syncMessages = [
-          { role: 'user', id: userMsg.id, content, mentions },
-        ];
+        const syncMessages = [];
+        if (!internal) {
+          syncMessages.push({ role: 'user', id: userMsgId, content, mentions });
+        }
         if (fullContent) {
           syncMessages.push({ role: 'assistant', id: 'claude_' + Date.now(), content: fullContent });
         }
@@ -369,24 +374,24 @@ export function ChatBubble() {
     }
   }
 
-  async function handleApproveTools(tools, permanent) {
+  async function handleApproveTools(tools, scope) {
     try {
       await api('/claude/approve-tools', {
         method: 'POST',
-        body: JSON.stringify({ tools, permanent }),
+        body: JSON.stringify({ tools, scope }),
       });
-      // Remove from pending
       setPendingPermissions(prev => prev.filter(p => !p.tools.every(t => tools.includes(t))));
-      // Auto-retry: re-send the last user message
-      if (!streaming && activeConv?.messages?.length) {
-        const lastUser = [...activeConv.messages].reverse().find(m => m.role === 'user');
-        if (lastUser) {
-          handleSendClaude(lastUser.content, lastUser.mentions || []);
-        }
+      // Resume the session with a short continuation prompt instead of re-sending the original
+      if (!streaming && claudeSessionId) {
+        handleSendClaude('Permission approved, please continue.', [], { internal: true });
       }
     } catch (e) {
       alert('Failed to approve: ' + e.message);
     }
+  }
+
+  function handleDenyPermissions() {
+    setPendingPermissions([]);
   }
 
   function handleExportClaude() {
@@ -594,6 +599,7 @@ export function ChatBubble() {
       chatBackend, toolActivities,
       onSendToClaudeCode: chatBackend === 'claude_code' ? handleExportClaude : null,
       onApproveTools: chatBackend === 'claude_code' ? handleApproveTools : null,
+      onDenyPermissions: chatBackend === 'claude_code' ? handleDenyPermissions : null,
       pendingPermissions,
     }),
   ]});

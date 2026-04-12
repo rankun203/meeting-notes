@@ -36,7 +36,8 @@ export function ConversationList({ conversations, activeId, activeConv, tokenUsa
           children: [
             jsx('span', { className: 'font-medium text-gray-700 dark:text-gray-300 truncate flex-1 min-w-0', children: active.title || 'New conversation' }),
             jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: formatFileSize(active.size_bytes || 0) }),
-            tokenUsage && jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: `${formatTokens(tokenUsage.prompt_tokens)} in / ${formatTokens(tokenUsage.completion_tokens)} out` }),
+            tokenUsage && tokenUsage.prompt_tokens != null && jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: `${formatTokens(tokenUsage.prompt_tokens)} in / ${formatTokens(tokenUsage.completion_tokens)} out` }),
+            tokenUsage && tokenUsage.cost_usd != null && !tokenUsage.prompt_tokens && jsx('span', { className: 'text-[9px] text-gray-400 flex-shrink-0', children: `$${tokenUsage.cost_usd.toFixed(4)}` }),
           ],
         }),
       }),

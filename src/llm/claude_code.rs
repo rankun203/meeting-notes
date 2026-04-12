@@ -55,6 +55,8 @@ pub struct ClaudeCodeRunner {
     active: Arc<Mutex<Option<Child>>>,
     /// Tools temporarily approved for this server session (not persisted).
     session_approved: Arc<Mutex<Vec<String>>>,
+    /// Tools approved for a single run only — removed after the next run completes.
+    once_approved: Arc<Mutex<Vec<String>>>,
 }
 
 impl ClaudeCodeRunner {
@@ -63,6 +65,7 @@ impl ClaudeCodeRunner {
             data_dir: data_dir.to_path_buf(),
             active: Arc::new(Mutex::new(None)),
             session_approved: Arc::new(Mutex::new(Vec::new())),
+            once_approved: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -151,6 +154,8 @@ impl ClaudeCodeRunner {
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let active = self.active.clone();
+        let session_approved = self.session_approved.clone();
+        let once_approved = self.once_approved.clone();
 
         tokio::spawn(async move {
             let reader = BufReader::new(stdout);
@@ -169,21 +174,38 @@ impl ClaudeCodeRunner {
                 };
 
                 let events = parse_claude_json(&json, &mut emitted_text_len);
+                let mut should_stop = false;
                 for event in events {
-                    let is_done = matches!(event, ClaudeEvent::Done { .. } | ClaudeEvent::Error { .. });
+                    let is_terminal = matches!(event, ClaudeEvent::Done { .. } | ClaudeEvent::Error { .. } | ClaudeEvent::PermissionRequest { .. });
                     if tx.send(event).await.is_err() {
+                        should_stop = true;
                         break;
                     }
-                    if is_done {
+                    if is_terminal {
+                        should_stop = true;
                         break;
                     }
                 }
+                if should_stop {
+                    break;
+                }
             }
 
-            // Clean up: remove child from active
+            // Clean up: kill and remove child from active
             let mut guard = active.lock().await;
             if let Some(mut child) = guard.take() {
+                let _ = child.kill().await;
                 let _ = child.wait().await;
+            }
+            drop(guard);
+
+            // Remove once-approved tools from session list
+            let mut once = once_approved.lock().await;
+            if !once.is_empty() {
+                let mut approved = session_approved.lock().await;
+                approved.retain(|t| !once.contains(t));
+                info!("Cleared once-approved tools: {}", once.join(", "));
+                once.clear();
             }
         });
 
@@ -352,6 +374,21 @@ impl ClaudeCodeRunner {
         }
     }
 
+    pub async fn approve_tools_once(&self, tools: &[String]) {
+        let mut approved = self.session_approved.lock().await;
+        let mut once = self.once_approved.lock().await;
+        for tool in tools {
+            if !approved.contains(tool) {
+                approved.push(tool.clone());
+            }
+            if !once.contains(tool) {
+                once.push(tool.clone());
+                info!("Once-approved tool: {}", tool);
+            }
+        }
+    }
+
+
     /// Permanently approve tools by adding them to the project's .claude/settings.json.
     pub fn approve_tools_permanent(&self, tools: &[String]) -> Result<(), String> {
         let claude_dir = self.data_dir.join(".claude");
@@ -505,10 +542,8 @@ fn parse_claude_json(json: &Value, emitted_text_len: &mut usize) -> Vec<ClaudeEv
         }
 
         Some("user") => {
-            // Detect permission denial messages
             if let Some(result) = json.get("tool_use_result").and_then(|v| v.as_str()) {
                 if result.contains("requested permissions to use") {
-                    // Extract tool name: "Claude requested permissions to use TOOL_NAME, but..."
                     if let Some(start) = result.find("to use ") {
                         let rest = &result[start + 7..];
                         if let Some(end) = rest.find(',') {

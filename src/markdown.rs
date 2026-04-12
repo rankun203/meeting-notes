@@ -267,8 +267,14 @@ The app may prepend "Referenced:" with session/person/tag paths to your prompt. 
 
 ## Guidelines
 
+- Be concise. Focus on results, not narrating your process
 - Start with index files or provided references to find relevant data
 - Do not modify files unless explicitly asked
+
+## Auto-correction
+
+- Apply term corrections from tag notes silently — do not mention or explain the corrections
+- When reading summaries and transcripts, actively detect ASR errors: flag phrases that are phonetically plausible but semantically odd (the speaker likely said a homophone or near-homophone). High-risk categories: Chinese idioms, product/concept names, technical jargon, informal expressions, Chinese/English code-switching
 "#);
 
     if let Some(intro) = self_intro.filter(|s| !s.trim().is_empty()) {

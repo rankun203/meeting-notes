@@ -5,6 +5,28 @@ import { TagIcon } from '../icons.mjs';
 const FILTERS = ['all', 'tag', 'person', 'session'];
 const FILTER_LABELS = { all: 'All', tag: 'Tags', person: 'People', session: 'Sessions' };
 
+function matchesQuery(text, q) {
+  const lower = text.slice(0, 1024).toLowerCase();
+  if (lower.includes(q)) return true;
+  // Word-prefix matching: greedily consume query chars from the start of each word
+  // "cmsd" → c,m,s from "cms", d from "daily"
+  // "cd" → c from "cms", d from "daily"
+  const words = lower.split(/[\s_-]+/);
+  let wi = 0, ci = 0;
+  while (ci < q.length && wi < words.length) {
+    const word = words[wi];
+    if (word[0] === q[ci]) {
+      let matched = 0;
+      while (matched < word.length && ci + matched < q.length && word[matched] === q[ci + matched]) {
+        matched++;
+      }
+      ci += matched;
+    }
+    wi++;
+  }
+  return ci === q.length;
+}
+
 export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, mentionData }, ref) {
   const [filter, setFilter] = useState('all');
   const [highlightIdx, setHighlightIdx] = useState(0);
@@ -13,20 +35,20 @@ export const MentionPopup = forwardRef(function MentionPopup({ query, onSelect, 
   const items = [];
   if (filter === 'all' || filter === 'tag') {
     for (const t of (mentionData.tags || [])) {
-      if (t.name.toLowerCase().includes(q))
+      if (matchesQuery(t.name, q))
         items.push({ kind: 'tag', id: t.name, label: t.name, detail: `${t.session_count || 0} sessions` });
     }
   }
   if (filter === 'all' || filter === 'person') {
     for (const p of (mentionData.people || [])) {
-      if (p.name.toLowerCase().includes(q))
+      if (matchesQuery(p.name, q))
         items.push({ kind: 'person', id: p.id, label: p.name });
     }
   }
   if (filter === 'all' || filter === 'session') {
     for (const s of (mentionData.sessions || [])) {
       const name = s.name || s.id;
-      if (name.toLowerCase().includes(q))
+      if (matchesQuery(name, q))
         items.push({ kind: 'session', id: s.id, label: name, detail: formatTime(s.created_at), summary_available: !!s.summary_available, transcript_available: !!s.transcript_available });
     }
   }
