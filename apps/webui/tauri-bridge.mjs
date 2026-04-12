@@ -1,7 +1,8 @@
 // Tauri bridge — loaded only when running inside the VoiceRecords desktop
-// webview. Exposes `invoke` and `listen` on `window.__mn` so the rest of
-// the webui (which is plain ES modules, no bundler) can pick them up via
-// `utils.mjs` without caring which transport it's on.
+// webview. Exposes `invoke`, `listen`, `emit`, `convertFileSrc`, and
+// `Channel` on `window.__mn` so the rest of the webui (which is plain ES
+// modules, no bundler) can pick them up via `utils.mjs` without caring
+// which transport it's on.
 //
 // When this file is loaded inside a regular browser (daemon-served mode),
 // `window.__TAURI_INTERNALS__` is undefined and we no-op — the utils.mjs
@@ -14,6 +15,7 @@ if (typeof window !== 'undefined' && window.__TAURI_INTERNALS__) {
     window.__mn = {
       invoke: core.invoke,
       convertFileSrc: core.convertFileSrc,
+      Channel: core.Channel,
       listen: event.listen,
       emit: event.emit,
     };

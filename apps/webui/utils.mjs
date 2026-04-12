@@ -57,8 +57,43 @@ export const PROCESSING_LABELS = {
 };
 
 // ── API helper ──
+//
+// Works in two modes:
+//   - Browser / daemon-served: calls `fetch(${origin}/api${path})`.
+//   - Inside the VoiceRecords Tauri webview: routes the REST shape to the
+//     matching `mn_*` Tauri command. The Tauri bridge sets up
+//     `window.__mn.invoke`; detection is feature-based, not UA-based.
+//
+// Every existing component keeps calling `api('/sessions', {...})` with no
+// changes. The router lives in `./api-router.mjs`.
+
+import { routeToCommand } from './api-router.mjs';
+
+function isTauri() {
+  return typeof window !== 'undefined' && !!window.__mn && typeof window.__mn.invoke === 'function';
+}
 
 export async function api(path, opts = {}) {
+  if (isTauri()) {
+    const method = (opts.method || 'GET').toUpperCase();
+    let body;
+    if (opts.body != null) {
+      try { body = JSON.parse(opts.body); } catch { body = opts.body; }
+    }
+    const route = routeToCommand(method, path, body);
+    if (route) {
+      try {
+        return await window.__mn.invoke(route.name, route.args);
+      } catch (e) {
+        // Tauri serializes ServiceError as {kind, message}; surface the message.
+        const msg = (e && typeof e === 'object' && 'message' in e) ? e.message : (e?.toString?.() || 'command failed');
+        throw new Error(msg);
+      }
+    }
+    // Fall through to fetch for unrouted paths (should not happen once the
+    // table is complete — logged to help diagnose any misses).
+    console.warn(`[api] no Tauri route for ${method} ${path}, falling back to fetch`);
+  }
   const res = await fetch(`${API}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
@@ -69,6 +104,130 @@ export async function api(path, opts = {}) {
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+// ── Streaming helpers ──
+//
+// Two streaming endpoints need special handling because they return SSE
+// events in daemon mode and typed ChatEvent/ClaudeStreamEvent via a
+// `tauri::ipc::Channel` in desktop mode.
+
+/** Open `POST /conversations/{id}/messages` as a streaming source.
+ *  `onEvent(event)` fires for every typed event (`{type, ...}`).
+ *  Returns an `abort()` function the caller can call to stop listening. */
+export function apiSendMessage(conversationId, { content, mentions }, onEvent) {
+  if (isTauri()) {
+    const channel = new window.__mn.Channel();
+    channel.onmessage = onEvent;
+    window.__mn
+      .invoke('mn_send_message', {
+        id: conversationId,
+        input: { content, mentions: mentions || [] },
+        onEvent: channel,
+      })
+      .catch((e) => {
+        const msg = (e && typeof e === 'object' && 'message' in e) ? e.message : String(e);
+        onEvent({ type: 'error', error: msg });
+      });
+    return () => { try { channel.onmessage = () => {}; } catch {} };
+  }
+
+  // Browser mode — SSE via fetch.
+  const ctrl = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${API}/conversations/${conversationId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, mentions: mentions || [] }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({}));
+        onEvent({ type: 'error', error: body.error || `HTTP ${res.status}` });
+        return;
+      }
+      await consumeSse(res.body, onEvent);
+    } catch (e) {
+      if (e?.name !== 'AbortError') {
+        onEvent({ type: 'error', error: String(e?.message || e) });
+      }
+    }
+  })();
+  return () => ctrl.abort();
+}
+
+/** Open `POST /claude/send` as a streaming source. */
+export function apiClaudeSend({ prompt, session_id, mentions }, onEvent) {
+  if (isTauri()) {
+    const channel = new window.__mn.Channel();
+    channel.onmessage = onEvent;
+    window.__mn
+      .invoke('mn_claude_send', {
+        input: { prompt, session_id, mentions: mentions || [] },
+        onEvent: channel,
+      })
+      .catch((e) => {
+        const msg = (e && typeof e === 'object' && 'message' in e) ? e.message : String(e);
+        onEvent({ type: 'error', error: msg });
+      });
+    return () => { try { channel.onmessage = () => {}; } catch {} };
+  }
+
+  const ctrl = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${API}/claude/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, session_id, mentions: mentions || [] }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({}));
+        onEvent({ type: 'error', error: body.error || `HTTP ${res.status}` });
+        return;
+      }
+      await consumeSse(res.body, onEvent);
+    } catch (e) {
+      if (e?.name !== 'AbortError') {
+        onEvent({ type: 'error', error: String(e?.message || e) });
+      }
+    }
+  })();
+  return () => ctrl.abort();
+}
+
+// Minimal SSE parser — the existing app code already tolerates the shape
+// `{type, ...payload}` for each event, so we project from the wire format
+// (which has `event: name\ndata: {json}`) into that shape.
+async function consumeSse(stream, onEvent) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      let name = 'message';
+      let data = '';
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) name = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (!data) continue;
+      try {
+        const parsed = JSON.parse(data);
+        onEvent({ type: name, ...parsed });
+      } catch {
+        onEvent({ type: name, data });
+      }
+    }
+  }
 }
 
 // ── Hooks ──
@@ -110,11 +269,37 @@ export function useIsMobile() {
 export function useWebSocket(onEvent) {
   const wsRef = useRef(null);
   const reconnectRef = useRef(null);
+  const unlistenRef = useRef(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
 
   useEffect(() => {
-    function connect() {
+    let cancelled = false;
+
+    async function subscribeTauri() {
+      // Ask the backend for an initial snapshot (same shape the daemon's
+      // WS sends in its first `init` message), then subscribe to the
+      // live event stream that the Tauri backend re-emits from the
+      // SessionManager broadcast bus.
+      try {
+        const page = await window.__mn.invoke('mn_list_sessions', { limit: 1000, offset: 0 });
+        if (!cancelled) {
+          onEventRef.current({
+            type: 'init',
+            data: { sessions: page.sessions || [], total: page.total || 0 },
+          });
+        }
+      } catch (e) {
+        console.warn('initial session snapshot failed', e);
+      }
+      const unlisten = await window.__mn.listen('mn:server-event', (ev) => {
+        onEventRef.current(ev.payload);
+      });
+      if (cancelled) { unlisten(); return; }
+      unlistenRef.current = unlisten;
+    }
+
+    function connectWs() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${location.host}/api/ws`);
       wsRef.current = ws;
@@ -122,12 +307,20 @@ export function useWebSocket(onEvent) {
         try { onEventRef.current(JSON.parse(e.data)); } catch {}
       };
       ws.onclose = () => {
-        reconnectRef.current = setTimeout(connect, 2000);
+        reconnectRef.current = setTimeout(connectWs, 2000);
       };
       ws.onerror = () => ws.close();
     }
-    connect();
+
+    if (isTauri()) {
+      subscribeTauri();
+    } else {
+      connectWs();
+    }
+
     return () => {
+      cancelled = true;
+      if (unlistenRef.current) { try { unlistenRef.current(); } catch {} unlistenRef.current = null; }
       if (wsRef.current) wsRef.current.close();
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
     };

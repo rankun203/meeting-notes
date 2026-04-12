@@ -9,12 +9,9 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 use futures::StreamExt;
-use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-use crate::chat::types::{ContextCriteria, Mention, Message};
-use crate::llm::client::LlmClient;
 use crate::session::config::SessionConfig;
 use crate::session::session::SessionInfo;
 
@@ -577,254 +574,44 @@ async fn delete_conversation(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-struct SendMessageBody {
-    content: String,
-    #[serde(default)]
-    mentions: Vec<Mention>,
-}
+// ---- Streaming chat handler (shim over `services::chat::send_message_stream`) ----
 
 async fn send_message(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<SendMessageBody>,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)> {
-    // Load conversation
-    let mut conv = state.conversation_manager.get(&id)
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+    Json(input): Json<services::chat::SendMessageInput>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, services::ServiceError>
+{
+    let events = services::chat::send_message_stream(&state, &id, input).await?;
+    let sse = events.map(|ev| Ok(chat_event_to_sse(&ev)));
+    Ok(Sse::new(sse))
+}
 
-    let now = chrono::Utc::now();
-
-    // Append user message
-    let user_msg_id = format!("msg_{}", now.timestamp_nanos_opt().unwrap_or(0));
-    conv.messages.push(Message::User {
-        id: user_msg_id,
-        content: body.content.clone(),
-        mentions: body.mentions.clone(),
-        timestamp: now,
-    });
-
-    // Auto-title from first user message
-    if conv.title.is_empty() {
-        conv.title = body.content.chars().take(60).collect();
+/// Serialize a `ChatEvent` into the SSE event shape the existing webui
+/// already parses: named event type + JSON payload (minus the `type`
+/// tag, since SSE carries the name separately).
+fn chat_event_to_sse(ev: &services::chat::ChatEvent) -> Event {
+    use services::chat::ChatEvent;
+    match ev {
+        ChatEvent::ContextLoaded { chunk_count, session_count } => Event::default()
+            .event("context_loaded")
+            .data(json!({ "chunk_count": chunk_count, "session_count": session_count }).to_string()),
+        ChatEvent::Thinking { content } => Event::default()
+            .event("thinking")
+            .data(json!({ "content": content }).to_string()),
+        ChatEvent::Delta { content } => Event::default()
+            .event("delta")
+            .data(json!({ "content": content }).to_string()),
+        ChatEvent::Usage(value) => Event::default()
+            .event("usage")
+            .data(value.to_string()),
+        ChatEvent::Done { message_id } => Event::default()
+            .event("done")
+            .data(json!({ "message_id": message_id }).to_string()),
+        ChatEvent::Error { error } => Event::default()
+            .event("error")
+            .data(json!({ "error": error }).to_string()),
     }
-
-    // Build context: fetch only new chunks, dedupe against existing context
-    let new_criteria = ContextCriteria::from_mentions(&body.mentions);
-
-    // Get existing context from the most recent context_result
-    let existing_context: Vec<crate::chat::types::ContextChunk> = conv.messages.iter().rev()
-        .find_map(|m| {
-            if let Message::ContextResult { chunks, .. } = m { Some(chunks.clone()) }
-            else { None }
-        })
-        .unwrap_or_default();
-
-    let context_chunks = if !new_criteria.is_empty() {
-        // Retrieve only for the new criteria
-        let new_chunks = crate::llm::context::retrieve_context(
-            &new_criteria,
-            &state.files_db,
-            &state.session_manager,
-            &state.tags_manager,
-            &state.people_manager,
-        ).await;
-
-        // Dedupe: build a set of (kind, source_id, start_time_or_note_hash) from existing chunks
-        let chunk_key = |c: &crate::chat::types::ContextChunk| -> (String, String, u64) {
-            if c.kind == "note" {
-                let hash = c.note.as_deref().unwrap_or("").len() as u64;
-                (c.kind.clone(), c.source_id.clone(), hash)
-            } else {
-                let start_bits = c.segment.as_ref()
-                    .and_then(|s| s.get("start")).and_then(|v| v.as_f64())
-                    .unwrap_or(0.0).to_bits();
-                (c.kind.clone(), c.source_id.clone(), start_bits)
-            }
-        };
-
-        let existing_keys: std::collections::HashSet<_> = existing_context.iter()
-            .map(chunk_key)
-            .collect();
-
-        let delta: Vec<_> = new_chunks.into_iter()
-            .filter(|c| !existing_keys.contains(&chunk_key(c)))
-            .collect();
-
-        // Merge: existing + new unique chunks
-        let mut combined = existing_context;
-        combined.extend(delta.clone());
-
-        // Re-sort: notes first, then by time
-        combined.sort_by(|a, b| {
-            let a_note = a.kind == "note";
-            let b_note = b.kind == "note";
-            if a_note != b_note {
-                return if a_note { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
-            }
-            a.created_at.cmp(&b.created_at)
-                .then_with(|| {
-                    let as_ = a.segment.as_ref().and_then(|s| s.get("start")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let bs = b.segment.as_ref().and_then(|s| s.get("start")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    as_.partial_cmp(&bs).unwrap_or(std::cmp::Ordering::Equal)
-                })
-        });
-
-        // Build merged criteria for storage
-        let mut merged_criteria = ContextCriteria::default();
-        for msg in &conv.messages {
-            if let Message::ContextResult { criteria: prev, .. } = msg {
-                merged_criteria.merge(prev);
-            }
-        }
-        merged_criteria.merge(&new_criteria);
-
-        if !combined.is_empty() {
-            let ctx_msg_id = format!("ctx_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
-            conv.messages.push(Message::ContextResult {
-                id: ctx_msg_id,
-                criteria: merged_criteria,
-                chunks: combined.clone(),
-                timestamp: chrono::Utc::now(),
-            });
-        }
-
-        combined
-    } else if !existing_context.is_empty() {
-        // No new mentions — reuse existing context
-        existing_context
-    } else {
-        Vec::new()
-    };
-
-    conv.updated_at = chrono::Utc::now();
-
-    // Save conversation with user message (and possibly context)
-    state.conversation_manager.save(&conv)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
-
-    // Prepare LLM request
-    let context_str = crate::llm::prompt::format_context(&context_chunks);
-
-    let settings = state.settings.read().await;
-    let host = settings.llm_host.clone();
-    let model = settings.llm_model.clone();
-    let openrouter_sort = settings.openrouter_sort.clone();
-    let self_intro = settings.chat_self_intro.clone();
-    drop(settings);
-
-    let llm_messages = crate::llm::prompt::build_messages(&conv, &context_str, self_intro.as_deref());
-
-    let secrets = state.llm_secrets.read().await;
-    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
-    drop(secrets);
-
-    let chunk_count = context_chunks.len();
-    let session_count = {
-        let mut sids = std::collections::HashSet::new();
-        for c in &context_chunks { sids.insert(&c.source_id); }
-        sids.len()
-    };
-
-    let conv_manager = state.conversation_manager.clone();
-    let conv_id = id.clone();
-
-    // Build SSE stream
-    let stream = async_stream::stream! {
-        // Emit context loaded event if applicable
-        if chunk_count > 0 {
-            yield Ok(Event::default()
-                .event("context_loaded")
-                .data(json!({"chunk_count": chunk_count, "session_count": session_count}).to_string()));
-        }
-
-        if api_key.is_empty() {
-            yield Ok(Event::default()
-                .event("error")
-                .data(json!({"error": "LLM API key not configured. Set it in Settings > Services."}).to_string()));
-            return;
-        }
-
-        // Stream from LLM
-        let model_name = model.clone();
-        let client = LlmClient::new(host, api_key, model)
-            .with_provider_sort(openrouter_sort);
-        match client.stream_chat(llm_messages).await {
-            Ok(llm_stream) => {
-                let mut full_content = String::new();
-                let mut usage_value: Option<Value> = None;
-                let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
-
-                futures::pin_mut!(llm_stream);
-
-                while let Some(result) = llm_stream.next().await {
-                    match result {
-                        Ok(content) => {
-                            if let Some(thinking) = content.strip_prefix('\x01') {
-                                yield Ok(Event::default()
-                                    .event("thinking")
-                                    .data(json!({"content": thinking}).to_string()));
-                            } else if let Some(usage_str) = content.strip_prefix('\x02') {
-                                if let Ok(u) = serde_json::from_str::<Value>(usage_str) {
-                                    let prompt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let completion = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    let total = u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt + completion);
-                                    let cost = u.get("cost").and_then(|v| v.as_f64());
-                                    let cost_str = cost.map(|c| format!(", cost ${:.4}", c)).unwrap_or_default();
-                                    info!(
-                                        "[{}] Chat {} — {} prompt + {} completion = {} tokens{}",
-                                        conv_id, model_name, prompt, completion, total, cost_str
-                                    );
-                                }
-                                usage_value = serde_json::from_str(usage_str).ok();
-                                yield Ok(Event::default()
-                                    .event("usage")
-                                    .data(usage_str.to_string()));
-                            } else {
-                                full_content.push_str(&content);
-                                yield Ok(Event::default()
-                                    .event("delta")
-                                    .data(json!({"content": content}).to_string()));
-                            }
-                        }
-                        Err(e) => {
-                            yield Ok(Event::default()
-                                .event("error")
-                                .data(json!({"error": e}).to_string()));
-                            return;
-                        }
-                    }
-                }
-
-                // Save assistant message (skip if empty, e.g. client cancelled before any content)
-                if !full_content.is_empty() {
-                    if let Some(mut conv) = conv_manager.get(&conv_id) {
-                        conv.messages.push(Message::Assistant {
-                            id: assistant_msg_id.clone(),
-                            content: full_content,
-                            timestamp: chrono::Utc::now(),
-                            usage: usage_value,
-                        });
-                        conv.updated_at = chrono::Utc::now();
-                        if let Err(e) = conv_manager.save(&conv) {
-                            warn!("Failed to save assistant message: {}", e);
-                        }
-                    }
-                }
-
-                yield Ok(Event::default()
-                    .event("done")
-                    .data(json!({"message_id": assistant_msg_id}).to_string()));
-            }
-            Err(e) => {
-                yield Ok(Event::default()
-                    .event("error")
-                    .data(json!({"error": e}).to_string()));
-            }
-        }
-    };
-
-    Ok(Sse::new(stream))
 }
 
 async fn sync_claude_messages(
@@ -873,88 +660,33 @@ async fn claude_status(
     Ok(Json(services::claude::status(&state).await?))
 }
 
+// ---- Streaming claude send handler (shim over `services::claude::send_stream`) ----
+
 async fn claude_send(
     State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)> {
-    let prompt = body.get("prompt").and_then(|v| v.as_str())
-        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "prompt is required"}))))?
-        .to_string();
-    let session_id = body.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    Json(input): Json<services::claude::SendInput>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, services::ServiceError>
+{
+    let events = services::claude::send_stream(&state, input).await?;
+    let sse = events.map(|ev| Ok(claude_event_to_sse(&ev)));
+    Ok(Sse::new(sse))
+}
 
-    // Resolve @ mentions to detailed context for Claude Code
-    let mentions_context = if let Some(mentions) = body.get("mentions").and_then(|v| v.as_array()) {
-        let mut lines = Vec::new();
-        for m in mentions {
-            let mtype = m.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let label = m.get("label").and_then(|v| v.as_str()).unwrap_or(id);
-            match mtype {
-                "session" => {
-                    lines.push(format!("- Session \"{}\" (id: {})", label, id));
-                }
-                "person" => {
-                    let person = state.people_manager.get_person(id).await;
-                    let name = person.as_ref().map(|p| p.name.as_str()).unwrap_or(label);
-                    lines.push(format!("- Person \"{}\" (id: {})", name, id));
-                }
-                "tag" => {
-                    let tag = state.tags_manager.get_tag(label).await;
-                    let notes = tag.as_ref().and_then(|t| t.notes.as_deref()).unwrap_or("");
-                    if notes.is_empty() {
-                        lines.push(format!("- Tag \"{}\"", label));
-                    } else {
-                        lines.push(format!("- Tag \"{}\": {}", label, notes));
-                    }
-                }
-                _ => {}
-            }
-        }
-        if lines.is_empty() {
-            None
-        } else {
-            Some(format!("Referenced:\n{}", lines.join("\n")))
-        }
-    } else {
-        None
+fn claude_event_to_sse(ev: &services::claude::ClaudeStreamEvent) -> Event {
+    use services::claude::ClaudeStreamEvent as E;
+    let (name, payload) = match ev {
+        E::Prompt { .. } => ("prompt", serde_json::to_value(ev).unwrap_or(json!({}))),
+        E::Init { .. } => ("init", serde_json::to_value(ev).unwrap_or(json!({}))),
+        E::Delta { .. } => ("delta", serde_json::to_value(ev).unwrap_or(json!({}))),
+        E::ToolUse { .. } => ("tool_use", serde_json::to_value(ev).unwrap_or(json!({}))),
+        E::Done { .. } => ("done", serde_json::to_value(ev).unwrap_or(json!({}))),
+        E::Error { .. } => ("error", serde_json::to_value(ev).unwrap_or(json!({}))),
+        E::PermissionRequest { .. } => (
+            "permission_request",
+            serde_json::to_value(ev).unwrap_or(json!({})),
+        ),
     };
-
-    let claude_model = state.settings.read().await.claude_code_model.clone();
-
-    // Mentions context prepended to the prompt
-    let combined_context = mentions_context;
-
-    // Build the full prompt so we can include it in the stream for export
-    let full_prompt = match &combined_context {
-        Some(ctx) => format!("{}\n\n---\n{}", ctx, prompt),
-        None => prompt.clone(),
-    };
-
-    let mut rx = state.claude_runner.run(
-        &prompt,
-        session_id.as_deref(),
-        combined_context.as_deref(),
-        claude_model.as_deref(),
-    ).await.map_err(|e| (StatusCode::CONFLICT, Json(json!({"error": e}))))?;
-
-    let stream = async_stream::stream! {
-        // Emit the full prompt (with resolved mentions) so the frontend can export it
-        yield Ok(Event::default().event("prompt").data(json!({"full_prompt": full_prompt}).to_string()));
-
-        while let Some(event) = rx.recv().await {
-            let (event_name, data) = match &event {
-                crate::llm::claude_code::ClaudeEvent::Init { .. } => ("init", serde_json::to_string(&event).unwrap()),
-                crate::llm::claude_code::ClaudeEvent::Delta { .. } => ("delta", serde_json::to_string(&event).unwrap()),
-                crate::llm::claude_code::ClaudeEvent::ToolUse { .. } => ("tool_use", serde_json::to_string(&event).unwrap()),
-                crate::llm::claude_code::ClaudeEvent::Done { .. } => ("done", serde_json::to_string(&event).unwrap()),
-                crate::llm::claude_code::ClaudeEvent::Error { .. } => ("error", serde_json::to_string(&event).unwrap()),
-                crate::llm::claude_code::ClaudeEvent::PermissionRequest { .. } => ("permission_request", serde_json::to_string(&event).unwrap()),
-            };
-            yield Ok(Event::default().event(event_name).data(data));
-        }
-    };
-
-    Ok(Sse::new(stream))
+    Event::default().event(name).data(payload.to_string())
 }
 
 async fn claude_stop(

@@ -5329,6 +5329,7 @@ name = "voicerecords-desktop"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "futures",
  "meeting-notes-daemon",
  "serde",
  "serde_json",

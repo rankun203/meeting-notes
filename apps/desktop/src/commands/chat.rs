@@ -1,6 +1,8 @@
+use futures::StreamExt;
 use meeting_notes_daemon::services::chat as svc;
 use meeting_notes_daemon::services::{AppState, ServiceError};
 use serde_json::Value;
+use tauri::ipc::Channel;
 use tauri::State;
 
 #[tauri::command]
@@ -61,4 +63,27 @@ pub async fn mn_export_prompt(
 #[tauri::command]
 pub async fn mn_list_models(state: State<'_, AppState>) -> Result<Value, ServiceError> {
     svc::list_models(&state).await
+}
+
+/// Streaming chat endpoint. The frontend passes a `tauri::ipc::Channel`
+/// (created via `new Channel()` on the JS side); every `ChatEvent` the
+/// service pipeline produces is pushed through it. The command itself
+/// resolves to `()` once the stream completes — the events are delivered
+/// out-of-band via the channel.
+#[tauri::command]
+pub async fn mn_send_message(
+    state: State<'_, AppState>,
+    id: String,
+    input: svc::SendMessageInput,
+    on_event: Channel<svc::ChatEvent>,
+) -> Result<(), ServiceError> {
+    let mut stream = svc::send_message_stream(&state, &id, input).await?;
+    while let Some(ev) = stream.next().await {
+        if let Err(e) = on_event.send(ev) {
+            // Channel closed — frontend stopped listening. Stop streaming.
+            tracing::debug!("mn_send_message channel closed: {}", e);
+            break;
+        }
+    }
+    Ok(())
 }

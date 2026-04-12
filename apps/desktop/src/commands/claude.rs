@@ -1,6 +1,8 @@
+use futures::StreamExt;
 use meeting_notes_daemon::services::claude as svc;
 use meeting_notes_daemon::services::{AppState, ServiceError};
 use serde_json::Value;
+use tauri::ipc::Channel;
 use tauri::State;
 
 #[tauri::command]
@@ -34,4 +36,21 @@ pub async fn mn_claude_get_session(
     id: String,
 ) -> Result<Value, ServiceError> {
     svc::get_session(&state, &id).await
+}
+
+/// Streaming Claude Code runner. See `mn_send_message` for the same pattern.
+#[tauri::command]
+pub async fn mn_claude_send(
+    state: State<'_, AppState>,
+    input: svc::SendInput,
+    on_event: Channel<svc::ClaudeStreamEvent>,
+) -> Result<(), ServiceError> {
+    let mut stream = svc::send_stream(&state, input).await?;
+    while let Some(ev) = stream.next().await {
+        if let Err(e) = on_event.send(ev) {
+            tracing::debug!("mn_claude_send channel closed: {}", e);
+            break;
+        }
+    }
+    Ok(())
 }

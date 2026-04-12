@@ -1,9 +1,11 @@
 use meeting_notes_daemon::services::config as svc;
 use meeting_notes_daemon::services::ServiceError;
 use serde_json::Value;
+use tracing::info;
 
 #[tauri::command]
 pub async fn mn_get_config() -> Result<Value, ServiceError> {
+    info!("mn_get_config invoked");
     Ok(svc::get_config())
 }
 
@@ -13,6 +15,7 @@ pub async fn mn_get_config() -> Result<Value, ServiceError> {
 #[tauri::command]
 pub async fn mn_get_app_info() -> Result<Value, ServiceError> {
     let locale = sys_locale_fallback();
+    info!("mn_get_app_info invoked, locale={}", locale);
     Ok(serde_json::json!({
         "name": "VoiceRecords",
         "name_zh": "主簿",
