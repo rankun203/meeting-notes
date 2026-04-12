@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, autoResize, autoResizeDeferred, TagIcon, ChevronIcon } from './utils.mjs';
+import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, autoResize, autoResizeDeferred, formatFileSize, TagIcon, ChevronIcon } from './utils.mjs';
 import { ConversationsSettings } from './chat.mjs';
 import { SearchableList } from './searchable-list.mjs';
 
@@ -381,9 +381,16 @@ function LlmSettingsSection({ form, setForm, settings }) {
 
 const TAIL_PREF_KEY = 'mn_diag_tail';
 
+// Cap the rolling buffer to avoid unbounded growth if the user leaves
+// the Tail on for hours with a chatty logger.
+const MAX_TAIL_LINES = 2000;
+
 function DiagnosticsSettings() {
   const [info, setInfo] = useState(null);
-  const [logTail, setLogTail] = useState(null);
+  // Rolling line buffer (grows as new lines arrive via the cursor poll).
+  const [lines, setLines] = useState([]);
+  const [fileSize, setFileSize] = useState(0);
+  const cursorRef = useRef(null);
   // Tail defaults to ON — every time this page is opened, the user
   // should see the latest log output without having to toggle it. The
   // preference is persisted in localStorage so turning it off once
@@ -412,24 +419,63 @@ function DiagnosticsSettings() {
       .catch(e => { setError(e.message); setLoading(false); });
   }, []);
 
-  // Load the initial 100-line tail, and refresh every second while "Tail"
-  // is checked. Scroll the <pre> to the bottom after each refresh so the
-  // latest line is always in view, terminal-tail style.
+  // Initial window read + `tail -f` cursor polling.
+  //
+  // First call: no cursor → server returns the last 100 lines from the
+  // end of the file and a cursor = file_size. We store the cursor in a
+  // ref so it survives across polls without triggering re-renders.
+  //
+  // Each subsequent call while Tail is on: ?after=<cursor> → server
+  // reads only the bytes written since that offset and returns ONLY
+  // the new lines. We append to the rolling buffer and update the
+  // cursor. Per-poll work is O(bytes since last poll), independent of
+  // total file size.
+  //
+  // If the server sets `rotated: true` (file shrunk below the cursor,
+  // e.g. daily rotation), we replace the buffer with the fresh window
+  // instead of appending.
   useEffect(() => {
     let cancelled = false;
+
+    function scrollToBottom() {
+      requestAnimationFrame(() => {
+        if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+      });
+    }
+
     async function refresh() {
       try {
-        const d = await api('/diagnostics/logs?lines=100');
+        const cursor = cursorRef.current;
+        const url = cursor != null
+          ? `/diagnostics/logs?lines=100&after=${cursor}`
+          : `/diagnostics/logs?lines=100`;
+        const d = await api(url);
         if (cancelled) return;
-        setLogTail(d);
-        // Scroll after paint
-        requestAnimationFrame(() => {
-          if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
-        });
+        cursorRef.current = d.cursor;
+        setFileSize(d.file_size);
+        if (d.rotated || cursor == null) {
+          // Fresh window — replace the whole buffer.
+          setLines(d.lines);
+        } else if (d.lines.length > 0) {
+          // Cursor delta — append, and cap the buffer so we don't grow
+          // unboundedly while the Tail is on.
+          setLines(prev => {
+            const merged = prev.concat(d.lines);
+            return merged.length > MAX_TAIL_LINES
+              ? merged.slice(merged.length - MAX_TAIL_LINES)
+              : merged;
+          });
+        } else {
+          return; // no new lines; don't scroll
+        }
+        scrollToBottom();
       } catch (e) {
         if (!cancelled) setError(e.message);
       }
     }
+
+    // Always fire an initial window read on mount, regardless of the
+    // Tail setting. "Fresh every time" — we never show stale data.
     refresh();
     if (!tail) return () => { cancelled = true; };
     const id = setInterval(refresh, 1000);
@@ -476,9 +522,9 @@ function DiagnosticsSettings() {
       jsxs('div', { className: 'flex items-center justify-between', children: [
         jsxs('div', { className: 'flex items-center gap-2', children: [
           jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Recent log output' }),
-          logTail && jsx('span', {
+          jsx('span', {
             className: 'text-[10px] text-gray-400',
-            children: `showing last ${logTail.lines.length} of ${logTail.total_lines} lines`,
+            children: `${lines.length} lines · ${formatFileSize(fileSize)}`,
           }),
         ]}),
         jsxs('label', {
@@ -500,7 +546,7 @@ function DiagnosticsSettings() {
       jsx('pre', {
         ref: preRef,
         className: 'rounded-md border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-950 p-3 text-[11px] font-mono text-gray-700 dark:text-gray-300 whitespace-pre max-h-[28rem] overflow-auto',
-        children: logTail ? (logTail.lines.length === 0 ? '(no log lines yet)' : logTail.lines.join('\n')) : 'Loading logs...',
+        children: lines.length === 0 ? '(no log lines yet)' : lines.join('\n'),
       }),
     ]}),
   ]});

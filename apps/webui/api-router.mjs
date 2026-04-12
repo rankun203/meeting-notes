@@ -128,7 +128,14 @@ const ROUTES = [
   ['GET',    /^\/app-info$/,     () => ({ name: 'mn_get_app_info', args: {} })],
   ['GET',    /^\/diagnostics$/,  () => ({ name: 'mn_get_diagnostics', args: {} })],
   ['GET',    /^\/diagnostics\/logs$/,
-    (_, __, q) => ({ name: 'mn_tail_logs', args: { lines: q.lines != null ? Number(q.lines) : undefined, file: q.file } })],
+    (_, __, q) => ({
+      name: 'mn_tail_logs',
+      args: {
+        lines: q.lines != null ? Number(q.lines) : undefined,
+        file: q.file,
+        after: q.after != null ? Number(q.after) : undefined,
+      },
+    })],
 
   // ---- Chat (non-streaming) ----
   ['GET',    /^\/conversations$/,                           () => ({ name: 'mn_list_conversations', args: {} })],

@@ -234,6 +234,10 @@ async fn get_diagnostics(
 struct LogsQuery {
     lines: Option<usize>,
     file: Option<String>,
+    /// Byte offset from a previous tail_logs response. When set, the
+    /// server returns only lines written since that offset (tail -f
+    /// cursor semantics).
+    after: Option<u64>,
 }
 
 async fn get_diagnostics_logs(
@@ -241,7 +245,12 @@ async fn get_diagnostics_logs(
     Query(q): Query<LogsQuery>,
 ) -> Result<Json<services::diagnostics::LogTail>, services::ServiceError> {
     let n = q.lines.unwrap_or(100);
-    Ok(Json(services::diagnostics::tail_logs(&state, n, q.file.as_deref())?))
+    Ok(Json(services::diagnostics::tail_logs(
+        &state,
+        n,
+        q.file.as_deref(),
+        q.after,
+    )?))
 }
 
 // ---- Transcript + attribution handlers (shims over `services::transcripts`) ----

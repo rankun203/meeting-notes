@@ -14,6 +14,7 @@ pub async fn mn_tail_logs(
     state: State<'_, AppState>,
     lines: Option<usize>,
     file: Option<String>,
+    after: Option<u64>,
 ) -> Result<svc::LogTail, ServiceError> {
-    svc::tail_logs(&state, lines.unwrap_or(100), file.as_deref())
+    svc::tail_logs(&state, lines.unwrap_or(100), file.as_deref(), after)
 }
