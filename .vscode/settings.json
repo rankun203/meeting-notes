@@ -2,6 +2,7 @@
     "cSpell.words": [
         "backref",
         "brackethighlighter",
+        "conv",
         "cuda",
         "filesdb",
         "jsxs",
@@ -10,9 +11,11 @@
         "prettylights",
         "pyannote",
         "pyproject",
+        "rankun",
         "runpod",
         "sublimelinter",
         "Tauri",
+        "webui",
         "whisperx"
     ]
 }
