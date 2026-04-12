@@ -7,44 +7,26 @@ import { SourceIcon, PlayIcon, PauseIcon, StopSquareIcon, FastForwardIcon } from
 // In daemon / browser mode the file is served by axum under
 // `/api/sessions/:id/files/:name`.
 //
-// In the Tauri webview there's no localhost server. We originally
-// used `convertFileSrc` + the asset:// protocol, but the <audio>
-// element exhibited mysterious ~7-second cut-offs on long Opus
-// recordings — the waveform (computed from the same file on the Rust
-// side) rendered fine, proving the file itself was readable, so the
-// asset-protocol bridge was somehow truncating or misreporting the
-// media stream to WebKit. Now we invoke a Tauri command that returns
-// the raw bytes via `tauri::ipc::Response`; the JS side receives an
-// ArrayBuffer directly, wraps it in a Blob, and hands that to the
-// <audio> element via `URL.createObjectURL`. The browser has the full
-// file in memory, no streaming weirdness, plays through reliably.
+// In the Tauri webview we ask the Rust side for the validated absolute
+// path (via `mn_resolve_session_file`, which does the same path-
+// traversal check the REST handler does) and then pipe it through
+// Tauri's canonical `convertFileSrc` to get an `asset://` URL. The
+// asset protocol handler in tauri::ipc streams the file with proper
+// Range-request support so large media files play straight through.
 async function resolveMediaUrl(sessionId, filename) {
   if (isTauri()) {
     try {
-      const bytes = await window.__mn.invoke('mn_read_session_file', {
+      const abs = await window.__mn.invoke('mn_resolve_session_file', {
         id: sessionId,
         filename,
       });
-      // `bytes` is an ArrayBuffer because the Rust command returns
-      // a `tauri::ipc::Response::new(Vec<u8>)`.
-      const blob = new Blob([bytes], { type: mimeFor(filename) });
-      return URL.createObjectURL(blob);
+      return window.__mn.convertFileSrc(abs);
     } catch (e) {
       console.error('resolveMediaUrl failed', e);
       return null;
     }
   }
   return `${API}/sessions/${sessionId}/files/${encodeURIComponent(filename)}`;
-}
-
-function mimeFor(filename) {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.opus')) return 'audio/opus';
-  if (lower.endsWith('.mp3'))  return 'audio/mpeg';
-  if (lower.endsWith('.wav'))  return 'audio/wav';
-  if (lower.endsWith('.ogg'))  return 'audio/ogg';
-  if (lower.endsWith('.m4a'))  return 'audio/mp4';
-  return 'application/octet-stream';
 }
 
 // ── Waveform Display ──
@@ -204,40 +186,21 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     setDuration(0);
   }, [files.length, sessionId]);
 
-  // Resolve every file's playable URL (Tauri: blob URL built from
-  // bytes fetched via `mn_read_session_file`; browser: plain API
+  // Resolve every file's playable URL (Tauri: asset:// URL built via
+  // mn_resolve_session_file + convertFileSrc; browser: plain API
   // path). Stored as a {name: url} map so the <audio> elements below
   // can read them synchronously.
-  //
-  // Because the Tauri path creates `URL.createObjectURL()` blobs we
-  // have to manually revoke them when the session changes or the
-  // component unmounts — otherwise the browser holds onto the entire
-  // audio file (potentially tens of MB) forever.
   useEffect(() => {
     if (!sessionId || files.length === 0) { setMediaUrls({}); return; }
     let cancelled = false;
-    const blobUrlsToRevoke = [];
     Promise.all(files.map(async f => [f.name, await resolveMediaUrl(sessionId, f.name)]))
       .then(pairs => {
-        if (cancelled) {
-          for (const [, url] of pairs) {
-            if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
-          }
-          return;
-        }
+        if (cancelled) return;
         const next = {};
-        for (const [name, url] of pairs) {
-          if (url) {
-            next[name] = url;
-            if (url.startsWith('blob:')) blobUrlsToRevoke.push(url);
-          }
-        }
+        for (const [name, url] of pairs) if (url) next[name] = url;
         setMediaUrls(next);
       });
-    return () => {
-      cancelled = true;
-      for (const url of blobUrlsToRevoke) URL.revokeObjectURL(url);
-    };
+    return () => { cancelled = true; };
   }, [sessionId, files.map(f => f.name).join('|')]);
 
   function getAudios() {

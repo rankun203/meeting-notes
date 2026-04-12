@@ -58,12 +58,18 @@ if (typeof window !== 'undefined' && window.__TAURI_INTERNALS__) {
   }
 
   // Build a URL the webview can load directly (img/audio/video src,
-  // <link href>) for a local filesystem path. Uses Tauri's asset
-  // protocol so the webview bypasses CORS / same-origin for files that
-  // the Rust side has already validated.
+  // <link href>) for a local filesystem path. We delegate to the
+  // canonical `window.__TAURI_INTERNALS__.convertFileSrc` that Tauri
+  // injects — it knows the exact encoding / scheme / platform handling
+  // that matches the Rust-side asset protocol handler. Our own
+  // encodeURIComponent reimplementation was close but not bit-exact,
+  // which caused audio playback to drop partway through long files.
   function convertFileSrc(filePath, protocol = 'asset') {
+    if (typeof internals.convertFileSrc === 'function') {
+      return internals.convertFileSrc(filePath, protocol);
+    }
+    // Fallback — shouldn't normally fire in Tauri 2.x.
     const path = encodeURIComponent(filePath);
-    // Windows uses a pseudo-HTTPS scheme; macOS/Linux use the custom scheme.
     return navigator.userAgent.includes('Windows')
       ? `https://${protocol}.localhost/${path}`
       : `${protocol}://localhost/${path}`;
