@@ -1,15 +1,24 @@
-import { jsx, jsxs, Fragment, PAGE_SIZE, CloseIcon, RecordIcon } from './utils.mjs';
+import { jsx, jsxs, Fragment, PAGE_SIZE, CloseIcon, RecordIcon, isTauri } from './utils.mjs';
 import { NewSessionPanel, SidebarItem } from './session.mjs';
 import { PeopleSidebar } from './people.mjs';
 import { SettingsSidebar } from './settings.mjs';
 
 export function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageChange, sources, fields, onCreated, showNew, setShowNew, currentView, onViewChange, people, selectedPersonId, setSelectedPersonId, refreshPeople, settingsCategory, setSettingsCategory }) {
+  // In the desktop app the dock icon + window bundle name already identify
+  // the app, and the traffic-light overlay sits in this same top-left
+  // region — so we skip the "Meeting Notes" title and reserve enough
+  // top padding for the traffic lights to float cleanly over the sidebar.
+  const inTauri = isTauri();
   const header = jsx('div', {
     key: 'header',
-    className: 'flex-shrink-0 px-4 py-3 md:py-4 border-b border-gray-100 dark:border-gray-800',
+    className: inTauri
+      ? 'flex-shrink-0 px-4 pt-[44px] pb-3 border-b border-gray-100 dark:border-gray-800'
+      : 'flex-shrink-0 px-4 py-3 md:py-4 border-b border-gray-100 dark:border-gray-800',
     children: jsxs('div', { className: 'flex flex-col gap-2', children: [
       jsxs('div', { className: 'flex items-center justify-between', children: [
-        jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Meeting Notes' }),
+        inTauri
+          ? jsx('div', {}) // empty spacer so the record button stays right-aligned
+          : jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Meeting Notes' }),
         jsx('button', {
           onClick: () => {
             const recording = sessions.find(s => s.state === 'recording');

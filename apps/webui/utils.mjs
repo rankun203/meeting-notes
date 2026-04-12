@@ -69,7 +69,7 @@ export const PROCESSING_LABELS = {
 
 import { routeToCommand } from './api-router.mjs';
 
-function isTauri() {
+export function isTauri() {
   return typeof window !== 'undefined' && !!window.__mn && typeof window.__mn.invoke === 'function';
 }
 
