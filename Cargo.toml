@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "apps/file-drop"]
+members = [".", "apps/desktop", "apps/file-drop"]
 resolver = "2"
 
 [package]

@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  VoiceRecords (主簿) — placeholder app icon
+  A feather quill laid diagonally across an unrolled scroll,
+  on a warm parchment-ivory rounded-square background.
+  Master resolution: 1024×1024.
+
+  Replace this file with the final hand-drawn asset; the surrounding
+  rasterization pipeline (rsvg-convert + iconutil) regenerates all
+  required PNG/ICNS/ICO variants from whatever is in this file.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Parchment-ivory gradient background -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f5ecd6"/>
+      <stop offset="100%" stop-color="#e8d9b0"/>
+    </linearGradient>
+
+    <!-- Scroll parchment gradient -->
+    <linearGradient id="scrollGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fdf6e3"/>
+      <stop offset="100%" stop-color="#f0e5c3"/>
+    </linearGradient>
+
+    <!-- Rolled edge (rod) gradient -->
+    <linearGradient id="rodGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#8b5a2b"/>
+      <stop offset="50%" stop-color="#6b3d1a"/>
+      <stop offset="100%" stop-color="#8b5a2b"/>
+    </linearGradient>
+
+    <!-- Feather gradient — warm ivory with subtle shadow -->
+    <linearGradient id="featherGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="50%" stop-color="#f2e9d0"/>
+      <stop offset="100%" stop-color="#b89968"/>
+    </linearGradient>
+
+    <!-- Nib gradient — dark brass -->
+    <linearGradient id="nibGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4a3320"/>
+      <stop offset="100%" stop-color="#2a1a0a"/>
+    </linearGradient>
+
+    <!-- Soft shadow for the quill over the scroll -->
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="0" dy="6" result="offsetBlur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.35"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Clip mask: rounded-square macOS icon mask (squircle approximation) -->
+    <clipPath id="appMask">
+      <rect x="112" y="112" width="800" height="800" rx="180" ry="180"/>
+    </clipPath>
+  </defs>
+
+  <!-- Full 1024 background: transparent outside the mask -->
+  <g clip-path="url(#appMask)">
+    <!-- Parchment background -->
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bgGradient)"/>
+
+    <!-- Subtle paper texture hint: horizontal fibers -->
+    <g opacity="0.08" stroke="#6b3d1a" stroke-width="1">
+      <line x1="150" y1="280" x2="880" y2="275"/>
+      <line x1="160" y1="420" x2="890" y2="415"/>
+      <line x1="140" y1="560" x2="870" y2="555"/>
+      <line x1="155" y1="700" x2="885" y2="695"/>
+    </g>
+
+    <!-- ====== SCROLL ====== -->
+    <!-- Top rolled rod -->
+    <g transform="translate(0, 0)">
+      <ellipse cx="512" cy="250" rx="320" ry="28" fill="url(#rodGradient)"/>
+      <ellipse cx="512" cy="248" rx="320" ry="14" fill="#a06a30" opacity="0.6"/>
+      <!-- Rod caps -->
+      <circle cx="192" cy="250" r="32" fill="url(#rodGradient)"/>
+      <circle cx="832" cy="250" r="32" fill="url(#rodGradient)"/>
+    </g>
+
+    <!-- Parchment sheet body -->
+    <path d="M 192 250
+             L 832 250
+             L 832 760
+             Q 832 790 812 795
+             Q 512 815 212 795
+             Q 192 790 192 760
+             Z"
+          fill="url(#scrollGradient)"
+          stroke="#c9a968"
+          stroke-width="3"/>
+
+    <!-- Inner writing area (faint text lines suggesting a transcript) -->
+    <g opacity="0.55" stroke="#8b6f3e" stroke-width="3.5" stroke-linecap="round">
+      <line x1="250" y1="340" x2="770" y2="340"/>
+      <line x1="250" y1="400" x2="720" y2="400"/>
+      <line x1="250" y1="460" x2="760" y2="460"/>
+      <line x1="250" y1="520" x2="700" y2="520"/>
+      <line x1="250" y1="580" x2="740" y2="580"/>
+      <line x1="250" y1="640" x2="680" y2="640"/>
+      <line x1="250" y1="700" x2="720" y2="700"/>
+    </g>
+
+    <!-- Small red vermillion seal stamp in the lower-right — a nod to 画押 -->
+    <g transform="translate(720, 690)">
+      <rect x="-38" y="-38" width="76" height="76" rx="6" fill="#c62828" opacity="0.92"/>
+      <rect x="-34" y="-34" width="68" height="68" rx="4" fill="none" stroke="#fdf6e3" stroke-width="3"/>
+      <!-- Stylised 主 glyph, simplified -->
+      <g fill="#fdf6e3" stroke="#fdf6e3" stroke-width="2" stroke-linecap="round">
+        <line x1="-18" y1="-20" x2="18" y2="-20"/>
+        <line x1="0" y1="-22" x2="0" y2="22"/>
+        <line x1="-16" y1="-2" x2="16" y2="-2"/>
+        <line x1="-20" y1="20" x2="20" y2="20"/>
+      </g>
+    </g>
+
+    <!-- Bottom rolled rod (behind bottom of sheet) -->
+    <g transform="translate(0, 0)">
+      <ellipse cx="512" cy="796" rx="320" ry="26" fill="url(#rodGradient)"/>
+      <ellipse cx="512" cy="794" rx="320" ry="13" fill="#a06a30" opacity="0.5"/>
+      <circle cx="192" cy="796" r="30" fill="url(#rodGradient)"/>
+      <circle cx="832" cy="796" r="30" fill="url(#rodGradient)"/>
+    </g>
+
+    <!-- ====== QUILL ====== -->
+    <!-- Positioned diagonally from upper-right to lower-left,
+         nib near the bottom-left suggesting active writing. -->
+    <g transform="rotate(-38 512 512)" filter="url(#softShadow)">
+      <!-- Quill shaft (from upper right of rotation to lower left) -->
+      <!-- We rotate so the feather angles from upper-right to lower-left visually. -->
+
+      <!-- Feather spine (rachis) -->
+      <path d="M 512 80
+               Q 515 300 512 560
+               Q 510 720 505 820"
+            fill="none"
+            stroke="#8b6f3e"
+            stroke-width="5"
+            stroke-linecap="round"/>
+
+      <!-- Feather vanes — left side barbs -->
+      <g fill="url(#featherGradient)" stroke="#b89968" stroke-width="1.5" stroke-linejoin="round">
+        <path d="M 512 90
+                 Q 430 130 395 175
+                 Q 380 195 395 205
+                 Q 440 200 490 180
+                 Q 508 170 513 150
+                 Z"/>
+        <path d="M 513 150
+                 Q 430 200 400 260
+                 Q 385 285 405 293
+                 Q 450 285 495 260
+                 Q 510 250 514 225
+                 Z"/>
+        <path d="M 514 225
+                 Q 435 280 410 345
+                 Q 398 370 418 378
+                 Q 460 370 500 340
+                 Q 512 325 515 300
+                 Z"/>
+        <path d="M 515 300
+                 Q 445 355 425 420
+                 Q 415 445 435 452
+                 Q 472 445 505 415
+                 Q 514 400 516 375
+                 Z"/>
+        <path d="M 516 375
+                 Q 455 430 440 490
+                 Q 432 512 452 518
+                 Q 485 510 510 485
+                 Q 515 470 517 450
+                 Z"/>
+        <path d="M 517 450
+                 Q 465 500 455 550
+                 Q 450 570 468 575
+                 Q 495 568 513 548
+                 Q 516 535 518 520
+                 Z"/>
+      </g>
+
+      <!-- Feather vanes — right side barbs -->
+      <g fill="url(#featherGradient)" stroke="#b89968" stroke-width="1.5" stroke-linejoin="round">
+        <path d="M 512 90
+                 Q 594 130 629 175
+                 Q 644 195 629 205
+                 Q 584 200 534 180
+                 Q 516 170 511 150
+                 Z"/>
+        <path d="M 511 150
+                 Q 594 200 624 260
+                 Q 639 285 619 293
+                 Q 574 285 529 260
+                 Q 514 250 510 225
+                 Z"/>
+        <path d="M 510 225
+                 Q 589 280 614 345
+                 Q 626 370 606 378
+                 Q 564 370 524 340
+                 Q 512 325 509 300
+                 Z"/>
+        <path d="M 509 300
+                 Q 579 355 599 420
+                 Q 609 445 589 452
+                 Q 552 445 519 415
+                 Q 510 400 508 375
+                 Z"/>
+        <path d="M 508 375
+                 Q 569 430 584 490
+                 Q 592 512 572 518
+                 Q 539 510 514 485
+                 Q 509 470 507 450
+                 Z"/>
+        <path d="M 507 450
+                 Q 559 500 569 550
+                 Q 574 570 556 575
+                 Q 529 568 511 548
+                 Q 508 535 506 520
+                 Z"/>
+      </g>
+
+      <!-- Lower shaft (bare, leading to the nib) -->
+      <path d="M 505 560
+               Q 502 700 500 820"
+            fill="none"
+            stroke="#6b3d1a"
+            stroke-width="7"
+            stroke-linecap="round"/>
+
+      <!-- Nib -->
+      <g transform="translate(500, 820)">
+        <path d="M -7 0
+                 L 7 0
+                 L 2 32
+                 L -2 32 Z"
+              fill="url(#nibGradient)"/>
+        <!-- Nib split line -->
+        <line x1="0" y1="4" x2="0" y2="28" stroke="#f5ecd6" stroke-width="1"/>
+      </g>
+    </g>
+
+  </g>
+</svg>
