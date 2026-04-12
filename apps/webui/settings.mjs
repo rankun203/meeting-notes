@@ -8,6 +8,7 @@ const SETTINGS_CATEGORIES = [
   { id: 'pipeline', label: 'Pipeline' },
   { id: 'tags', label: 'Tags' },
   { id: 'conversations', label: 'Conversations' },
+  { id: 'diagnostics', label: 'Diagnostics' },
 ];
 
 export function SettingsSidebar({ selected, onSelect }) {
@@ -376,6 +377,107 @@ function LlmSettingsSection({ form, setForm, settings }) {
   ]});
 }
 
+// ── Diagnostics Settings ──
+
+function DiagnosticsSettings() {
+  const [info, setInfo] = useState(null);
+  const [logTail, setLogTail] = useState(null);
+  const [tail, setTail] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const preRef = useRef(null);
+
+  // Load static info once
+  useEffect(() => {
+    api('/diagnostics')
+      .then(d => { setInfo(d); setLoading(false); })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }, []);
+
+  // Load the initial 100-line tail, and refresh every second while "Tail"
+  // is checked. Scroll the <pre> to the bottom after each refresh so the
+  // latest line is always in view, terminal-tail style.
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const d = await api('/diagnostics/logs?lines=100');
+        if (cancelled) return;
+        setLogTail(d);
+        // Scroll after paint
+        requestAnimationFrame(() => {
+          if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
+        });
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      }
+    }
+    refresh();
+    if (!tail) return () => { cancelled = true; };
+    const id = setInterval(refresh, 1000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [tail]);
+
+  if (loading) return jsx('div', { className: 'text-sm text-gray-400', children: 'Loading diagnostics...' });
+  if (error) return jsx('div', { className: 'text-sm text-red-500', children: `Error: ${error}` });
+  if (!info) return null;
+
+  const row = (label, value) => jsxs('div', {
+    className: 'flex items-start gap-3 text-xs',
+    children: [
+      jsx('div', { className: 'w-32 flex-shrink-0 uppercase tracking-wider text-[10px] text-gray-400 dark:text-gray-500 pt-0.5', children: label }),
+      jsx('div', { className: 'flex-1 font-mono text-gray-700 dark:text-gray-300 break-all select-text', children: value }),
+    ],
+  });
+
+  return jsxs('div', { className: 'space-y-6', children: [
+    // Config block
+    jsxs('div', { className: 'space-y-3', children: [
+      jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Application' }),
+      row('Name', `${info.name} (${info.name_zh})`),
+      row('Version', info.version),
+      row('Data folder', info.data_dir),
+      row('Logs folder', info.logs_dir),
+      row('Current log', info.current_log_path.split('/').pop() || info.current_log_path),
+    ]}),
+
+    jsx('hr', { className: 'border-gray-200 dark:border-gray-700' }),
+
+    // Log tail block
+    jsxs('div', { className: 'space-y-2', children: [
+      jsxs('div', { className: 'flex items-center justify-between', children: [
+        jsxs('div', { className: 'flex items-center gap-2', children: [
+          jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Recent log output' }),
+          logTail && jsx('span', {
+            className: 'text-[10px] text-gray-400',
+            children: `showing last ${logTail.lines.length} of ${logTail.total_lines} lines`,
+          }),
+        ]}),
+        jsxs('label', {
+          className: 'flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none',
+          children: [
+            jsx('input', {
+              type: 'checkbox',
+              checked: tail,
+              onChange: e => setTail(e.target.checked),
+              className: 'w-3.5 h-3.5 accent-blue-600',
+            }),
+            'Tail',
+            tail && jsx('span', {
+              className: 'w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse-recording ml-0.5',
+            }),
+          ],
+        }),
+      ]}),
+      jsx('pre', {
+        ref: preRef,
+        className: 'rounded-md border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-950 p-3 text-[11px] font-mono text-gray-700 dark:text-gray-300 whitespace-pre max-h-[28rem] overflow-auto',
+        children: logTail ? (logTail.lines.length === 0 ? '(no log lines yet)' : logTail.lines.join('\n')) : 'Loading logs...',
+      }),
+    ]}),
+  ]});
+}
+
 export function SettingsPage({ category, onSelectSession }) {
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -702,6 +804,7 @@ export function SettingsPage({ category, onSelectSession }) {
 
     tags: jsx(TagsSettings, { onSelectSession }),
     conversations: jsx(ConversationsSettings, {}),
+    diagnostics: jsx(DiagnosticsSettings, {}),
   };
 
   return jsx('div', {
@@ -712,7 +815,7 @@ export function SettingsPage({ category, onSelectSession }) {
         className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5',
         children: categoryContent[cat],
       }),
-      (cat !== 'tags' && cat !== 'conversations') && jsxs('div', { className: 'flex items-center gap-3', children: [
+      (cat !== 'tags' && cat !== 'conversations' && cat !== 'diagnostics') && jsxs('div', { className: 'flex items-center gap-3', children: [
         jsx('button', {
           onClick: save, disabled: saving,
           className: 'px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors',

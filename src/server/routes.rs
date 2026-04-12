@@ -61,6 +61,8 @@ pub fn session_routes() -> Router<AppState> {
         .route("/settings", get(get_settings))
         .route("/settings", put(update_settings))
         .route("/config", get(get_config))
+        .route("/diagnostics", get(get_diagnostics))
+        .route("/diagnostics/logs", get(get_diagnostics_logs))
 }
 
 // ---- Session handlers (now thin shims over `services::sessions`) ----
@@ -218,6 +220,28 @@ async fn get_waveform(
 
 async fn get_config() -> Json<Value> {
     Json(services::config::get_config())
+}
+
+// ---- Diagnostics handlers (shims over `services::diagnostics`) ----
+
+async fn get_diagnostics(
+    State(state): State<AppState>,
+) -> Result<Json<services::diagnostics::DiagnosticsInfo>, services::ServiceError> {
+    Ok(Json(services::diagnostics::get_info(&state)?))
+}
+
+#[derive(serde::Deserialize)]
+struct LogsQuery {
+    lines: Option<usize>,
+    file: Option<String>,
+}
+
+async fn get_diagnostics_logs(
+    State(state): State<AppState>,
+    Query(q): Query<LogsQuery>,
+) -> Result<Json<services::diagnostics::LogTail>, services::ServiceError> {
+    let n = q.lines.unwrap_or(100);
+    Ok(Json(services::diagnostics::tail_logs(&state, n, q.file.as_deref())?))
 }
 
 // ---- Transcript + attribution handlers (shims over `services::transcripts`) ----

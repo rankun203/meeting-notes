@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::chat::manager::ConversationManager;
 use crate::filesdb::FilesDb;
 use crate::llm::claude_code::ClaudeCodeRunner;
@@ -6,6 +8,7 @@ use crate::people::PeopleManager;
 use crate::session::SessionManager;
 use crate::settings::SharedSettings;
 use crate::tags::TagsManager;
+use crate::tracing_setup::TracingHandle;
 
 /// Shared application state passed into every service function.
 ///
@@ -22,6 +25,14 @@ pub struct AppState {
     pub conversation_manager: ConversationManager,
     pub llm_secrets: SharedSecrets,
     pub claude_runner: ClaudeCodeRunner,
+    /// Root of the app's persistent state (recordings, settings, logs, …).
+    /// Exposed for services::diagnostics and anywhere a service needs to
+    /// know where data lives without plumbing it as a separate arg.
+    pub data_dir: std::path::PathBuf,
+    /// Shared handle for the rotating file logger. `Arc` so cloning
+    /// `AppState` (axum does it per-request) doesn't try to duplicate the
+    /// underlying worker guard.
+    pub tracing: Arc<TracingHandle>,
 }
 
 impl AppState {

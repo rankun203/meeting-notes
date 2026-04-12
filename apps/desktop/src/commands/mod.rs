@@ -15,6 +15,7 @@
 pub mod chat;
 pub mod claude;
 pub mod config;
+pub mod diagnostics;
 pub mod files;
 pub mod people;
 pub mod sessions;

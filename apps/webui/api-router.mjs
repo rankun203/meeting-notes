@@ -121,11 +121,14 @@ const ROUTES = [
   ['DELETE', /^\/tags\/([^/]+)$/,               (m) => ({ name: 'mn_delete_tag', args: { name: decodeSeg(m[1]) } })],
   ['PUT',    /^\/sessions\/([^/]+)\/tags$/,     (m, body) => ({ name: 'mn_set_session_tags', args: { id: decodeSeg(m[1]), input: body || { tags: [] } } })],
 
-  // ---- Settings + config ----
+  // ---- Settings + config + diagnostics ----
   ['GET',    /^\/settings$/,     () => ({ name: 'mn_get_settings', args: {} })],
   ['PUT',    /^\/settings$/,     (_, body) => ({ name: 'mn_update_settings', args: { body: body || {} } })],
   ['GET',    /^\/config$/,       () => ({ name: 'mn_get_config', args: {} })],
   ['GET',    /^\/app-info$/,     () => ({ name: 'mn_get_app_info', args: {} })],
+  ['GET',    /^\/diagnostics$/,  () => ({ name: 'mn_get_diagnostics', args: {} })],
+  ['GET',    /^\/diagnostics\/logs$/,
+    (_, __, q) => ({ name: 'mn_tail_logs', args: { lines: q.lines != null ? Number(q.lines) : undefined, file: q.file } })],
 
   // ---- Chat (non-streaming) ----
   ['GET',    /^\/conversations$/,                           () => ({ name: 'mn_list_conversations', args: {} })],

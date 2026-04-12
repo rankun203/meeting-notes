@@ -6,6 +6,7 @@ pub mod markdown;
 pub mod people;
 pub mod server;
 pub mod services;
+pub mod tracing_setup;
 pub mod session;
 pub mod settings;
 pub mod tags;

@@ -38,7 +38,7 @@ fn default_data_dir() -> PathBuf {
 /// so that AppState is guaranteed to be `.manage()`d before the webview
 /// can dispatch its first command. Otherwise `mn_list_sessions` (called by
 /// the Sidebar's useWebSocket hook on mount) could race the bootstrap.
-async fn bootstrap() -> AppState {
+async fn bootstrap(tracing_handle: std::sync::Arc<meeting_notes_daemon::tracing_setup::TracingHandle>) -> AppState {
     let data_dir = default_data_dir();
     let recordings_dir = data_dir.join("recordings");
     std::fs::create_dir_all(&recordings_dir)
@@ -110,18 +110,26 @@ async fn bootstrap() -> AppState {
         conversation_manager,
         llm_secrets: shared_secrets,
         claude_runner,
+        data_dir,
+        tracing: tracing_handle,
     }
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "voicerecords=info,meeting_notes_daemon=info".into()),
-        )
-        .init();
+    // Install tracing BEFORE bootstrap so every log line the bootstrap
+    // process emits lands in both stderr and the rotating file. The
+    // handle is stored in AppState so the background file writer stays
+    // alive for the whole process lifetime AND services::diagnostics
+    // can tail the current log via `state.tracing.current_log_path()`.
+    let tracing_handle = std::sync::Arc::new(
+        meeting_notes_daemon::tracing_setup::init(
+            &default_data_dir(),
+            "voicerecords",
+            "voicerecords=info,meeting_notes_daemon=info",
+        ),
+    );
 
-    let state = tauri::async_runtime::block_on(bootstrap());
+    let state = tauri::async_runtime::block_on(bootstrap(tracing_handle));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -204,6 +212,8 @@ fn main() {
             commands::settings::mn_update_settings,
             commands::config::mn_get_config,
             commands::config::mn_get_app_info,
+            commands::diagnostics::mn_get_diagnostics,
+            commands::diagnostics::mn_tail_logs,
             commands::chat::mn_list_conversations,
             commands::chat::mn_create_conversation,
             commands::chat::mn_get_conversation,

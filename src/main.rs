@@ -79,18 +79,10 @@ enum Commands {
 async fn main() {
     install_signal_handlers();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "meeting_notes_daemon=info".into()),
-        )
-        .init();
-
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Serve { port, host, data_dir, web_ui } => {
-            info!("Meeting Notes daemon starting on port {}...", port);
             let data_dir = data_dir.unwrap_or_else(default_data_dir);
             let recordings_dir = data_dir.join("recordings");
             std::fs::create_dir_all(&recordings_dir)
@@ -98,6 +90,22 @@ async fn main() {
 
             let data_dir = std::fs::canonicalize(&data_dir).unwrap_or(data_dir);
             let recordings_dir = std::fs::canonicalize(&recordings_dir).unwrap_or(recordings_dir);
+
+            // Install tracing before anything else emits logs. Writes to
+            // stderr AND <data_dir>/logs/meeting-notes-daemon.log.<date>
+            // with daily rotation. The handle lives in AppState below so
+            // the background writer stays alive for the whole process
+            // lifetime AND services::diagnostics can read the current log
+            // path off it.
+            let tracing_handle = std::sync::Arc::new(
+                meeting_notes_daemon::tracing_setup::init(
+                    &data_dir,
+                    "meeting-notes-daemon",
+                    "meeting_notes_daemon=info",
+                ),
+            );
+
+            info!("Meeting Notes daemon starting on port {}...", port);
 
             let manager = SessionManager::new(recordings_dir.clone());
             manager.load_from_disk().await;
@@ -152,10 +160,20 @@ async fn main() {
 
             let claude_runner = meeting_notes_daemon::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
 
-            let app = server::create_router(
-                manager, people_manager, shared_settings, files_db, tags_manager,
-                conversation_manager, shared_secrets, claude_runner, web_ui,
-            );
+            let state = meeting_notes_daemon::services::AppState {
+                session_manager: manager,
+                people_manager,
+                settings: shared_settings,
+                files_db,
+                tags_manager,
+                conversation_manager,
+                llm_secrets: shared_secrets,
+                claude_runner,
+                data_dir: data_dir.clone(),
+                tracing: tracing_handle,
+            };
+
+            let app = server::create_router(state, web_ui);
 
             let addr = format!("{}:{}", host, port);
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();

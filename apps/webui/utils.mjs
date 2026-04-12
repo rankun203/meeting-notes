@@ -238,13 +238,39 @@ async function consumeSse(stream, onEvent) {
 
 /// Auto-resize a textarea to fit content, up to maxRows lines.
 /// Call on the input event: onInput={autoResize} or wrap existing handler.
+///
+/// Subtleties we handle:
+///   - After `style.height = 'auto'`, scrollHeight can lag one frame
+///     unless we force a layout flush; reading `offsetHeight` does that.
+///   - `getComputedStyle(el).lineHeight` is often `"normal"`, which
+///     parseInt() turns into NaN. Derive a real px value from font-size
+///     in that case so an empty textarea has a sensible minimum height.
+///   - Minimum = one line + vertical padding, so empty textareas still
+///     render as a proper input rather than collapsing to 0 px tall.
+///   - Maximum = maxRows lines + padding, with scrollbar above that.
 export function autoResize(e, maxRows = 8) {
   const el = e.target || e;
+  if (!el) return;
   el.style.height = 'auto';
-  const lineHeight = parseInt(getComputedStyle(el).lineHeight) || 20;
-  const maxHeight = lineHeight * maxRows + 16;
-  el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px';
-  el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  // Force a reflow so scrollHeight reflects the fresh 'auto' layout.
+  // eslint-disable-next-line no-unused-expressions
+  void el.offsetHeight;
+
+  const cs = getComputedStyle(el);
+  let lineHeight = parseFloat(cs.lineHeight);
+  if (!Number.isFinite(lineHeight)) {
+    const fontSize = parseFloat(cs.fontSize) || 14;
+    lineHeight = fontSize * 1.4;
+  }
+  const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+
+  const minHeight = lineHeight + padY + border;
+  const maxHeight = lineHeight * maxRows + padY + border;
+  const target = Math.max(minHeight, Math.min(el.scrollHeight + border, maxHeight));
+
+  el.style.height = `${Math.round(target)}px`;
+  el.style.overflowY = el.scrollHeight + border > maxHeight ? 'auto' : 'hidden';
 }
 
 /// Trigger auto-resize on a textarea ref (for initial sizing).
