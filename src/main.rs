@@ -144,7 +144,7 @@ async fn main() {
             }
 
             // Resume any pending extraction jobs from before restart
-            server::routes::resume_pending_extractions(
+            meeting_notes_daemon::services::transcripts::resume_pending_extractions(
                 manager.clone(), people_manager.clone(),
                 files_db.clone(), shared_settings.clone(),
                 shared_secrets.clone(), tags_manager.clone(),

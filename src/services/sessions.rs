@@ -34,17 +34,9 @@ pub struct UpdateSessionInput {
     /// Tri-state so callers can distinguish "don't touch" (field absent)
     /// from "clear" (field present with value `null`) from "set to X"
     /// (field present with string value).
-    #[serde(default, deserialize_with = "double_option")]
+    #[serde(default, deserialize_with = "super::serde_helpers::double_option")]
     pub notes: Option<Option<String>>,
     pub auto_stop: Option<bool>,
-}
-
-fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Serialize)]

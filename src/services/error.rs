@@ -23,6 +23,9 @@ pub enum ServiceError {
     #[error("unauthorized: {0}")]
     Unauthorized(String),
 
+    #[error("upstream error: {0}")]
+    BadGateway(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -34,6 +37,7 @@ impl ServiceError {
             ServiceError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ServiceError::Conflict(_) => StatusCode::CONFLICT,
             ServiceError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            ServiceError::BadGateway(_) => StatusCode::BAD_GATEWAY,
             ServiceError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -44,6 +48,7 @@ impl ServiceError {
             | ServiceError::BadRequest(m)
             | ServiceError::Conflict(m)
             | ServiceError::Unauthorized(m)
+            | ServiceError::BadGateway(m)
             | ServiceError::Internal(m) => m,
         }
     }
