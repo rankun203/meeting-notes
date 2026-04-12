@@ -4,6 +4,7 @@
         "brackethighlighter",
         "cuda",
         "filesdb",
+        "jsxs",
         "nums",
         "octicon",
         "prettylights",
@@ -11,6 +12,7 @@
         "pyproject",
         "runpod",
         "sublimelinter",
+        "Tauri",
         "whisperx"
     ]
 }

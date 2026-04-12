@@ -2,7 +2,7 @@
 name = "voicerecords-desktop"
 version = "0.1.0"
 edition = "2021"
-description = "VoiceRecords (主簿) — Tauri desktop app"
+description = "VoiceRecords (主簿) — a voice meeting notes app"
 publish = false
 
 [[bin]]
