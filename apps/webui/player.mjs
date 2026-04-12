@@ -1,6 +1,27 @@
 import { useState, useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
-import { jsx, jsxs, Fragment, API, fmtTime } from './utils.mjs';
+import { jsx, jsxs, Fragment, API, fmtTime, api, isTauri } from './utils.mjs';
 import { SourceIcon, PlayIcon, PauseIcon, StopSquareIcon, FastForwardIcon } from './icons.mjs';
+
+// Resolve a session file to a URL the <audio>/<video> element can load.
+// In daemon / browser mode the file is served by axum under
+// `/api/sessions/:id/files/:name`. In the Tauri webview there's no
+// localhost server, so we ask the Rust side for the absolute path
+// (validated + path-traversal-safe) and wrap it in the asset protocol.
+async function resolveMediaUrl(sessionId, filename) {
+  if (isTauri()) {
+    try {
+      const abs = await window.__mn.invoke('mn_resolve_session_file', {
+        id: sessionId,
+        filename,
+      });
+      return window.__mn.convertFileSrc(abs);
+    } catch (e) {
+      console.error('resolveMediaUrl failed', e);
+      return null;
+    }
+  }
+  return `${API}/sessions/${sessionId}/files/${encodeURIComponent(filename)}`;
+}
 
 // ── Waveform Display ──
 
@@ -10,13 +31,15 @@ function WaveformTrack({ sessionId, file, duration, currentTime, muted, onSeek }
   const [waveform, setWaveform] = useState(null);
   const [width, setWidth] = useState(0);
 
-  // Fetch waveform data
+  // Fetch waveform data via the unified api() helper so the Tauri
+  // router routes it to `mn_get_waveform` in desktop mode.
   useEffect(() => {
     if (!sessionId || !file) return;
-    fetch(`${API}/sessions/${sessionId}/waveform/${encodeURIComponent(file.name)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setWaveform(data); })
+    let cancelled = false;
+    api(`/sessions/${sessionId}/waveform/${encodeURIComponent(file.name)}`)
+      .then(data => { if (!cancelled && data) setWaveform(data); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [sessionId, file.name]);
 
   // Observe container width
@@ -125,6 +148,9 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   const [duration, setDuration] = useState(0);
   const [mutedTracks, setMutedTracks] = useState({});
   const [speed, setSpeed] = useState(1);
+  // Resolved media URLs, keyed by file.name. Async because in Tauri mode
+  // we round-trip through mn_resolve_session_file → asset protocol URL.
+  const [mediaUrls, setMediaUrls] = useState({});
   const rafRef = useRef(null);
   const playingRef = useRef(false);
 
@@ -153,6 +179,23 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     setCurrentTime(0);
     setDuration(0);
   }, [files.length, sessionId]);
+
+  // Resolve every file's playable URL (round-trips through
+  // mn_resolve_session_file in Tauri mode, plain string concat in
+  // browser mode). Stored as a {name: url} map so the <audio> elements
+  // below can read them synchronously.
+  useEffect(() => {
+    if (!sessionId || files.length === 0) { setMediaUrls({}); return; }
+    let cancelled = false;
+    Promise.all(files.map(async f => [f.name, await resolveMediaUrl(sessionId, f.name)]))
+      .then(pairs => {
+        if (cancelled) return;
+        const next = {};
+        for (const [name, url] of pairs) if (url) next[name] = url;
+        setMediaUrls(next);
+      });
+    return () => { cancelled = true; };
+  }, [sessionId, files.map(f => f.name).join('|')]);
 
   function getAudios() {
     return audioRefs.current.filter(Boolean);
@@ -294,9 +337,13 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   }, []);
 
   return jsxs('div', { className: 'space-y-2', children: [
-    // Hidden audio elements
+    // Hidden audio elements. In Tauri mode the `src` is a
+    // tauri://localhost/<encoded-path> asset-protocol URL resolved once
+    // via mn_resolve_session_file; in browser mode it's a plain
+    // `/api/sessions/:id/files/:name` URL served by the daemon.
     ...files.map((f, i) => {
-      const src = `${API}/sessions/${sessionId}/files/${encodeURIComponent(f.name)}`;
+      const src = mediaUrls[f.name];
+      if (!src) return null;
       return jsx('audio', {
         key: f.name,
         ref: el => { audioRefs.current[i] = el; },

@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { jsx as _jsx, jsxs as _jsxs, Fragment } from 'react/jsx-runtime';
+// Import tauri-bridge as a module dependency so `window.__mn` is guaranteed
+// populated (in Tauri webview) before any component that uses `api()` or
+// `isTauri()` runs. The bridge module is a no-op in a regular browser.
+import './tauri-bridge.mjs';
 
 // ── JSX wrappers ──
 // Extract 'key' from props to avoid React 19 warning,

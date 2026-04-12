@@ -121,9 +121,9 @@
       }
     }
   </script>
-  <!-- Loaded before app.mjs so window.__mn is in place when components mount.
-       No-op in a regular browser — falls through to fetch(). -->
-  <script type="module" src="/tauri-bridge.mjs"></script>
+  <!-- tauri-bridge.mjs is imported directly by utils.mjs so the bridge is
+       guaranteed live before isTauri() is ever called — no need for a
+       sibling <script> tag here (which could race app.mjs). -->
   <script type="module" src="/app.mjs"></script>
 </body>
 </html>
