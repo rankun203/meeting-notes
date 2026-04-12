@@ -4,15 +4,25 @@ import { SourceIcon, PlayIcon, PauseIcon, StopSquareIcon, FastForwardIcon } from
 
 // Resolve a session file to a URL the <audio>/<video> element can load.
 //
-// In daemon / browser mode the file is served by axum under
-// `/api/sessions/:id/files/:name`.
+// In daemon / browser mode the file is served by axum+tower-http's
+// `ServeFile`, which handles Range requests correctly and Just Works
+// for every codec WebKit understands.
 //
-// In the Tauri webview we ask the Rust side for the validated absolute
-// path (via `mn_resolve_session_file`, which does the same path-
-// traversal check the REST handler does) and then pipe it through
-// Tauri's canonical `convertFileSrc` to get an `asset://` URL. The
-// asset protocol handler in tauri::ipc streams the file with proper
-// Range-request support so large media files play straight through.
+// In the Tauri webview, handing the <audio> element an `asset://`
+// URL directly causes WebKit's streaming audio decoder to stop
+// partway through long Opus recordings (observed: ~5–8 s into a
+// 6-minute file). The file itself is fine — the waveform is computed
+// from the same bytes and renders for the full length — so the bug
+// is somewhere in WebKit's interaction with Tauri's asset protocol
+// handler (likely a Range-request or Content-Length mismatch).
+//
+// Workaround: `fetch()` the asset URL ourselves, await the whole
+// ArrayBuffer, and wrap the bytes in a `Blob` + `URL.createObjectURL()`.
+// The <audio> element then plays from an in-memory blob that has
+// NO streaming semantics, so there's nothing to mis-buffer. The
+// fetch() path uses the exact same asset protocol handler but
+// reads it as a single response instead of a streamed media source,
+// which Tauri + WebKit both handle correctly.
 async function resolveMediaUrl(sessionId, filename) {
   if (isTauri()) {
     try {
@@ -20,13 +30,31 @@ async function resolveMediaUrl(sessionId, filename) {
         id: sessionId,
         filename,
       });
-      return window.__mn.convertFileSrc(abs);
+      const assetUrl = window.__mn.convertFileSrc(abs);
+      const res = await fetch(assetUrl);
+      if (!res.ok) {
+        console.error('asset fetch failed', res.status, assetUrl);
+        return null;
+      }
+      const buf = await res.arrayBuffer();
+      const blob = new Blob([buf], { type: mimeFor(filename) });
+      return URL.createObjectURL(blob);
     } catch (e) {
       console.error('resolveMediaUrl failed', e);
       return null;
     }
   }
   return `${API}/sessions/${sessionId}/files/${encodeURIComponent(filename)}`;
+}
+
+function mimeFor(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith('.opus')) return 'audio/opus';
+  if (lower.endsWith('.mp3'))  return 'audio/mpeg';
+  if (lower.endsWith('.wav'))  return 'audio/wav';
+  if (lower.endsWith('.ogg'))  return 'audio/ogg';
+  if (lower.endsWith('.m4a'))  return 'audio/mp4';
+  return 'application/octet-stream';
 }
 
 // ── Waveform Display ──
@@ -186,21 +214,40 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     setDuration(0);
   }, [files.length, sessionId]);
 
-  // Resolve every file's playable URL (Tauri: asset:// URL built via
-  // mn_resolve_session_file + convertFileSrc; browser: plain API
-  // path). Stored as a {name: url} map so the <audio> elements below
-  // can read them synchronously.
+  // Resolve every file's playable URL. Tauri path returns a `blob:`
+  // URL (the whole asset fetched into an ArrayBuffer — see
+  // `resolveMediaUrl` comment); browser path returns a plain API URL.
+  // Stored as a {name: url} map so the <audio> elements below can
+  // read them synchronously.
+  //
+  // We track created blob URLs and revoke them on cleanup — otherwise
+  // the browser holds onto tens of MB of audio bytes per session
+  // switch forever.
   useEffect(() => {
     if (!sessionId || files.length === 0) { setMediaUrls({}); return; }
     let cancelled = false;
+    const blobUrlsToRevoke = [];
     Promise.all(files.map(async f => [f.name, await resolveMediaUrl(sessionId, f.name)]))
       .then(pairs => {
-        if (cancelled) return;
+        if (cancelled) {
+          for (const [, url] of pairs) {
+            if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+          }
+          return;
+        }
         const next = {};
-        for (const [name, url] of pairs) if (url) next[name] = url;
+        for (const [name, url] of pairs) {
+          if (url) {
+            next[name] = url;
+            if (url.startsWith('blob:')) blobUrlsToRevoke.push(url);
+          }
+        }
         setMediaUrls(next);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      for (const url of blobUrlsToRevoke) URL.revokeObjectURL(url);
+    };
   }, [sessionId, files.map(f => f.name).join('|')]);
 
   function getAudios() {
