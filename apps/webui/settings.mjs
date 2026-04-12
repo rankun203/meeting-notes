@@ -379,13 +379,31 @@ function LlmSettingsSection({ form, setForm, settings }) {
 
 // ── Diagnostics Settings ──
 
+const TAIL_PREF_KEY = 'mn_diag_tail';
+
 function DiagnosticsSettings() {
   const [info, setInfo] = useState(null);
   const [logTail, setLogTail] = useState(null);
-  const [tail, setTail] = useState(false);
+  // Tail defaults to ON — every time this page is opened, the user
+  // should see the latest log output without having to toggle it. The
+  // preference is persisted in localStorage so turning it off once
+  // keeps it off across re-opens (until they turn it back on).
+  const [tail, setTail] = useState(() => {
+    try {
+      const stored = localStorage.getItem(TAIL_PREF_KEY);
+      return stored == null ? true : stored === '1';
+    } catch {
+      return true;
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const preRef = useRef(null);
+
+  // Persist the user's tail choice.
+  useEffect(() => {
+    try { localStorage.setItem(TAIL_PREF_KEY, tail ? '1' : '0'); } catch {}
+  }, [tail]);
 
   // Load static info once
   useEffect(() => {
@@ -422,11 +440,21 @@ function DiagnosticsSettings() {
   if (error) return jsx('div', { className: 'text-sm text-red-500', children: `Error: ${error}` });
   if (!info) return null;
 
+  // `select-all` on an inline <span> means one click selects the
+  // entire value and nothing more. Triple-click no longer over-selects
+  // into the next row because the selectable element is inline and
+  // exactly the size of its text content.
   const row = (label, value) => jsxs('div', {
     className: 'flex items-start gap-3 text-xs',
     children: [
       jsx('div', { className: 'w-32 flex-shrink-0 uppercase tracking-wider text-[10px] text-gray-400 dark:text-gray-500 pt-0.5', children: label }),
-      jsx('div', { className: 'flex-1 font-mono text-gray-700 dark:text-gray-300 break-all select-text', children: value }),
+      jsx('div', {
+        className: 'flex-1 font-mono text-gray-700 dark:text-gray-300 break-all',
+        children: jsx('span', {
+          className: 'select-all cursor-text',
+          children: value,
+        }),
+      }),
     ],
   });
 
@@ -809,7 +837,11 @@ export function SettingsPage({ category, onSelectSession }) {
 
   return jsx('div', {
     className: 'h-full overflow-y-auto px-6 py-6',
-    children: jsxs('div', { className: 'max-w-xl space-y-6', children: [
+    // Min ≈ previous max-w-xl (576 px), max = 1.5× that (864 px).
+    // The panel now grows to fit wider content (long file paths,
+    // model IDs, transcript excerpts) on larger windows without
+    // becoming uncomfortably wide on small ones.
+    children: jsxs('div', { className: 'w-full max-w-[54rem] space-y-6', children: [
       jsx('h2', { className: 'text-lg font-semibold', children: title }),
       jsx('div', {
         className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5',

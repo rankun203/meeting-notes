@@ -23,11 +23,13 @@ pub struct UpdatePersonInput {
     pub starred: Option<bool>,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_people(state: &AppState) -> ServiceResult<Value> {
     let people = state.people_manager.list_people().await;
     Ok(json!({ "people": people }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn create_person(state: &AppState, input: CreatePersonInput) -> ServiceResult<Value> {
     let person = state
         .people_manager
@@ -38,6 +40,7 @@ pub async fn create_person(state: &AppState, input: CreatePersonInput) -> Servic
     Ok(serde_json::to_value(person).unwrap())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_person(state: &AppState, id: &str) -> ServiceResult<Value> {
     let person = state
         .people_manager
@@ -47,6 +50,7 @@ pub async fn get_person(state: &AppState, id: &str) -> ServiceResult<Value> {
     Ok(serde_json::to_value(person).unwrap())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn update_person(
     state: &AppState,
     id: &str,
@@ -61,6 +65,7 @@ pub async fn update_person(
     Ok(serde_json::to_value(person).unwrap())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_person(state: &AppState, id: &str) -> ServiceResult<()> {
     state
         .people_manager
@@ -71,6 +76,7 @@ pub async fn delete_person(state: &AppState, id: &str) -> ServiceResult<()> {
     Ok(())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_person_sessions(state: &AppState, person_id: &str) -> ServiceResult<Value> {
     let session_ids = state.files_db.get_person_session_ids(person_id).await;
 

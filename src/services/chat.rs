@@ -63,11 +63,13 @@ pub struct CreateConversationInput {
     pub chat_backend: Option<String>,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_conversations(state: &AppState) -> ServiceResult<Value> {
     let summaries = state.conversation_manager.list(10);
     Ok(json!({ "conversations": summaries }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn create_conversation(
     state: &AppState,
     input: CreateConversationInput,
@@ -86,6 +88,7 @@ pub async fn create_conversation(
     Ok(serde_json::to_value(&conv).unwrap_or_default())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_conversation(state: &AppState, id: &str) -> ServiceResult<Value> {
     state
         .conversation_manager
@@ -93,6 +96,7 @@ pub async fn get_conversation(state: &AppState, id: &str) -> ServiceResult<Value
         .ok_or_else(|| ServiceError::NotFound("conversation not found".into()))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_conversation(state: &AppState, id: &str) -> ServiceResult<()> {
     state
         .conversation_manager
@@ -100,6 +104,7 @@ pub async fn delete_conversation(state: &AppState, id: &str) -> ServiceResult<()
         .map_err(ServiceError::Internal)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_message(
     state: &AppState,
     conv_id: &str,
@@ -117,6 +122,7 @@ pub async fn delete_message(
         })
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Sync messages from a Claude Code session into an app conversation.
 pub async fn sync_claude_messages(
     state: &AppState,
@@ -198,6 +204,7 @@ pub async fn sync_claude_messages(
     Ok(json!({ "ok": true }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Export a conversation as plain text (system prompt + context + messages).
 pub async fn export_prompt(state: &AppState, id: &str) -> ServiceResult<String> {
     let conv = state
@@ -227,6 +234,7 @@ pub async fn export_prompt(state: &AppState, id: &str) -> ServiceResult<String> 
     ))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_models(state: &AppState) -> ServiceResult<Value> {
     let settings = state.settings.read().await;
     let host = settings.llm_host.clone();
@@ -251,6 +259,7 @@ pub async fn list_models(state: &AppState) -> ServiceResult<Value> {
 /// on a struct field without tangling lifetimes.
 pub type ChatEventStream = Pin<Box<dyn Stream<Item = ChatEvent> + Send>>;
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Append a user message to a conversation, retrieve LLM context, call the
 /// configured LLM with streaming, persist the final assistant message, and
 /// return a `Stream<Item = ChatEvent>` that emits every incremental update

@@ -30,6 +30,7 @@ pub struct ApproveToolsInput {
     pub permanent: Option<bool>,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn status(state: &AppState) -> ServiceResult<Value> {
     let available = ClaudeCodeRunner::is_available().await;
     let running = state.claude_runner.is_running().await;
@@ -39,11 +40,13 @@ pub async fn status(state: &AppState) -> ServiceResult<Value> {
     }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn stop(state: &AppState) -> ServiceResult<Value> {
     let stopped = state.claude_runner.stop().await;
     Ok(json!({ "stopped": stopped }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn approve_tools(state: &AppState, input: ApproveToolsInput) -> ServiceResult<Value> {
     if input.tools.is_empty() {
         return Err(ServiceError::BadRequest("no tools specified".into()));
@@ -82,11 +85,13 @@ pub async fn approve_tools(state: &AppState, input: ApproveToolsInput) -> Servic
     Ok(json!({ "approved": input.tools, "scope": scope }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_sessions(state: &AppState) -> ServiceResult<Value> {
     let sessions = state.claude_runner.list_sessions();
     Ok(json!({ "sessions": sessions }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_session(state: &AppState, id: &str) -> ServiceResult<Value> {
     let messages = state
         .claude_runner
@@ -166,6 +171,7 @@ pub struct SendInput {
 
 pub type ClaudeStream = Pin<Box<dyn Stream<Item = ClaudeStreamEvent> + Send>>;
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Resolve mentions, spawn a Claude Code CLI run, and return a stream that
 /// first yields the full prompt (for export) and then every runner event.
 pub async fn send_stream(state: &AppState, input: SendInput) -> ServiceResult<ClaudeStream> {

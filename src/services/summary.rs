@@ -30,6 +30,7 @@ pub struct SummarizeAccepted {
     pub status: &'static str,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_summary(state: &AppState, id: &str) -> ServiceResult<Value> {
     let dir = state.session_manager.session_dir(id);
     let path = dir.join("summary.json");
@@ -42,6 +43,7 @@ pub async fn get_summary(state: &AppState, id: &str) -> ServiceResult<Value> {
         .map_err(|e| ServiceError::Internal(format!("Failed to parse summary: {e}")))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn update_summary(
     state: &AppState,
     id: &str,
@@ -70,6 +72,7 @@ pub async fn update_summary(
     Ok(summary)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_summary(state: &AppState, id: &str) -> ServiceResult<()> {
     let dir = state.session_manager.session_dir(id);
     let path = dir.join("summary.json");
@@ -80,6 +83,7 @@ pub async fn delete_summary(state: &AppState, id: &str) -> ServiceResult<()> {
     Ok(())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_session_todos(state: &AppState, id: &str) -> ServiceResult<Value> {
     let path = state
         .session_manager
@@ -93,6 +97,7 @@ pub async fn get_session_todos(state: &AppState, id: &str) -> ServiceResult<Valu
     serde_json::from_str(&content).map_err(|e| ServiceError::Internal(format!("{e}")))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn toggle_todo(state: &AppState, id: &str, idx: usize) -> ServiceResult<Value> {
     let dir = state.session_manager.session_dir(id);
     let todos_path = dir.join("todos.json");
@@ -165,6 +170,7 @@ pub async fn toggle_todo(state: &AppState, id: &str, idx: usize) -> ServiceResul
     Ok(todos)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_person_todos(state: &AppState, person_id: &str) -> ServiceResult<Value> {
     let session_ids = state.files_db.get_person_session_ids(person_id).await;
 
@@ -212,6 +218,7 @@ pub async fn get_person_todos(state: &AppState, person_id: &str) -> ServiceResul
     Ok(json!({"todos": result}))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Kick off LLM summarization for a session. Returns 202-semantics; the
 /// actual LLM call runs in `spawn_task` on the tokio runtime.
 pub async fn summarize_session(

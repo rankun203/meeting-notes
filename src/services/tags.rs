@@ -29,6 +29,7 @@ pub struct SetSessionTagsInput {
     pub tags: Vec<String>,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_tags(state: &AppState) -> ServiceResult<Value> {
     let tags = state.tags_manager.list_tags().await;
     let counts = state.session_manager.tag_session_counts().await;
@@ -46,6 +47,7 @@ pub async fn list_tags(state: &AppState) -> ServiceResult<Value> {
     Ok(json!({ "tags": list }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn create_tag(state: &AppState, input: CreateTagInput) -> ServiceResult<Value> {
     let tag = state
         .tags_manager
@@ -55,6 +57,7 @@ pub async fn create_tag(state: &AppState, input: CreateTagInput) -> ServiceResul
     Ok(json!(tag))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn update_tag(
     state: &AppState,
     name: &str,
@@ -74,6 +77,7 @@ pub async fn update_tag(
     Ok(json!(tag))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_tag(state: &AppState, name: &str) -> ServiceResult<()> {
     state
         .tags_manager
@@ -87,6 +91,7 @@ pub async fn delete_tag(state: &AppState, name: &str) -> ServiceResult<()> {
     Ok(())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_tag_sessions(state: &AppState, name: &str) -> ServiceResult<Value> {
     if !state.tags_manager.tag_exists(name).await {
         return Err(ServiceError::NotFound("tag not found".into()));
@@ -95,6 +100,7 @@ pub async fn get_tag_sessions(state: &AppState, name: &str) -> ServiceResult<Val
     Ok(json!({ "sessions": sessions }))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn set_session_tags(
     state: &AppState,
     session_id: &str,

@@ -213,7 +213,18 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   }
 
   function onLoadedMetadata() {
-    const maxDur = Math.max(...getAudios().map(a => a.duration || 0));
+    refreshDuration();
+  }
+
+  // Re-read duration from every <audio> and pick the longest. Called
+  // both at loadedmetadata (first-guess) and at durationchange (final
+  // value). Important for Opus files served via the asset protocol:
+  // the loadedmetadata event often fires before the final duration is
+  // resolved, and the browser later updates it via durationchange.
+  function refreshDuration() {
+    const maxDur = Math.max(
+      ...getAudios().map(a => (Number.isFinite(a.duration) ? a.duration : 0))
+    );
     if (maxDur > 0) setDuration(maxDur);
   }
 
@@ -308,17 +319,15 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   }
 
   function onPause() {
-    const audios = getAudios();
-    if (!playingRef.current) return;
-    // If all audios are paused (e.g. system paused on AirPods disconnect), sync UI
-    if (audios.every(a => a.paused)) {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      setPlaying(false);
-      playingRef.current = false;
-      const t = audios[0]?.currentTime || 0;
-      setCurrentTime(t);
-      if (onTimeUpdate) onTimeUpdate(t);
-    }
+    // Do nothing here. The browser fires `pause` for many reasons —
+    // buffer underrun, codec stalls, offscreen tab, AirPods disconnect,
+    // etc. — and it's not safe to assume "paused = user wants to stop".
+    // We originally mirrored `audio.paused` into React state so the UI
+    // reflected an external pause, but that conflated transient
+    // underruns with a stop intent and caused playback to freeze at
+    // ~5s for Opus files served via the asset protocol. The seek
+    // slider and play button now derive state from `playing` alone,
+    // which we only flip inside togglePlay/onEnded/stopAll.
   }
 
   function onEnded() {
@@ -348,9 +357,15 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
         key: f.name,
         ref: el => { audioRefs.current[i] = el; },
         src,
-        preload: 'metadata',
+        // `auto` so the browser pre-fetches the full file — avoids
+        // mid-playback stalls on the Tauri asset protocol (Opus files
+        // need the whole body buffered for seamless playback because
+        // the asset handler doesn't always split byte ranges on codec
+        // frame boundaries).
+        preload: 'auto',
         muted: !!mutedTracks[i],
         onLoadedMetadata,
+        onDurationChange: refreshDuration,
         onEnded,
         onPause,
         className: 'hidden',

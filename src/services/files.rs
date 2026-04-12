@@ -10,6 +10,7 @@ use super::error::{ServiceError, ServiceResult};
 use super::state::AppState;
 use crate::waveform::WaveformData;
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_files(state: &AppState, id: &str) -> ServiceResult<Vec<String>> {
     state
         .session_manager
@@ -18,6 +19,7 @@ pub async fn list_files(state: &AppState, id: &str) -> ServiceResult<Vec<String>
         .map_err(ServiceError::NotFound)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Validate `{session_id, filename}` and return the absolute path that the
 /// transport layer should serve. Rejects path-traversal attempts.
 pub async fn resolve_session_file(
@@ -42,6 +44,7 @@ pub async fn resolve_session_file(
     Ok(state.session_manager.session_dir(id).join(safe_name))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_waveform(
     state: &AppState,
     id: &str,

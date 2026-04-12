@@ -45,6 +45,7 @@ pub struct TranscribeAccepted {
     pub status: &'static str,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_transcript(state: &AppState, id: &str) -> ServiceResult<Value> {
     state
         .files_db
@@ -53,6 +54,7 @@ pub async fn get_transcript(state: &AppState, id: &str) -> ServiceResult<Value> 
         .ok_or_else(|| ServiceError::NotFound("transcript not found".into()))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_transcript(state: &AppState, id: &str) -> ServiceResult<()> {
     state.files_db.remove_transcript(id).await;
 
@@ -70,6 +72,7 @@ pub async fn delete_transcript(state: &AppState, id: &str) -> ServiceResult<()> 
     Ok(())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_attribution(state: &AppState, id: &str) -> ServiceResult<Value> {
     match state.files_db.get_transcript(id).await {
         Some(data) => Ok(data.get("speaker_embeddings").cloned().unwrap_or(json!({}))),
@@ -77,6 +80,7 @@ pub async fn get_attribution(state: &AppState, id: &str) -> ServiceResult<Value>
     }
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn update_attribution(
     state: &AppState,
     id: &str,
@@ -198,6 +202,7 @@ fn update_segment_speakers(
     }
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Kick off a transcription job. Returns 202 semantics: the pipeline runs
 /// in the background via `auto_transcribe`, which the transport layer
 /// spawns onto the tokio runtime.

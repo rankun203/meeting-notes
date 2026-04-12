@@ -51,12 +51,14 @@ pub struct RecordingStopped {
     pub files: Vec<String>,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn create_session(state: &AppState, config: SessionConfig) -> ServiceResult<SessionInfo> {
     let info = state.session_manager.create_session(config).await;
     state.refresh_recordings_index();
     Ok(info)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn list_sessions(state: &AppState, params: ListParams) -> ServiceResult<SessionListPage> {
     let limit = params.limit.unwrap_or(20);
     let offset = params.offset.unwrap_or(0);
@@ -76,6 +78,7 @@ pub async fn list_sessions(state: &AppState, params: ListParams) -> ServiceResul
     })
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_session(state: &AppState, id: &str) -> ServiceResult<SessionInfo> {
     let mut info = state
         .session_manager
@@ -86,6 +89,7 @@ pub async fn get_session(state: &AppState, id: &str) -> ServiceResult<SessionInf
     Ok(info)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn update_session(
     state: &AppState,
     id: &str,
@@ -127,6 +131,7 @@ pub async fn update_session(
         .ok_or_else(|| ServiceError::NotFound("session not found".into()))
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn delete_session(state: &AppState, id: &str) -> ServiceResult<()> {
     // Remove transcript from cache before deleting session files
     state.files_db.remove_transcript(id).await;
@@ -140,6 +145,7 @@ pub async fn delete_session(state: &AppState, id: &str) -> ServiceResult<()> {
     Ok(())
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn start_recording(state: &AppState, id: &str) -> ServiceResult<RecordingStarted> {
     let files = state
         .session_manager
@@ -152,6 +158,7 @@ pub async fn start_recording(state: &AppState, id: &str) -> ServiceResult<Record
     })
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Stop recording and, if auto-transcribe is enabled in settings, spawn the
 /// transcription pipeline in the background. The pipeline function still
 /// lives in `server::routes` for now — a later refactor pass will move it

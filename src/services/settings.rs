@@ -7,6 +7,7 @@ use tracing::info;
 use super::error::{ServiceError, ServiceResult};
 use super::state::AppState;
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn get_settings(state: &AppState) -> ServiceResult<Value> {
     let settings = state.settings.read().await;
     let mut result = settings.to_masked_json();
@@ -18,6 +19,7 @@ pub async fn get_settings(state: &AppState) -> ServiceResult<Value> {
     Ok(result)
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn update_settings(state: &AppState, body: Value) -> ServiceResult<Value> {
     let host_for_key = body
         .get("llm_host")

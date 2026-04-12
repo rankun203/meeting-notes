@@ -32,6 +32,7 @@ pub struct LogTail {
     pub lines: Vec<String>,
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 pub fn get_info(state: &AppState) -> ServiceResult<DiagnosticsInfo> {
     let logs_dir = state.tracing.logs_dir();
     let current = state.tracing.current_log_path();
@@ -60,6 +61,7 @@ pub fn get_info(state: &AppState) -> ServiceResult<DiagnosticsInfo> {
     })
 }
 
+#[tracing::instrument(level = "info", skip_all)]
 /// Read the last `n` lines of the current log file (or a specific file
 /// inside the logs directory if `file` is supplied). Returns them oldest
 /// → newest so the UI can render them with the newest at the bottom like
