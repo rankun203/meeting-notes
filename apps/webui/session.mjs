@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
-         formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor, autoResize,
+         formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor, autoResize, autoResizeDeferred,
          ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon,
          RecordIcon, TranscriptIcon, TagIcon, PlusIcon, CloseIcon } from './utils.mjs';
 import { SyncedPlayer } from './player.mjs';
@@ -807,7 +807,11 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                     value: notes,
                     onChange: e => { handleNotesChange(e); autoResize(e); },
                     onInput: autoResize,
-                    ref: el => { if (el) { el.style.height = 'auto'; autoResize({ target: el }); } },
+                    // Deferred first-measure: waits for `document.fonts.ready`
+                    // and rAF before sizing, so the initial mount on first
+                    // app launch doesn't collapse when webfonts / layout
+                    // haven't settled yet.
+                    ref: el => autoResizeDeferred(el),
                     placeholder: 'Add notes about this session...',
                     rows: 1,
                     className: INPUT_CLS + ' text-xs overflow-hidden',

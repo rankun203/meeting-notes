@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { jsx, jsxs, api, INPUT_CLS, autoResize, stripMd, formatTime, formatDuration } from './utils.mjs';
+import { jsx, jsxs, api, INPUT_CLS, autoResize, autoResizeDeferred, stripMd, formatTime, formatDuration } from './utils.mjs';
 
 // ── People sidebar list ──
 
@@ -160,7 +160,7 @@ export function PersonDetail({ person, onRefresh, onSelectSession }) {
               value: notes,
               onChange: handleNotesChange,
               onInput: autoResize,
-              ref: el => { if (el) autoResize({ target: el }); },
+              ref: el => autoResizeDeferred(el),
               placeholder: 'Add notes about this person...',
               rows: 1,
               className: INPUT_CLS + ' text-xs overflow-hidden',

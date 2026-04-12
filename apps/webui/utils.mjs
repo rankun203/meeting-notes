@@ -273,6 +273,36 @@ export function autoResize(e, maxRows = 8) {
   el.style.overflowY = el.scrollHeight + border > maxHeight ? 'auto' : 'hidden';
 }
 
+/// Deferred variant of autoResize() for ref callbacks on first mount.
+///
+/// On the initial app render the element's font metrics may not be
+/// final yet (webfont still loading, CSS just applied, Tauri webview
+/// in particular takes an extra tick to settle), which makes
+/// scrollHeight return a stale "one collapsed line" value. We see the
+/// symptom on the notes textarea in the first session that auto-mounts
+/// and nowhere else (switching sessions later works because fonts are
+/// already resolved by then).
+///
+/// Fix: wait for document.fonts.ready AND the next animation frame
+/// before measuring, so layout is guaranteed to be stable. Also run a
+/// second pass on the NEXT frame after that as a belt-and-suspenders
+/// against any residual layout churn (cheap — one extra measure).
+export function autoResizeDeferred(el, maxRows = 8) {
+  if (!el) return;
+  const run = () => autoResize({ target: el }, maxRows);
+  const schedule = () => {
+    requestAnimationFrame(() => {
+      run();
+      requestAnimationFrame(run);
+    });
+  };
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.status !== 'loaded') {
+    document.fonts.ready.then(schedule);
+  } else {
+    schedule();
+  }
+}
+
 /// Trigger auto-resize on a textarea ref (for initial sizing).
 export function autoResizeRef(ref, maxRows = 8) {
   if (ref.current) autoResize(ref.current, maxRows);
