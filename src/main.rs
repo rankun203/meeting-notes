@@ -152,6 +152,7 @@ async fn main() {
 
             let claude_runner = meeting_notes_daemon::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
 
+            let shutdown_manager = manager.clone();
             let app = server::create_router(
                 manager, people_manager, shared_settings, files_db, tags_manager,
                 conversation_manager, shared_secrets, claude_runner, web_ui,
@@ -166,7 +167,52 @@ async fn main() {
                 info!("Web UI available at http://{}", addr);
             }
 
-            axum::serve(listener, app).await.unwrap();
+            // Graceful shutdown: stop all recording sessions on SIGINT/SIGTERM
+            // so audio writers can finalize (write trailing OGG pages, flush
+            // BufWriters) before the process exits.
+            let shutdown_signal = async move {
+                wait_for_shutdown_signal().await;
+                info!("Shutdown signal received — stopping active recordings");
+                shutdown_manager.shutdown().await;
+            };
+
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal)
+                .await
+                .unwrap();
+
+            info!("Server stopped");
         }
+    }
+}
+
+/// Resolves on the first SIGINT (Ctrl+C) or SIGTERM (e.g. `kill <pid>` or
+/// systemd shutdown). On non-unix targets only SIGINT is awaited.
+async fn wait_for_shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!("Failed to install Ctrl+C handler: {}", e);
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::error!("Failed to install SIGTERM handler: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }

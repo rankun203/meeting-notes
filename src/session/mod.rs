@@ -207,6 +207,12 @@ impl SessionManager {
                 } // write lock released
 
                 // Phase 2: attempt reconnection outside the lock on a blocking thread.
+                /// Hard timeout for a single restart attempt. If Core Audio
+                /// deadlocks inside `source.start()`, the orphan thread keeps
+                /// running but we stop blocking the ticker and free the session
+                /// so the user can force-stop.
+                const RESTART_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
                 for session_id in device_lost_sessions {
                     let sessions_ref = sessions.clone();
                     let event_tx_ref = event_tx.clone();
@@ -221,18 +227,42 @@ impl SessionManager {
                     drop(sessions_guard);
 
                     if let Some(mut recorder) = recorder {
-                        let result = tokio::task::spawn_blocking(move || {
+                        let join = tokio::task::spawn_blocking(move || {
                             let r = recorder.restart_lost_sources();
                             (recorder, r)
-                        }).await;
+                        });
+                        let timed = tokio::time::timeout(RESTART_TIMEOUT, join).await;
 
                         let mut sessions_guard = sessions_ref.write().await;
-                        match result {
-                            Ok((recorder, Ok(restarted))) => {
-                                if let Some(session) = sessions_guard.get_mut(&sid) {
-                                    session.recorder = Some(recorder);
-                                    reconnect_attempts.remove(&sid);
+                        // Outcomes:
+                        //   Ok(Ok((rec, Ok(restarted))))  -> success, put back
+                        //   Ok(Ok((rec, Err(e))))         -> restart failed, put back, retry
+                        //   Ok(Err(join_err))             -> panicked, recorder dropped during unwind
+                        //   Err(_)                        -> hung past timeout, recorder stuck in orphan thread
+                        let (returned_recorder, restart_result, lost): (Option<Recorder>, Option<Result<Vec<String>, _>>, bool) = match timed {
+                            Ok(Ok((rec, res))) => (Some(rec), Some(res), false),
+                            Ok(Err(join_err)) => {
+                                warn!("Mic reconnect thread panicked for session {}: {}", sid, join_err);
+                                (None, None, true)
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "Mic reconnect timed out after {:?} for session {} — recorder is unrecoverable",
+                                    RESTART_TIMEOUT, sid
+                                );
+                                (None, None, true)
+                            }
+                        };
 
+                        if let Some(session) = sessions_guard.get_mut(&sid) {
+                            // Put recorder back if we still have it.
+                            if let Some(rec) = returned_recorder {
+                                session.recorder = Some(rec);
+                            }
+
+                            match restart_result {
+                                Some(Ok(restarted)) => {
+                                    reconnect_attempts.remove(&sid);
                                     for label in &restarted {
                                         let notice = Notice {
                                             key: None,
@@ -250,25 +280,35 @@ impl SessionManager {
                                     }
                                     info!("Reconnected mic sources for session {}: {:?}", sid, restarted);
                                 }
-                            }
-                            Ok((recorder, Err(e))) => {
-                                let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
-                                *attempts += 1;
-                                warn!("Mic reconnect failed for session {} (attempt {}): {}", sid, attempts, e);
-
-                                if let Some(session) = sessions_guard.get_mut(&sid) {
-                                    session.recorder = Some(recorder);
+                                Some(Err(e)) => {
+                                    let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
+                                    *attempts += 1;
+                                    warn!("Mic reconnect failed for session {} (attempt {}): {}", sid, attempts, e);
 
                                     if *attempts >= MAX_RECONNECT_ATTEMPTS {
+                                        let notice = max_attempts_notice();
+                                        session.notices.push(notice.clone());
+                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                            id: sid.clone(),
+                                            notice,
+                                        });
+                                    }
+                                }
+                                None => {
+                                    // Panic or timeout: recorder is gone. Skip retries
+                                    // (a fresh attempt has nothing to retry against)
+                                    // and surface the error immediately.
+                                    reconnect_attempts.insert(sid.clone(), MAX_RECONNECT_ATTEMPTS);
+                                    if lost {
                                         let notice = Notice {
                                             key: None,
                                             level: NoticeLevel::Error,
-                                            message: "Microphone lost — could not reconnect".to_string(),
+                                            message: "Recording is unrecoverable — please stop and start a new session".to_string(),
                                             platform: Some(std::env::consts::OS.to_string()),
                                             details: Some(
-                                                "A video conferencing app (e.g. Teams) may have disrupted Core Audio. \
-                                                Stop and restart recording. If that fails, restart the audio system: \
-                                                sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod"
+                                                "Core Audio failed during a device-change recovery and the recorder could not be restored. \
+                                                Click Stop to finalize whatever has been written so far, then start a new recording. \
+                                                If Stop also fails, restart the daemon."
                                                     .to_string(),
                                             ),
                                             created_at: Utc::now(),
@@ -280,11 +320,6 @@ impl SessionManager {
                                         });
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                warn!("Mic reconnect thread panicked for session {}: {}", sid, e);
-                                let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
-                                *attempts += 1;
                             }
                         }
                     }
@@ -398,6 +433,34 @@ impl SessionManager {
 
     pub async fn get_session(&self, id: &str) -> Option<SessionInfo> {
         self.sessions.read().await.get(id).map(|s| s.info())
+    }
+
+    /// IDs of all sessions currently in `Recording` state. Used for graceful
+    /// shutdown so writers can finalize before the process exits.
+    pub async fn recording_session_ids(&self) -> Vec<String> {
+        self.sessions
+            .read()
+            .await
+            .values()
+            .filter(|s| s.state == SessionState::Recording)
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
+    /// Stop every recording session, finalizing audio writers. Called on
+    /// SIGINT/SIGTERM so opus files get their trailing pages written.
+    pub async fn shutdown(&self) {
+        let ids = self.recording_session_ids().await;
+        if ids.is_empty() {
+            return;
+        }
+        info!("Shutdown: stopping {} active recording session(s)", ids.len());
+        for id in ids {
+            match self.stop_recording(&id).await {
+                Ok(_) => info!("Shutdown: stopped session {}", id),
+                Err(e) => warn!("Shutdown: failed to stop session {}: {}", id, e),
+            }
+        }
     }
 
     pub async fn list_sessions(
@@ -590,8 +653,12 @@ impl SessionManager {
     }
 
     pub async fn stop_recording(&self, id: &str) -> Result<Vec<String>, String> {
-        // Phase 1: Extract recorder under write lock, mark stopped
-        let mut recorder = {
+        // Phase 1: Extract recorder under write lock, mark stopped.
+        // If the recorder is missing (e.g. lost during a failed Core Audio
+        // recovery), force-stop: mark Stopped anyway so the user is unstuck.
+        // Whatever audio writers are still alive will be cleaned up on
+        // process exit.
+        let recorder = {
             let mut sessions = self.sessions.write().await;
             let session = sessions.get_mut(id).ok_or("session not found")?;
 
@@ -599,8 +666,7 @@ impl SessionManager {
                 return Err("session is not recording".to_string());
             }
 
-            let recorder = session.recorder.take()
-                .ok_or("no recorder found")?;
+            let recorder = session.recorder.take();
 
             session.state = SessionState::Stopped;
             session.touch();
@@ -612,8 +678,18 @@ impl SessionManager {
         };
         // Write lock released here
 
-        // Phase 2: Stop recorder (blocking) without holding any lock
-        recorder.stop().map_err(|e| e.to_string())?;
+        // Phase 2: Stop recorder (blocking) without holding any lock.
+        // Force-stop path: no recorder means we just finalize the session
+        // metadata with whatever files exist on disk.
+        let mut force_stopped = false;
+        if let Some(mut rec) = recorder {
+            if let Err(e) = rec.stop() {
+                return Err(e.to_string());
+            }
+        } else {
+            warn!("Force-stopping session {} with no active recorder", id);
+            force_stopped = true;
+        }
 
         // Phase 3: Re-acquire lock, update files, write metadata
         let mut sessions = self.sessions.write().await;
@@ -622,6 +698,27 @@ impl SessionManager {
                 session.files.push("metadata.json".to_string());
             }
             session.touch();
+            if force_stopped {
+                let notice = Notice {
+                    key: None,
+                    level: NoticeLevel::Warning,
+                    message: "Recording was force-stopped — files may be missing trailing audio".to_string(),
+                    platform: Some(std::env::consts::OS.to_string()),
+                    details: Some(
+                        "The audio recorder was lost during a Core Audio device change. \
+                        The session was marked stopped without finalizing the encoders, so \
+                        the final ~1s of audio and the file's trailing metadata may be missing. \
+                        Most decoders can still play the partial files."
+                            .to_string(),
+                    ),
+                    created_at: Utc::now(),
+                };
+                session.notices.push(notice.clone());
+                self.emit(ServerEvent::SessionNotice {
+                    id: id.to_string(),
+                    notice,
+                });
+            }
             if let Err(e) = Self::write_metadata(session) {
                 warn!("Failed to write metadata on stop: {}", e);
             }
@@ -948,6 +1045,22 @@ fn format_base36(mut n: u64) -> String {
 /// Recompute live notices for recording sources based on current file sizes.
 /// Notices with a `key` are auto-managed: added when a condition is detected,
 /// removed when it resolves. Emits SessionNotices when the set changes.
+fn max_attempts_notice() -> Notice {
+    Notice {
+        key: None,
+        level: NoticeLevel::Error,
+        message: "Microphone lost — could not reconnect".to_string(),
+        platform: Some(std::env::consts::OS.to_string()),
+        details: Some(
+            "A video conferencing app (e.g. Teams) may have disrupted Core Audio. \
+            Stop and restart recording. If that fails, restart the audio system: \
+            sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod"
+                .to_string(),
+        ),
+        created_at: Utc::now(),
+    }
+}
+
 fn update_source_notices(
     session: &mut Session,
     file_sizes: &HashMap<String, u64>,
