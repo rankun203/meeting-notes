@@ -151,31 +151,86 @@ impl Recorder {
             .map(|a| a.last_active_ms.load(std::sync::atomic::Ordering::Relaxed))
     }
 
-    /// Restart sources that lost their device. Stops the old stream and starts
-    /// a new one with the existing sender channel, so the writer keeps running.
-    pub fn restart_lost_sources(&mut self) -> Result<Vec<String>, AudioError> {
-        let mut restarted = Vec::new();
+    /// Take ownership of any sources that lost their device, leaving the
+    /// writer/sender/descriptor slots in place so the source can be put back
+    /// after off-thread restart. Returns one LostSource per slot taken.
+    ///
+    /// The caller is expected to either `put_back_source` after a successful
+    /// restart or `clear_source` after giving up — otherwise the slot stays
+    /// empty and the recorder cannot record from that source again.
+    pub fn take_lost_sources(&mut self) -> Vec<LostSource> {
+        let mut out = Vec::new();
         for active in &mut self.sources {
-            let source = match active.source.as_mut() {
-                Some(s) if s.is_device_lost() => s,
-                _ => continue,
-            };
-
+            let is_lost = active.source.as_ref().map_or(false, |s| s.is_device_lost());
+            if !is_lost {
+                continue;
+            }
             let sender = match active.sender.as_ref() {
                 Some(s) => s.clone(),
                 None => continue,
             };
-
-            let label = active.descriptor.label.clone();
-            warn!("Restarting lost source: {}", label);
-
-            // Drop old stream, then build fresh one with new device handle
-            source.stop()?;
-            source.start(sender)?;
-
-            info!("Source reconnected: {}", label);
-            restarted.push(label);
+            if let Some(source) = active.source.take() {
+                out.push(LostSource {
+                    label: active.descriptor.label.clone(),
+                    source,
+                    sender,
+                });
+            }
         }
-        Ok(restarted)
+        out
+    }
+
+    /// Put a previously-taken source back into its slot. Returns true if a
+    /// matching slot was found.
+    pub fn put_back_source(&mut self, label: &str, source: Box<dyn AudioSource>) -> bool {
+        for active in &mut self.sources {
+            if active.descriptor.label == label {
+                active.source = Some(source);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Mark a source slot as permanently lost (e.g. its restart panicked or
+    /// hung past the deadline and the box was leaked or dropped). The writer
+    /// keeps draining whatever chunks already shipped; further data won't
+    /// arrive until/unless a future call repopulates the slot.
+    pub fn clear_source(&mut self, label: &str) {
+        for active in &mut self.sources {
+            if active.descriptor.label == label {
+                active.source = None;
+                return;
+            }
+        }
+    }
+
+    /// True if every source slot is empty — i.e. every source was taken and
+    /// not put back. A recorder in this state can't produce any further audio.
+    pub fn has_no_live_sources(&self) -> bool {
+        self.sources.iter().all(|a| a.source.is_none())
+    }
+}
+
+/// A source that has been taken out of the Recorder for off-thread restart.
+pub struct LostSource {
+    pub label: String,
+    pub source: Box<dyn AudioSource>,
+    pub sender: Sender<AudioChunk>,
+}
+
+impl LostSource {
+    /// Restart this source: stop the old stream, then start a fresh one with
+    /// the original sender so the writer channel stays connected.
+    pub fn restart(mut self) -> Result<(String, Box<dyn AudioSource>), (String, AudioError)> {
+        warn!("Restarting lost source: {}", self.label);
+        if let Err(e) = self.source.stop() {
+            return Err((self.label, e));
+        }
+        if let Err(e) = self.source.start(self.sender) {
+            return Err((self.label, e));
+        }
+        info!("Source reconnected: {}", self.label);
+        Ok((self.label, self.source))
     }
 }

@@ -16,7 +16,7 @@ use tracing::{info, warn};
 use self::config::SessionConfig;
 use self::session::{Session, SessionInfo, SessionMetadata, SessionState, Notice, NoticeLevel};
 use crate::audio::mic::MicSource;
-use crate::audio::recorder::Recorder;
+use crate::audio::recorder::{LostSource, Recorder};
 use crate::audio::source::{AudioSource, SourceDescriptor, SourceType};
 use crate::audio::system_audio::SystemAudioSource;
 
@@ -133,9 +133,10 @@ impl SessionManager {
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-            /// Max reconnect attempts per session before giving up.
+            /// Max reconnect attempts per (session, source) before giving up.
             const MAX_RECONNECT_ATTEMPTS: u32 = 3;
-            let mut reconnect_attempts: HashMap<String, u32> = HashMap::new();
+            // Keyed by (session_id, source_label) so each source has its own retry budget.
+            let mut reconnect_attempts: HashMap<(String, String), u32> = HashMap::new();
             loop {
                 interval.tick().await;
                 if event_tx.receiver_count() == 0 {
@@ -195,133 +196,177 @@ impl SessionManager {
                         }
 
                         // Check for device-lost sources that need reconnection.
+                        // Per-source budget: a source is retried only if it still
+                        // has attempts left.
                         if let Some(ref recorder) = session.recorder {
                             if recorder.has_device_lost_sources() {
-                                let attempts = reconnect_attempts.get(&session.id).copied().unwrap_or(0);
-                                if attempts < MAX_RECONNECT_ATTEMPTS {
-                                    device_lost_sessions.push(session.id.clone());
-                                }
+                                device_lost_sessions.push(session.id.clone());
                             }
                         }
                     }
                 } // write lock released
 
-                // Phase 2: attempt reconnection outside the lock on a blocking thread.
-                /// Hard timeout for a single restart attempt. If Core Audio
-                /// deadlocks inside `source.start()`, the orphan thread keeps
-                /// running but we stop blocking the ticker and free the session
-                /// so the user can force-stop.
+                // Phase 2: attempt reconnection outside the lock on a blocking
+                // thread, one source at a time. If Core Audio deadlocks inside
+                // `source.start()`, only the lone source is leaked into the
+                // orphan thread — the recorder keeps owning every other source
+                // and its writers, so we can still call `stop()` cleanly.
+                /// Hard timeout for a single source restart attempt.
                 const RESTART_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+                // Sessions whose every source slot became empty after this
+                // pass — caller auto-stops them so writers finalize and the
+                // ticker stops processing them.
+                let mut auto_stop_after_loss: Vec<String> = Vec::new();
 
                 for session_id in device_lost_sessions {
-                    let sessions_ref = sessions.clone();
                     let event_tx_ref = event_tx.clone();
                     let sid = session_id.clone();
 
-                    // Take the recorder out, reconnect on a blocking thread, put it back.
-                    let mut sessions_guard = sessions_ref.write().await;
-                    let recorder = match sessions_guard.get_mut(&sid) {
-                        Some(s) => s.recorder.take(),
-                        None => continue,
+                    // Take ONLY the lost sources out, filtered by retry budget.
+                    // The recorder (and every healthy source/writer) stays in
+                    // the session.
+                    let lost_to_restart: Vec<LostSource> = {
+                        let mut sessions_guard = sessions.write().await;
+                        let session = match sessions_guard.get_mut(&sid) {
+                            Some(s) => s,
+                            None => continue,
+                        };
+                        let recorder = match session.recorder.as_mut() {
+                            Some(r) => r,
+                            None => continue,
+                        };
+                        recorder
+                            .take_lost_sources()
+                            .into_iter()
+                            .filter(|ls| {
+                                let attempts = reconnect_attempts
+                                    .get(&(sid.clone(), ls.label.clone()))
+                                    .copied()
+                                    .unwrap_or(0);
+                                if attempts < MAX_RECONNECT_ATTEMPTS {
+                                    true
+                                } else {
+                                    // Over-budget: don't restart, but also don't
+                                    // leak the slot — drop the source so the
+                                    // recorder reflects reality.
+                                    false
+                                }
+                            })
+                            .collect()
                     };
-                    drop(sessions_guard);
 
-                    if let Some(mut recorder) = recorder {
-                        let join = tokio::task::spawn_blocking(move || {
-                            let r = recorder.restart_lost_sources();
-                            (recorder, r)
-                        });
+                    for ls in lost_to_restart {
+                        let label = ls.label.clone();
+                        let join = tokio::task::spawn_blocking(move || ls.restart());
                         let timed = tokio::time::timeout(RESTART_TIMEOUT, join).await;
 
-                        let mut sessions_guard = sessions_ref.write().await;
                         // Outcomes:
-                        //   Ok(Ok((rec, Ok(restarted))))  -> success, put back
-                        //   Ok(Ok((rec, Err(e))))         -> restart failed, put back, retry
-                        //   Ok(Err(join_err))             -> panicked, recorder dropped during unwind
-                        //   Err(_)                        -> hung past timeout, recorder stuck in orphan thread
-                        let (returned_recorder, restart_result, lost): (Option<Recorder>, Option<Result<Vec<String>, _>>, bool) = match timed {
-                            Ok(Ok((rec, res))) => (Some(rec), Some(res), false),
+                        //   Ok(Ok(Ok((label, source))))  -> success, put back
+                        //   Ok(Ok(Err((label, e))))      -> restart returned an error, source dropped
+                        //   Ok(Err(join_err))            -> panicked, source dropped during unwind
+                        //   Err(_)                       -> hung past timeout, source stuck in orphan thread
+                        enum Outcome {
+                            Ok(Box<dyn AudioSource>),
+                            Err(crate::audio::source::AudioError),
+                            Panicked,
+                            TimedOut,
+                        }
+                        let outcome = match timed {
+                            Ok(Ok(Ok((_label, source)))) => Outcome::Ok(source),
+                            Ok(Ok(Err((_label, e)))) => Outcome::Err(e),
                             Ok(Err(join_err)) => {
-                                warn!("Mic reconnect thread panicked for session {}: {}", sid, join_err);
-                                (None, None, true)
+                                warn!("Mic reconnect thread panicked for session {} source {}: {}", sid, label, join_err);
+                                Outcome::Panicked
                             }
                             Err(_) => {
                                 warn!(
-                                    "Mic reconnect timed out after {:?} for session {} — recorder is unrecoverable",
-                                    RESTART_TIMEOUT, sid
+                                    "Mic reconnect timed out after {:?} for session {} source {} — source is unrecoverable",
+                                    RESTART_TIMEOUT, sid, label
                                 );
-                                (None, None, true)
+                                Outcome::TimedOut
                             }
                         };
 
-                        if let Some(session) = sessions_guard.get_mut(&sid) {
-                            // Put recorder back if we still have it.
-                            if let Some(rec) = returned_recorder {
-                                session.recorder = Some(rec);
+                        let mut sessions_guard = sessions.write().await;
+                        let session = match sessions_guard.get_mut(&sid) {
+                            Some(s) => s,
+                            None => continue,
+                        };
+                        let recorder = match session.recorder.as_mut() {
+                            Some(r) => r,
+                            None => continue,
+                        };
+
+                        match outcome {
+                            Outcome::Ok(source) => {
+                                recorder.put_back_source(&label, source);
+                                reconnect_attempts.remove(&(sid.clone(), label.clone()));
+                                let notice = Notice {
+                                    key: None,
+                                    level: NoticeLevel::Info,
+                                    message: format!("Microphone \"{}\" reconnected after audio device change", label),
+                                    platform: Some(std::env::consts::OS.to_string()),
+                                    details: None,
+                                    created_at: Utc::now(),
+                                };
+                                session.notices.push(notice.clone());
+                                let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                    id: sid.clone(),
+                                    notice,
+                                });
+                                info!("Reconnected source for session {}: {}", sid, label);
                             }
-
-                            match restart_result {
-                                Some(Ok(restarted)) => {
-                                    reconnect_attempts.remove(&sid);
-                                    for label in &restarted {
-                                        let notice = Notice {
-                                            key: None,
-                                            level: NoticeLevel::Info,
-                                            message: format!("Microphone \"{}\" reconnected after audio device change", label),
-                                            platform: Some(std::env::consts::OS.to_string()),
-                                            details: None,
-                                            created_at: Utc::now(),
-                                        };
-                                        session.notices.push(notice.clone());
-                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
-                                            id: sid.clone(),
-                                            notice,
-                                        });
-                                    }
-                                    info!("Reconnected mic sources for session {}: {:?}", sid, restarted);
+                            Outcome::Err(e) => {
+                                // Source returned from the blocking task but
+                                // failed to restart — it was dropped inside the
+                                // closure on the error path. Bump retry counter;
+                                // surface notice at the limit.
+                                let key = (sid.clone(), label.clone());
+                                let attempts = reconnect_attempts.entry(key).or_insert(0);
+                                *attempts += 1;
+                                warn!("Mic reconnect failed for session {} source {} (attempt {}): {}", sid, label, attempts, e);
+                                recorder.clear_source(&label);
+                                if *attempts >= MAX_RECONNECT_ATTEMPTS {
+                                    let notice = max_attempts_notice();
+                                    session.notices.push(notice.clone());
+                                    let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                        id: sid.clone(),
+                                        notice,
+                                    });
                                 }
-                                Some(Err(e)) => {
-                                    let attempts = reconnect_attempts.entry(sid.clone()).or_insert(0);
-                                    *attempts += 1;
-                                    warn!("Mic reconnect failed for session {} (attempt {}): {}", sid, attempts, e);
-
-                                    if *attempts >= MAX_RECONNECT_ATTEMPTS {
-                                        let notice = max_attempts_notice();
-                                        session.notices.push(notice.clone());
-                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
-                                            id: sid.clone(),
-                                            notice,
-                                        });
-                                    }
-                                }
-                                None => {
-                                    // Panic or timeout: recorder is gone. Skip retries
-                                    // (a fresh attempt has nothing to retry against)
-                                    // and surface the error immediately.
-                                    reconnect_attempts.insert(sid.clone(), MAX_RECONNECT_ATTEMPTS);
-                                    if lost {
-                                        let notice = Notice {
-                                            key: None,
-                                            level: NoticeLevel::Error,
-                                            message: "Recording is unrecoverable — please stop and start a new session".to_string(),
-                                            platform: Some(std::env::consts::OS.to_string()),
-                                            details: Some(
-                                                "Core Audio failed during a device-change recovery and the recorder could not be restored. \
-                                                Click Stop to finalize whatever has been written so far, then start a new recording. \
-                                                If Stop also fails, restart the daemon."
-                                                    .to_string(),
-                                            ),
-                                            created_at: Utc::now(),
-                                        };
-                                        session.notices.push(notice.clone());
-                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
-                                            id: sid.clone(),
-                                            notice,
-                                        });
-                                    }
-                                }
+                            }
+                            Outcome::Panicked | Outcome::TimedOut => {
+                                // Source is gone — either dropped during unwind
+                                // or leaked into a hung Core Audio thread. Burn
+                                // the retry budget so we don't try again, and
+                                // surface a per-source unrecoverable notice.
+                                reconnect_attempts.insert((sid.clone(), label.clone()), MAX_RECONNECT_ATTEMPTS);
+                                recorder.clear_source(&label);
+                                let notice = source_unrecoverable_notice(&label);
+                                session.notices.push(notice.clone());
+                                let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                    id: sid.clone(),
+                                    notice,
+                                });
                             }
                         }
+
+                        // If every source slot is empty, the recorder can't
+                        // produce any more audio — auto-stop the session so the
+                        // surviving writers finalize and the ticker stops
+                        // re-processing it.
+                        if recorder.has_no_live_sources() {
+                            auto_stop_after_loss.push(sid.clone());
+                        }
+                    }
+                }
+
+                // Auto-stop sessions whose every source was lost. Done outside
+                // the per-source loop so stop_recording can take its own lock.
+                for sid in auto_stop_after_loss {
+                    info!("Auto-stopping session {} — all sources lost", sid);
+                    if let Err(e) = manager.stop_recording(&sid).await {
+                        warn!("Failed to auto-stop session {} after source loss: {}", sid, e);
                     }
                 }
 
@@ -1045,6 +1090,22 @@ fn format_base36(mut n: u64) -> String {
 /// Recompute live notices for recording sources based on current file sizes.
 /// Notices with a `key` are auto-managed: added when a condition is detected,
 /// removed when it resolves. Emits SessionNotices when the set changes.
+fn source_unrecoverable_notice(label: &str) -> Notice {
+    Notice {
+        key: None,
+        level: NoticeLevel::Error,
+        message: format!("Source \"{}\" is unrecoverable and was dropped", label),
+        platform: Some(std::env::consts::OS.to_string()),
+        details: Some(
+            "Core Audio hung or panicked during a device-change recovery for this source. \
+            Other sources keep recording; the session will auto-stop only if every source \
+            is lost. Start a new recording to capture this source again."
+                .to_string(),
+        ),
+        created_at: Utc::now(),
+    }
+}
+
 fn max_attempts_notice() -> Notice {
     Notice {
         key: None,
