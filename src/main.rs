@@ -172,8 +172,34 @@ async fn main() {
             // BufWriters) before the process exits.
             let shutdown_signal = async move {
                 wait_for_shutdown_signal().await;
-                info!("Shutdown signal received — stopping active recordings");
-                shutdown_manager.shutdown().await;
+                info!("Shutdown signal received — stopping active recordings (press again to force quit)");
+
+                // A second signal force-exits even if a Core Audio call or an
+                // in-flight request is wedged.
+                tokio::spawn(async {
+                    wait_for_shutdown_signal().await;
+                    eprintln!("Second shutdown signal — exiting immediately");
+                    std::process::exit(130);
+                });
+
+                if tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    shutdown_manager.shutdown(),
+                )
+                .await
+                .is_err()
+                {
+                    tracing::warn!("Shutdown: stopping recordings timed out after 30s");
+                }
+
+                // After this future resolves, axum waits for in-flight
+                // connections to drain — a hung request must not keep the
+                // process alive forever.
+                tokio::spawn(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    tracing::warn!("Graceful shutdown drain timed out after 10s — forcing exit");
+                    std::process::exit(0);
+                });
             };
 
             axum::serve(listener, app)

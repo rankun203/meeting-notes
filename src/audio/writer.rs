@@ -2,10 +2,11 @@ use std::fmt;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, RecvTimeoutError};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use mp3lame_encoder::{Builder as LameBuilder, Bitrate, Quality, InterleavedPcm, MonoPcm, FlushGap};
 use serde::{Deserialize, Serialize};
@@ -479,8 +480,57 @@ pub fn create_writer(
     }
 }
 
+/// How long the writer thread may sleep between stop-flag checks. Bounds how
+/// long `finish()` waits after setting the flag when senders have leaked.
+const RECV_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Max chunks drained after the stop flag is set. A leaked source can keep
+/// producing chunks forever; this caps the drain so finalize always runs.
+const STOP_DRAIN_MAX_CHUNKS: usize = 1024;
+
+/// How long `finish()` waits for the writer thread before detaching it.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Process one chunk: lazily create the writer, update the silence tracker,
+/// encode, and periodically flush.
+fn write_one(
+    writer: &mut Option<Box<dyn AudioWriter>>,
+    chunk: &AudioChunk,
+    chunk_count: &mut u64,
+    format: AudioFormat,
+    path: &PathBuf,
+    mp3_config: &Mp3Config,
+    opus_config: &OpusConfig,
+    last_active_ms: &AtomicU64,
+) -> Result<(), AudioError> {
+    if writer.is_none() {
+        info!("Writer for \"{}\": {}ch {}Hz", path.display(), chunk.channels, chunk.sample_rate);
+        *writer = Some(create_writer(format, path, chunk.channels, chunk.sample_rate, mp3_config, opus_config)?);
+    }
+
+    // Update last-active timestamp when audio is non-silent.
+    if !chunk.samples.is_empty() {
+        let mean_sq = chunk.samples.iter().map(|s| s * s).sum::<f32>() / chunk.samples.len() as f32;
+        if mean_sq.sqrt() > SILENCE_RMS_THRESHOLD {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            last_active_ms.store(now_ms, Ordering::Relaxed);
+        }
+    }
+
+    writer.as_mut().unwrap().write_chunk(chunk)?;
+    *chunk_count += 1;
+    if *chunk_count % FLUSH_INTERVAL_CHUNKS == 0 {
+        writer.as_mut().unwrap().flush()?;
+    }
+    Ok(())
+}
+
 pub struct AudioWriterHandle {
     thread: Option<JoinHandle<Result<(), AudioError>>>,
+    stop_flag: Arc<AtomicBool>,
 }
 
 impl AudioWriterHandle {
@@ -495,57 +545,96 @@ impl AudioWriterHandle {
     ) -> Result<Self, AudioError> {
         info!("Audio writer started ({}): \"{}\"", format, path.display());
 
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let thread_stop_flag = stop_flag.clone();
+
         let thread = thread::spawn(move || {
             // Create writer lazily on first chunk to detect actual channel count
             let mut writer: Option<Box<dyn AudioWriter>> = None;
             let mut chunk_count: u64 = 0;
+            let mut write_error: Option<AudioError> = None;
 
-            for chunk in receiver {
-                if writer.is_none() {
-                    let channels = chunk.channels;
-                    let actual_sample_rate = chunk.sample_rate;
-                    info!("Writer for \"{}\": {}ch {}Hz", path.display(), channels, actual_sample_rate);
-                    writer = Some(create_writer(format, &path, channels, actual_sample_rate, &mp3_config, &opus_config)?);
-                }
-
-                // Update last-active timestamp when audio is non-silent.
-                if !chunk.samples.is_empty() {
-                    let mean_sq = chunk.samples.iter().map(|s| s * s).sum::<f32>() / chunk.samples.len() as f32;
-                    if mean_sq.sqrt() > SILENCE_RMS_THRESHOLD {
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-                        last_active_ms.store(now_ms, Ordering::Relaxed);
+            // Exit on channel disconnect (all senders dropped — the normal
+            // path) OR on the stop flag. The flag is the safety net for
+            // leaked senders: an orphaned Core Audio thread can hold a
+            // Sender clone forever, and the writer must still finalize.
+            loop {
+                if thread_stop_flag.load(Ordering::Relaxed) {
+                    let mut drained = 0;
+                    while drained < STOP_DRAIN_MAX_CHUNKS {
+                        match receiver.try_recv() {
+                            Ok(chunk) => {
+                                if let Err(e) = write_one(&mut writer, &chunk, &mut chunk_count, format, &path, &mp3_config, &opus_config, &last_active_ms) {
+                                    write_error = Some(e);
+                                    break;
+                                }
+                                drained += 1;
+                            }
+                            Err(_) => break,
+                        }
                     }
+                    break;
                 }
-
-                writer.as_mut().unwrap().write_chunk(&chunk)?;
-                chunk_count += 1;
-                if chunk_count % FLUSH_INTERVAL_CHUNKS == 0 {
-                    writer.as_mut().unwrap().flush()?;
+                match receiver.recv_timeout(RECV_POLL_INTERVAL) {
+                    Ok(chunk) => {
+                        if let Err(e) = write_one(&mut writer, &chunk, &mut chunk_count, format, &path, &mp3_config, &opus_config, &last_active_ms) {
+                            write_error = Some(e);
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
 
-            if let Some(w) = writer {
-                w.finalize()?;
-                info!("Audio writer finalized: \"{}\"", path.display());
+            // Always attempt to finalize, even after a write error, so the
+            // file on disk is as playable as possible.
+            let finalize_result = if let Some(w) = writer.take() {
+                w.finalize().map(|_| {
+                    info!("Audio writer finalized: \"{}\"", path.display());
+                })
             } else {
                 // No chunks received, create an empty file with fallback params
-                let w = create_writer(format, &path, 1, sample_rate, &mp3_config, &opus_config)?;
-                w.finalize()?;
-                info!("Audio writer finalized (empty): \"{}\"", path.display());
+                create_writer(format, &path, 1, sample_rate, &mp3_config, &opus_config)
+                    .and_then(|w| w.finalize())
+                    .map(|_| {
+                        info!("Audio writer finalized (empty): \"{}\"", path.display());
+                    })
+            };
+
+            match write_error {
+                Some(e) => {
+                    if let Err(fe) = finalize_result {
+                        error!("Audio writer finalize also failed for \"{}\": {}", path.display(), fe);
+                    }
+                    Err(e)
+                }
+                None => finalize_result,
             }
-            Ok(())
         });
 
         Ok(AudioWriterHandle {
             thread: Some(thread),
+            stop_flag,
         })
     }
 
+    /// Signal the writer to stop and wait (bounded) for it to finalize.
+    /// If the thread does not finish within `FINISH_TIMEOUT` (e.g. hung on
+    /// disk IO), it is detached rather than hanging the caller forever.
     pub fn finish(mut self) -> Result<(), AudioError> {
+        self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread.take() {
+            let deadline = Instant::now() + FINISH_TIMEOUT;
+            while !handle.is_finished() {
+                if Instant::now() >= deadline {
+                    error!("Audio writer thread did not finish within {:?} — detaching", FINISH_TIMEOUT);
+                    return Err(AudioError::StreamError(
+                        "writer thread hung; file may be missing trailing data".into(),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
             match handle.join() {
                 Ok(result) => result,
                 Err(e) => {
@@ -556,5 +645,86 @@ impl AudioWriterHandle {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::bounded;
+
+    fn chunk(samples: usize) -> AudioChunk {
+        AudioChunk {
+            samples: vec![0.1f32; samples],
+            channels: 1,
+            sample_rate: 48000,
+            timestamp_us: 0,
+        }
+    }
+
+    fn start_writer(path: &PathBuf, receiver: Receiver<AudioChunk>) -> AudioWriterHandle {
+        AudioWriterHandle::start(
+            AudioFormat::Opus,
+            path.clone(),
+            48000,
+            Mp3Config::default(),
+            OpusConfig::default(),
+            receiver,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .unwrap()
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mn-writer-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn finish_completes_on_disconnect() {
+        let path = temp_path("disconnect.opus");
+        let (sender, receiver) = bounded(64);
+        let handle = start_writer(&path, receiver);
+        sender.send(chunk(960)).unwrap();
+        drop(sender);
+        handle.finish().unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > 0);
+    }
+
+    /// Regression test for the AirPods-disconnect hang: an orphaned Core
+    /// Audio restart thread can hold a Sender clone forever. finish() must
+    /// still finalize the file in bounded time instead of joining forever.
+    #[test]
+    fn finish_completes_with_leaked_sender() {
+        let path = temp_path("leaked.opus");
+        let (sender, receiver) = bounded(64);
+        let handle = start_writer(&path, receiver);
+        sender.send(chunk(960)).unwrap();
+
+        let _leaked = sender.clone(); // simulates the orphaned thread's clone
+        // (the recorder's own copy is dropped on stop; leaked one stays)
+        drop(sender);
+
+        let started = Instant::now();
+        handle.finish().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "finish() took {:?} with a leaked sender",
+            started.elapsed()
+        );
+        assert!(std::fs::metadata(&path).unwrap().len() > 0);
+    }
+
+    /// A source that never sends anything must still produce a valid
+    /// (empty) file on finish.
+    #[test]
+    fn finish_writes_empty_file_when_no_chunks() {
+        let path = temp_path("empty.opus");
+        let (sender, receiver) = bounded::<AudioChunk>(64);
+        let handle = start_writer(&path, receiver);
+        let _leaked = sender; // keep the channel connected the whole time
+        handle.finish().unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > 0);
     }
 }

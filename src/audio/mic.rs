@@ -189,6 +189,8 @@ mod platform {
                     self.running.store(false, Ordering::SeqCst);
                     self.sender_handle.lock().unwrap().take();
                     let _: () = msg_send![&input_node, removeTapOnBus: 0u64];
+                    // Still lost — lets the ticker retry this source later.
+                    self.device_lost.store(true, Ordering::SeqCst);
                     return Err(AudioError::DeviceError(format!("AVAudioEngine start failed: {}", msg)));
                 }
                 ok.as_bool()
@@ -198,6 +200,8 @@ mod platform {
                 self.running.store(false, Ordering::SeqCst);
                 self.sender_handle.lock().unwrap().take();
                 unsafe { let _: () = msg_send![&input_node, removeTapOnBus: 0u64]; }
+                // Still lost — lets the ticker retry this source later.
+                self.device_lost.store(true, Ordering::SeqCst);
                 return Err(AudioError::DeviceError("AVAudioEngine failed to start".into()));
             }
 
@@ -286,6 +290,19 @@ mod platform {
 
         fn is_device_lost(&self) -> bool {
             self.device_lost.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for MicSource {
+        fn drop(&mut self) {
+            // A source can be dropped without stop() ever being called — e.g.
+            // a failed or timed-out device-loss restart discards the box.
+            // Without this, the AVAudioEngine keeps capturing forever, pegging
+            // coreaudiod and holding a Sender clone that blocks the writer.
+            if self.engine.is_some() || self._observer.is_some() {
+                warn!("MicSource dropped while engine still alive — stopping engine");
+                let _ = AudioSource::stop(self);
+            }
         }
     }
 }

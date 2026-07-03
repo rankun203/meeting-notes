@@ -139,9 +139,11 @@ impl SessionManager {
             let mut reconnect_attempts: HashMap<(String, String), u32> = HashMap::new();
             loop {
                 interval.tick().await;
-                if event_tx.receiver_count() == 0 {
-                    continue;
-                }
+                // NOTE: never gate this loop on event_tx.receiver_count().
+                // Device-loss recovery and auto-stop must run even with no
+                // web page connected — otherwise a mic lost while the browser
+                // is closed silently records nothing forever. Broadcasting to
+                // zero receivers is harmless (send just returns Err).
 
                 // Phase 1: broadcast file sizes, detect silent sources, find device-lost sessions.
                 let mut device_lost_sessions: Vec<String> = Vec::new();
@@ -261,19 +263,19 @@ impl SessionManager {
                         let timed = tokio::time::timeout(RESTART_TIMEOUT, join).await;
 
                         // Outcomes:
-                        //   Ok(Ok(Ok((label, source))))  -> success, put back
-                        //   Ok(Ok(Err((label, e))))      -> restart returned an error, source dropped
-                        //   Ok(Err(join_err))            -> panicked, source dropped during unwind
-                        //   Err(_)                       -> hung past timeout, source stuck in orphan thread
+                        //   Ok(Ok(Ok((label, source))))      -> success, put back
+                        //   Ok(Ok(Err((label, source, e))))  -> restart failed, source returned for retry
+                        //   Ok(Err(join_err))                -> panicked, source dropped during unwind
+                        //   Err(_)                           -> hung past timeout, source stuck in orphan thread
                         enum Outcome {
                             Ok(Box<dyn AudioSource>),
-                            Err(crate::audio::source::AudioError),
+                            Err(Box<dyn AudioSource>, crate::audio::source::AudioError),
                             Panicked,
                             TimedOut,
                         }
                         let outcome = match timed {
                             Ok(Ok(Ok((_label, source)))) => Outcome::Ok(source),
-                            Ok(Ok(Err((_label, e)))) => Outcome::Err(e),
+                            Ok(Ok(Err((_label, source, e)))) => Outcome::Err(source, e),
                             Ok(Err(join_err)) => {
                                 warn!("Mic reconnect thread panicked for session {} source {}: {}", sid, label, join_err);
                                 Outcome::Panicked
@@ -316,17 +318,20 @@ impl SessionManager {
                                 });
                                 info!("Reconnected source for session {}: {}", sid, label);
                             }
-                            Outcome::Err(e) => {
-                                // Source returned from the blocking task but
-                                // failed to restart — it was dropped inside the
-                                // closure on the error path. Bump retry counter;
-                                // surface notice at the limit.
+                            Outcome::Err(source, e) => {
+                                // Restart failed but the source came back.
+                                // Under budget: put it back (still flagged
+                                // device-lost) so the next tick retries.
+                                // At the limit: drop it — its Drop impl stops
+                                // any live engine — and surface a notice.
                                 let key = (sid.clone(), label.clone());
                                 let attempts = reconnect_attempts.entry(key).or_insert(0);
                                 *attempts += 1;
                                 warn!("Mic reconnect failed for session {} source {} (attempt {}): {}", sid, label, attempts, e);
-                                recorder.clear_source(&label);
-                                if *attempts >= MAX_RECONNECT_ATTEMPTS {
+                                if *attempts < MAX_RECONNECT_ATTEMPTS {
+                                    recorder.put_back_source(&label, source);
+                                } else {
+                                    recorder.clear_source(&label);
                                     let notice = max_attempts_notice();
                                     session.notices.push(notice.clone());
                                     let _ = event_tx_ref.send(ServerEvent::SessionNotice {
@@ -591,7 +596,15 @@ impl SessionManager {
             }
         }
         if let Some(mut recorder) = recorder_to_stop {
-            let _ = recorder.stop();
+            // Blocking Core Audio calls — keep them off the async runtime and
+            // don't let a wedged stop block the delete response.
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                tokio::task::spawn_blocking(move || {
+                    let _ = recorder.stop();
+                }),
+            )
+            .await;
         }
         // Delete the session directory and all its files from disk
         if session_dir.exists() {
@@ -673,7 +686,10 @@ impl SessionManager {
         // Guard against concurrent start (session may have been modified while unlocked)
         if session.state == SessionState::Recording {
             // Another start_recording won the race — stop what we just started
-            let _ = recorder.stop();
+            // (off the runtime; blocking Core Audio calls)
+            tokio::task::spawn_blocking(move || {
+                let _ = recorder.stop();
+            });
             return Err("session is already recording".to_string());
         }
 
@@ -723,13 +739,39 @@ impl SessionManager {
         };
         // Write lock released here
 
-        // Phase 2: Stop recorder (blocking) without holding any lock.
+        // Phase 2: Stop recorder without holding any lock, on a blocking
+        // thread with a hard timeout. Core Audio calls (and writer joins)
+        // can wedge; the session must still end up cleanly Stopped with
+        // metadata written, no matter what — otherwise the HTTP request
+        // hangs forever and blocks graceful shutdown with it.
         // Force-stop path: no recorder means we just finalize the session
         // metadata with whatever files exist on disk.
+        const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
         let mut force_stopped = false;
+        let mut stop_error: Option<String> = None;
         if let Some(mut rec) = recorder {
-            if let Err(e) = rec.stop() {
-                return Err(e.to_string());
+            let timed = tokio::time::timeout(
+                STOP_TIMEOUT,
+                tokio::task::spawn_blocking(move || rec.stop()),
+            )
+            .await;
+            match timed {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => {
+                    warn!("Session {} stopped with errors: {}", id, e);
+                    stop_error = Some(e.to_string());
+                }
+                Ok(Err(join_err)) => {
+                    warn!("Recorder stop thread panicked for session {}: {}", id, join_err);
+                    force_stopped = true;
+                }
+                Err(_) => {
+                    warn!(
+                        "Recorder stop timed out after {:?} for session {} — abandoning recorder thread",
+                        STOP_TIMEOUT, id
+                    );
+                    force_stopped = true;
+                }
             }
         } else {
             warn!("Force-stopping session {} with no active recorder", id);
@@ -756,6 +798,26 @@ impl SessionManager {
                         Most decoders can still play the partial files."
                             .to_string(),
                     ),
+                    created_at: Utc::now(),
+                };
+                session.notices.push(notice.clone());
+                self.emit(ServerEvent::SessionNotice {
+                    id: id.to_string(),
+                    notice,
+                });
+            }
+            if let Some(err) = stop_error {
+                let notice = Notice {
+                    key: None,
+                    level: NoticeLevel::Warning,
+                    message: "Recording stopped, but with errors — audio files may be incomplete".to_string(),
+                    platform: Some(std::env::consts::OS.to_string()),
+                    details: Some(format!(
+                        "One or more sources or encoders failed while stopping: {}. \
+                        The recorded files were finalized as far as possible and are \
+                        usually still playable.",
+                        err
+                    )),
                     created_at: Utc::now(),
                 };
                 session.notices.push(notice.clone());
