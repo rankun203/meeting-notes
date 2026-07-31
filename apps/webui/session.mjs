@@ -305,13 +305,24 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   // Sync notes when updated externally
   useEffect(() => { setNotes(session?.notes || ''); }, [session?.notes]);
 
+  // Move to a point in the meeting. Highlighting and auto-scrolling the
+  // transcript is driven by playbackTime alone, so this works whether or not
+  // the session has audio — a transcript-only session just doesn't play.
+  function jumpTo(t) {
+    if (t == null || isNaN(t)) return;
+    setActiveTab('transcript');
+    setPlaybackTime(t);
+    if (playerRef.current) playerRef.current.seekAndPlay(t);
+  }
+
   // Handle route query params (content_panel, jump)
   useEffect(() => {
     if (!routeQuery || !session) return;
     if (routeQuery.contentPanel) {
       setActiveTab(routeQuery.contentPanel);
     }
-    if (routeQuery.jump != null && playerRef.current) {
+    if (routeQuery.jump != null) {
+      setPlaybackTime(routeQuery.jump);
       setTimeout(() => {
         if (playerRef.current) playerRef.current.seekAndPlay(routeQuery.jump);
       }, 300); // small delay for player to mount
@@ -1045,9 +1056,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
               activeTab === 'transcript' && jsx(TranscriptViewer, {
                 sessionId: s.id,
                 currentTime: playbackTime,
-                onSeek: (t) => {
-                  if (playerRef.current) playerRef.current.seekAndPlay(t);
-                },
+                onSeek: jumpTo,
                 onSpeakerUpdate: onRefresh,
               }),
               activeTab === 'summary' && jsxs('div', { className: 'mt-2', children: [
@@ -1144,11 +1153,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                                   e.preventDefault();
                                   e.stopPropagation();
                                   const url = new URL(href, window.location.origin);
-                                  const jump = parseFloat(url.searchParams.get('jump'));
-                                  if (!isNaN(jump) && playerRef.current) {
-                                    setActiveTab('transcript');
-                                    playerRef.current.seekAndPlay(jump);
-                                  }
+                                  jumpTo(parseFloat(url.searchParams.get('jump')));
                                 };
                               }
                             });

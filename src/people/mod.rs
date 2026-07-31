@@ -222,6 +222,14 @@ impl PeopleManager {
     }
 
     /// Add a confirmed embedding to a person's store and recompute centroid.
+    ///
+    /// An empty embedding is accepted and ignored. Sessions imported from an
+    /// external transcript (e.g. Teams) carry speaker names but no voice
+    /// samples, so confirming one of their speakers has nothing to contribute.
+    /// Storing the empty sample anyway would pull the centroid toward zero —
+    /// it adds nothing to the sum but still counts in the divisor — and would
+    /// leave a brand-new person with a zero-dimension centroid that can never
+    /// match again.
     pub async fn add_embedding(
         &self,
         person_id: &str,
@@ -234,6 +242,10 @@ impl PeopleManager {
             if !people.contains_key(person_id) {
                 return Err("person not found".to_string());
             }
+        }
+
+        if embedding.is_empty() {
+            return Ok(());
         }
 
         let mut stores = self.embeddings.write().await;

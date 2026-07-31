@@ -67,6 +67,9 @@ pub struct Session {
     pub auto_stop: bool,
     /// When summary generation started (in-memory only, not persisted).
     pub summary_started_at: Option<DateTime<Utc>>,
+    /// Duration carried over from metadata.json. Only used when the session has
+    /// no audio files to measure — imported transcript-only sessions.
+    pub duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,6 +197,7 @@ impl Session {
             notes: None,
             auto_stop: false,
             summary_started_at: None,
+            duration_secs: None,
         }
     }
 
@@ -240,6 +244,7 @@ impl Session {
             notes: meta.notes.clone(),
             auto_stop: meta.auto_stop,
             summary_started_at: None,
+            duration_secs: meta.duration_secs,
         }
     }
 
@@ -248,7 +253,7 @@ impl Session {
     }
 
     pub fn to_metadata(&self) -> SessionMetadata {
-        let duration_secs = Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps);
+        let duration_secs = self.effective_duration();
         SessionMetadata {
             session_id: self.id.clone(),
             name: self.name.clone(),
@@ -298,7 +303,7 @@ impl Session {
                 std::fs::metadata(&path).ok().map(|m| (f.clone(), m.len()))
             })
             .collect();
-        let duration_secs = Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps);
+        let duration_secs = self.effective_duration();
         let transcript_available = self.config.output_dir.join("transcript.json").exists();
         let summary_available = self.config.output_dir.join("summary.json").exists();
         // unconfirmed_speakers is set to 0 here; enriched from FilesDb by the caller if needed.
@@ -331,6 +336,15 @@ impl Session {
             notes: self.notes.clone(),
             auto_stop: self.auto_stop,
         }
+    }
+
+    /// Duration of the session: measured from the audio files when there are
+    /// any, otherwise the value carried in metadata.json. Sessions imported
+    /// from an external transcript have no audio to measure, so without the
+    /// fallback their duration would be dropped on every metadata rewrite.
+    fn effective_duration(&self) -> Option<f64> {
+        Self::compute_duration(&self.config.output_dir, &self.files, self.config.mp3.bitrate_kbps)
+            .or(self.duration_secs)
     }
 
     /// Compute duration from audio files (max across all tracks).
