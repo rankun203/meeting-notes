@@ -632,6 +632,10 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
   const s = session;
   const audioFiles = s.files.filter(f => f.endsWith('.wav') || f.endsWith('.mp3') || f.endsWith('.opus'));
   const hasAudio = s.state === 'stopped' && audioFiles.length > 0;
+  // A stopped session with no audio files never encoded anything — an imported
+  // transcript. Encoder settings are meaningless for it, and the Format tile
+  // falls back to claiming WAV when no codec config is present, so hide it.
+  const audioless = s.state === 'stopped' && audioFiles.length === 0;
 
   return jsx('div', {
     className: 'h-full flex flex-col',
@@ -736,7 +740,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                       })
                     : jsx('p', { className: 'text-sm font-medium', children: (fields?.language?.options?.find(o => o.value === s.language)?.label) || s.language }),
                 ]}),
-                jsxs('div', { children: [
+                !audioless && jsxs('div', { children: [
                   jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-0.5', children: 'Format' }),
                   jsx('p', { className: 'text-sm font-medium', children:
                     s.mp3

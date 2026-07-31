@@ -81,8 +81,11 @@ pub struct SessionInfo {
     pub language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summarization_instruction: Option<String>,
-    pub raw_sample_rate: u32,
-    pub format: AudioFormat,
+    // Absent for a session with no audio — see Session::has_audio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_sample_rate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<AudioFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mp3: Option<Mp3Config>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,13 +136,17 @@ pub struct SessionMetadata {
     #[serde(default = "default_stopped_state")]
     pub state: SessionState,
     pub language: String,
-    pub format: AudioFormat,
-    #[serde(default = "default_sample_rate", alias = "sample_rate")]
-    pub raw_sample_rate: u32,
-    #[serde(default)]
-    pub mp3: Mp3Config,
-    #[serde(default)]
-    pub opus: OpusConfig,
+    // Encoder settings describe the audio files, so they are only written when
+    // the session actually has some. A session imported from an external
+    // transcript has no audio and must not claim a codec it never used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<AudioFormat>,
+    #[serde(default, alias = "sample_rate", skip_serializing_if = "Option::is_none")]
+    pub raw_sample_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mp3: Option<Mp3Config>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opus: Option<OpusConfig>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
@@ -215,10 +222,10 @@ impl Session {
         let config = SessionConfig {
             language: meta.language.clone(),
             summarization_instruction: None,
-            raw_sample_rate: meta.raw_sample_rate,
-            format: meta.format,
-            mp3: meta.mp3,
-            opus: meta.opus,
+            raw_sample_rate: meta.raw_sample_rate.unwrap_or_else(default_sample_rate),
+            format: meta.format.unwrap_or_default(),
+            mp3: meta.mp3.unwrap_or_default(),
+            opus: meta.opus.unwrap_or_default(),
             sources: None,
             output_dir: recordings_dir.join(&meta.session_id),
         };
@@ -259,10 +266,10 @@ impl Session {
             name: self.name.clone(),
             state: self.state,
             language: self.config.language.clone(),
-            format: self.config.format,
-            raw_sample_rate: self.config.raw_sample_rate,
-            mp3: self.config.mp3,
-            opus: self.config.opus,
+            format: self.has_audio().then_some(self.config.format),
+            raw_sample_rate: self.has_audio().then_some(self.config.raw_sample_rate),
+            mp3: self.has_audio().then_some(self.config.mp3),
+            opus: self.has_audio().then_some(self.config.opus),
             created_at: self.created_at,
             updated_at: self.updated_at,
             started_at: self.started_at,
@@ -315,10 +322,10 @@ impl Session {
             state: self.state,
             language: self.config.language.clone(),
             summarization_instruction: self.config.summarization_instruction.clone(),
-            raw_sample_rate: self.config.raw_sample_rate,
-            format: self.config.format,
-            mp3: if self.config.format == AudioFormat::Mp3 { Some(self.config.mp3) } else { None },
-            opus: if self.config.format == AudioFormat::Opus { Some(self.config.opus) } else { None },
+            raw_sample_rate: self.has_audio().then_some(self.config.raw_sample_rate),
+            format: self.has_audio().then_some(self.config.format),
+            mp3: (self.has_audio() && self.config.format == AudioFormat::Mp3).then_some(self.config.mp3),
+            opus: (self.has_audio() && self.config.format == AudioFormat::Opus).then_some(self.config.opus),
             sources: self.config.sources.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -338,6 +345,14 @@ impl Session {
         }
     }
 
+    /// Whether this session deals in audio at all. False only for a stopped
+    /// session that produced no audio files — an imported transcript, or a
+    /// recording that never wrote anything. A session still being set up or
+    /// recording counts as audio-bearing even before its first file lands.
+    pub fn has_audio(&self) -> bool {
+        self.state != SessionState::Stopped || self.files.iter().any(|f| is_audio_file(f))
+    }
+
     /// Duration of the session: measured from the audio files when there are
     /// any, otherwise the value carried in metadata.json. Sessions imported
     /// from an external transcript have no audio to measure, so without the
@@ -350,6 +365,7 @@ impl Session {
     /// Compute duration from audio files (max across all tracks).
     /// WAV: reads 44-byte header only (fast). MP3: estimates from file size and bitrate.
     /// Opus: reads last Ogg page granule position for exact duration.
+    /// Returns None when the session has no audio files to measure.
     pub(crate) fn compute_duration(dir: &std::path::Path, files: &[String], mp3_bitrate_kbps: u32) -> Option<f64> {
         let mut max_dur: Option<f64> = None;
         for f in files {
@@ -382,6 +398,12 @@ impl Session {
         }
         max_dur
     }
+}
+
+/// Whether a filename in a session folder is one of the recorded audio tracks,
+/// as opposed to a transcript, summary or metadata sidecar.
+fn is_audio_file(name: &str) -> bool {
+    name.ends_with(".wav") || name.ends_with(".mp3") || name.ends_with(".opus")
 }
 
 /// Read the exact duration of an Ogg Opus file by finding the last Ogg page's

@@ -270,10 +270,9 @@ def main() -> int:
         "name": args.name,
         "state": "stopped",
         "language": args.language,
-        "format": "opus",
-        "raw_sample_rate": 48000,
-        "mp3": {"bitrate_kbps": 64, "sample_rate": 16000},
-        "opus": {"bitrate_kbps": 32, "complexity": 5},
+        # No format/mp3/opus/raw_sample_rate: those describe an encoder that
+        # never ran. The daemon treats them as optional and the web UI hides
+        # the Format tile for a stopped session with no audio files.
         "created_at": rfc3339(started),
         "updated_at": rfc3339(now),
         "started_at": rfc3339(started),
