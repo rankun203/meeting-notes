@@ -17,7 +17,10 @@ use meeting_notes_daemon::tags::TagsManager;
 fn install_signal_handlers() {
     unsafe {
         for sig in [libc::SIGSEGV, libc::SIGBUS, libc::SIGABRT] {
-            libc::signal(sig, crash_handler as libc::sighandler_t);
+            libc::signal(
+                sig,
+                crash_handler as *const () as libc::sighandler_t,
+            );
         }
     }
 }

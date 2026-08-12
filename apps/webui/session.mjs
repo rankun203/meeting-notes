@@ -886,17 +886,19 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
               ]}),
               jsxs('div', { className: 'mb-3 rounded-lg border border-red-200/80 dark:border-red-900/50 bg-white/50 dark:bg-black/10 px-3 py-2.5', children: [
                 jsx('p', { className: 'text-xs font-medium text-red-700 dark:text-red-300 mb-2', children: 'Auto-stop when:' }),
-                jsxs('div', { className: 'space-y-2 text-xs text-red-700 dark:text-red-300', children: [
-                  jsxs('div', { className: 'flex items-center gap-2 select-none', children: [
-                    jsx('input', {
-                      type: 'checkbox',
-                      checked: s.auto_stop?.system_audio_silence_secs != null,
-                      onChange: e => updateAutoStop({
-                        system_audio_silence_secs: e.target.checked ? Math.min(86400, Math.max(1, Number(autoStopSilenceSecs) || 60)) : null,
+                jsxs('div', { className: 'grid text-xs text-red-700 dark:text-red-300', children: [
+                  jsxs('div', { className: 'flex min-h-7 items-center gap-2 select-none', children: [
+                    jsxs('label', { className: 'flex items-center gap-2 cursor-pointer', children: [
+                      jsx('input', {
+                        type: 'checkbox',
+                        checked: s.auto_stop?.system_audio_silence_secs != null,
+                        onChange: e => updateAutoStop({
+                          system_audio_silence_secs: e.target.checked ? Math.min(86400, Math.max(1, Number(autoStopSilenceSecs) || 60)) : null,
+                        }),
+                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
                       }),
-                      className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
-                    }),
-                    jsx('span', { children: 'System audio is silent for' }),
+                      jsx('span', { children: 'System audio is silent for' }),
+                    ]}),
                     jsx('input', {
                       type: 'number',
                       min: 1,
@@ -917,7 +919,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                     jsx('span', { children: 'seconds' }),
                   ]}),
                   jsxs('label', {
-                    className: `flex items-center gap-2 select-none ${capabilities?.auto_stop_screen_lock === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
+                    className: `flex min-h-7 items-center gap-2 select-none ${capabilities?.auto_stop_screen_lock === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
                     title: capabilities?.auto_stop_screen_lock === false ? 'Not supported on this server' : 'Stop when the current macOS user locks the screen',
                     children: [
                       jsx('input', {
@@ -931,7 +933,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                     ],
                   }),
                   jsxs('label', {
-                    className: `flex items-center gap-2 select-none ${capabilities?.auto_stop_system_sleep === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
+                    className: `flex min-h-7 items-center gap-2 select-none ${capabilities?.auto_stop_system_sleep === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
                     title: capabilities?.auto_stop_system_sleep === false ? 'Not supported on this server' : 'Stop and finalize audio before macOS sleeps',
                     children: [
                       jsx('input', {
