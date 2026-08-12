@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,41 @@ pub struct Notice {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AutoStopSettings {
+    /// Stop after this many seconds without non-silent system audio. `None`
+    /// disables silence-based auto-stop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_audio_silence_secs: Option<u64>,
+    #[serde(default)]
+    pub screen_lock: bool,
+    #[serde(default)]
+    pub system_sleep: bool,
+}
+
+fn deserialize_auto_stop<'de, D>(deserializer: D) -> Result<AutoStopSettings, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredAutoStop {
+        Legacy(bool),
+        Settings(AutoStopSettings),
+    }
+
+    Ok(match StoredAutoStop::deserialize(deserializer)? {
+        // Before dedicated settings existed, `true` meant 60 seconds of
+        // system-audio silence. Preserve that behavior when loading old data.
+        StoredAutoStop::Legacy(true) => AutoStopSettings {
+            system_audio_silence_secs: Some(60),
+            ..AutoStopSettings::default()
+        },
+        StoredAutoStop::Legacy(false) => AutoStopSettings::default(),
+        StoredAutoStop::Settings(settings) => settings,
+    })
+}
+
 pub struct Session {
     pub id: String,
     pub name: Option<String>,
@@ -55,6 +90,8 @@ pub struct Session {
     pub source_meta: Vec<SourceMetadata>,
     /// In-memory notices (not persisted to disk).
     pub notices: Vec<Notice>,
+    /// Live notice keys hidden by the user until that condition resolves.
+    pub dismissed_notice_keys: HashSet<String>,
     /// Current processing state (transcribing, matching, completed, failed).
     pub processing_state: Option<String>,
     /// Persisted audio extraction job info (for resume on restart).
@@ -63,8 +100,7 @@ pub struct Session {
     pub tags: Vec<String>,
     /// User notes for this session.
     pub notes: Option<String>,
-    /// When true, auto-stop recording after system audio is silent for 1 minute.
-    pub auto_stop: bool,
+    pub auto_stop: AutoStopSettings,
     /// When summary generation started (in-memory only, not persisted).
     pub summary_started_at: Option<DateTime<Utc>>,
     /// Duration carried over from metadata.json. Only used when the session has
@@ -113,7 +149,7 @@ pub struct SessionInfo {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
-    pub auto_stop: bool,
+    pub auto_stop: AutoStopSettings,
 }
 
 /// Persisted state of an audio extraction job (RunPod).
@@ -161,8 +197,8 @@ pub struct SessionMetadata {
     pub tags: Vec<String>,
     #[serde(default)]
     pub notes: Option<String>,
-    #[serde(default)]
-    pub auto_stop: bool,
+    #[serde(default, deserialize_with = "deserialize_auto_stop")]
+    pub auto_stop: AutoStopSettings,
 }
 
 fn default_stopped_state() -> SessionState {
@@ -198,11 +234,12 @@ impl Session {
             files: Vec::new(),
             source_meta: Vec::new(),
             notices: Vec::new(),
+            dismissed_notice_keys: HashSet::new(),
             processing_state: None,
             audio_extraction: None,
             tags: Vec::new(),
             notes: None,
-            auto_stop: false,
+            auto_stop: AutoStopSettings::default(),
             summary_started_at: None,
             duration_secs: None,
         }
@@ -241,6 +278,7 @@ impl Session {
             files,
             source_meta: meta.sources.clone(),
             notices: Vec::new(),
+            dismissed_notice_keys: HashSet::new(),
             processing_state: if meta.audio_extraction.as_ref().map_or(false, |j| j.status == "in_progress") {
                 Some("extracting".to_string())
             } else {
@@ -459,3 +497,49 @@ fn ogg_opus_duration(path: &std::path::Path) -> Option<f64> {
     granule_pos.map(|gp| (gp.saturating_sub(pre_skip)) as f64 / 48000.0)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn metadata_with(auto_stop: serde_json::Value) -> SessionMetadata {
+        serde_json::from_value(json!({
+            "session_id": "legacy-session",
+            "language": "en",
+            "created_at": "2026-08-12T00:00:00Z",
+            "updated_at": "2026-08-12T00:00:00Z",
+            "auto_stop": auto_stop,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn legacy_auto_stop_true_migrates_to_sixty_second_silence() {
+        let metadata = metadata_with(json!(true));
+        assert_eq!(metadata.auto_stop.system_audio_silence_secs, Some(60));
+        assert!(!metadata.auto_stop.screen_lock);
+        assert!(!metadata.auto_stop.system_sleep);
+    }
+
+    #[test]
+    fn dedicated_auto_stop_settings_round_trip() {
+        let metadata = metadata_with(json!({
+            "system_audio_silence_secs": 90,
+            "screen_lock": true,
+            "system_sleep": true,
+        }));
+        assert_eq!(
+            metadata.auto_stop,
+            AutoStopSettings {
+                system_audio_silence_secs: Some(90),
+                screen_lock: true,
+                system_sleep: true,
+            }
+        );
+
+        let serialized = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(serialized["auto_stop"]["system_audio_silence_secs"], 90);
+        assert_eq!(serialized["auto_stop"]["screen_lock"], true);
+        assert_eq!(serialized["auto_stop"]["system_sleep"], true);
+    }
+}

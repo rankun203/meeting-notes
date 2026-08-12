@@ -8,6 +8,8 @@ use meeting_notes_daemon::filesdb::FilesDb;
 use meeting_notes_daemon::llm::secrets::LlmSecrets;
 use meeting_notes_daemon::people::PeopleManager;
 use meeting_notes_daemon::server;
+#[cfg(target_os = "macos")]
+use meeting_notes_daemon::session::AutoStopTrigger;
 use meeting_notes_daemon::session::SessionManager;
 use meeting_notes_daemon::settings::AppSettings;
 use meeting_notes_daemon::tags::TagsManager;
@@ -102,6 +104,52 @@ async fn main() {
             let manager = SessionManager::new(recordings_dir.clone());
             manager.load_from_disk().await;
             manager.start_file_size_ticker();
+
+            #[cfg(target_os = "macos")]
+            match meeting_notes_daemon::system_events::start() {
+                Ok((mut system_events, support)) => {
+                    info!(
+                        "macOS auto-stop events enabled (screen lock: {}, system sleep: {})",
+                        support.screen_lock, support.system_sleep
+                    );
+                    let event_manager = manager.clone();
+                    tokio::spawn(async move {
+                        while let Some(event) = system_events.recv().await {
+                            match event {
+                                meeting_notes_daemon::system_events::SystemEvent::ScreenLocked => {
+                                    info!("macOS screen-lock event received");
+                                    let stopped = event_manager
+                                        .auto_stop_recordings(AutoStopTrigger::ScreenLock)
+                                        .await;
+                                    if stopped > 0 {
+                                        info!("Screen locked — auto-stopped {} recording(s)", stopped);
+                                    }
+                                }
+                                meeting_notes_daemon::system_events::SystemEvent::SystemWillSleep(request) => {
+                                    info!("macOS system-sleep event received");
+                                    let stopped = tokio::time::timeout(
+                                        std::time::Duration::from_secs(25),
+                                        event_manager.auto_stop_recordings(AutoStopTrigger::SystemSleep),
+                                    )
+                                    .await;
+                                    match stopped {
+                                        Ok(count) if count > 0 => info!(
+                                            "System sleeping — auto-stopped {} recording(s)",
+                                            count
+                                        ),
+                                        Err(_) => tracing::warn!(
+                                            "System sleep: stopping recordings timed out after 25s"
+                                        ),
+                                        _ => {}
+                                    }
+                                    request.allow();
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(e) => tracing::warn!("Could not monitor macOS lock/sleep events: {}", e),
+            }
 
             let people_manager = PeopleManager::new(&data_dir);
             people_manager.load_from_disk().await;

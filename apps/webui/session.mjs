@@ -246,7 +246,7 @@ function convertCitations(content, sessionId) {
     .replace(/\)\[/g, ') [');
 }
 
-export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, onSelectPerson, routeQuery }) {
+export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, capabilities, onSelectPerson, routeQuery }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [renaming, setRenaming] = useState(false);
@@ -270,6 +270,10 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   const summaryTimerRef = useRef(null);
   const [thinkingModal, setThinkingModal] = useState(null); // null = closed, string = content
   const thinkingBarRef = useRef(null);
+  const [autoStopSilenceSecs, setAutoStopSilenceSecs] = useState(
+    session?.auto_stop?.system_audio_silence_secs ?? 60
+  );
+  const [dismissedNoticeIds, setDismissedNoticeIds] = useState(() => new Set());
 
   // Summary generation timer — derived from server-provided summary_started_at
   useEffect(() => {
@@ -304,6 +308,10 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
 
   // Sync notes when updated externally
   useEffect(() => { setNotes(session?.notes || ''); }, [session?.notes]);
+  useEffect(() => {
+    setAutoStopSilenceSecs(session?.auto_stop?.system_audio_silence_secs ?? 60);
+  }, [session?.id, session?.auto_stop?.system_audio_silence_secs]);
+  useEffect(() => { setDismissedNoticeIds(new Set()); }, [session?.id]);
 
   // Move to a point in the meeting. Highlighting and auto-scrolling the
   // transcript is driven by playbackTime alone, so this works whether or not
@@ -428,6 +436,42 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
       setAutoStopCountdown(null);
     }
   }, [session?.auto_stop_remaining_secs]);
+
+  function updateAutoStop(patch) {
+    return api(`/sessions/${session.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ auto_stop: patch }),
+    }).catch(err => setError(err.message));
+  }
+
+  function noticeId(notice) {
+    return notice._id || notice.created_at;
+  }
+
+  function dismissNotice(notice) {
+    const id = noticeId(notice);
+    setDismissedNoticeIds(previous => new Set(previous).add(id));
+    // WebSocket-only informational notices are not retained by the server.
+    if (notice._id) return;
+    api(`/sessions/${session.id}/notices/${encodeURIComponent(notice.created_at)}`, { method: 'DELETE' })
+      .catch(err => {
+        setDismissedNoticeIds(previous => {
+          const next = new Set(previous);
+          next.delete(id);
+          return next;
+        });
+        setError(err.message);
+      });
+  }
+
+  function formatNoticeTimestamp(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', second: '2-digit',
+    });
+  }
 
   useEffect(() => {
     if (autoStopDeadlineRef.current == null) return;
@@ -839,27 +883,68 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
               jsxs('div', { className: 'flex items-center gap-2 mb-3', children: [
                 jsx('span', { className: 'w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse-recording' }),
                 jsx('p', { className: 'text-sm font-medium text-red-700 dark:text-red-300', children: 'Recording in progress' }),
-                jsx('label', {
-                  className: 'ml-auto flex items-center gap-1.5 cursor-pointer select-none',
-                  title: 'When system audio stopped receiving new audio for 1 minute, the recording will be automatically stopped',
-                  children: jsxs(Fragment, { children: [
+              ]}),
+              jsxs('div', { className: 'mb-3 rounded-lg border border-red-200/80 dark:border-red-900/50 bg-white/50 dark:bg-black/10 px-3 py-2.5', children: [
+                jsx('p', { className: 'text-xs font-medium text-red-700 dark:text-red-300 mb-2', children: 'Auto-stop when:' }),
+                jsxs('div', { className: 'space-y-2 text-xs text-red-700 dark:text-red-300', children: [
+                  jsxs('div', { className: 'flex items-center gap-2 select-none', children: [
                     jsx('input', {
                       type: 'checkbox',
-                      checked: s.auto_stop || false,
-                      onChange: (e) => {
-                        api(`/sessions/${s.id}`, {
-                          method: 'PATCH',
-                          body: JSON.stringify({ auto_stop: e.target.checked }),
-                        }).catch(() => {});
-                      },
+                      checked: s.auto_stop?.system_audio_silence_secs != null,
+                      onChange: e => updateAutoStop({
+                        system_audio_silence_secs: e.target.checked ? Math.min(86400, Math.max(1, Number(autoStopSilenceSecs) || 60)) : null,
+                      }),
                       className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
                     }),
-                    jsx('span', {
-                      className: 'text-xs text-red-600 dark:text-red-400',
-                      children: 'Auto-stop',
+                    jsx('span', { children: 'System audio is silent for' }),
+                    jsx('input', {
+                      type: 'number',
+                      min: 1,
+                      max: 86400,
+                      value: autoStopSilenceSecs,
+                      disabled: s.auto_stop?.system_audio_silence_secs == null,
+                      onChange: e => setAutoStopSilenceSecs(e.target.value),
+                      onBlur: e => {
+                        const seconds = Math.min(86400, Math.max(1, Math.round(Number(e.target.value) || 60)));
+                        setAutoStopSilenceSecs(seconds);
+                        if (s.auto_stop?.system_audio_silence_secs != null) {
+                          updateAutoStop({ system_audio_silence_secs: seconds });
+                        }
+                      },
+                      onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur(); },
+                      className: 'w-20 rounded border border-red-200 dark:border-red-800 bg-white dark:bg-gray-900 px-2 py-1 text-xs disabled:opacity-50',
                     }),
+                    jsx('span', { children: 'seconds' }),
                   ]}),
-                }),
+                  jsxs('label', {
+                    className: `flex items-center gap-2 select-none ${capabilities?.auto_stop_screen_lock === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
+                    title: capabilities?.auto_stop_screen_lock === false ? 'Not supported on this server' : 'Stop when the current macOS user locks the screen',
+                    children: [
+                      jsx('input', {
+                        type: 'checkbox',
+                        checked: s.auto_stop?.screen_lock || false,
+                        disabled: capabilities?.auto_stop_screen_lock === false,
+                        onChange: e => updateAutoStop({ screen_lock: e.target.checked }),
+                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
+                      }),
+                      jsx('span', { children: 'User locks the screen' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    className: `flex items-center gap-2 select-none ${capabilities?.auto_stop_system_sleep === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
+                    title: capabilities?.auto_stop_system_sleep === false ? 'Not supported on this server' : 'Stop and finalize audio before macOS sleeps',
+                    children: [
+                      jsx('input', {
+                        type: 'checkbox',
+                        checked: s.auto_stop?.system_sleep || false,
+                        disabled: capabilities?.auto_stop_system_sleep === false,
+                        onChange: e => updateAutoStop({ system_sleep: e.target.checked }),
+                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
+                      }),
+                      jsx('span', { children: 'System is going to sleep' }),
+                    ],
+                  }),
+                ]}),
               ]}),
               s.files.length > 0 && jsx('div', { className: 'flex flex-wrap gap-1.5', children:
                 s.files.map(f => jsx('span', {
@@ -891,7 +976,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
           // Notices
           s.notices && s.notices.length > 0 && jsx('div', {
             className: 'space-y-2',
-            children: s.notices.map((n, i) => {
+            children: s.notices.filter(n => !dismissedNoticeIds.has(noticeId(n))).map((n, i) => {
               const colors = {
                 warning: 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-200',
                 error: 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/10 text-red-800 dark:text-red-200',
@@ -899,7 +984,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
               };
               const icons = { warning: '\u26A0\uFE0F', error: '\u274C', info: '\u2139\uFE0F' };
               return jsxs('div', {
-                key: i,
+                key: noticeId(n) || i,
                 className: `rounded-xl border p-4 ${colors[n.level] || colors.info}`,
                 children: [
                   jsxs('div', { className: 'flex items-start gap-2', children: [
@@ -907,11 +992,25 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                     jsxs('div', { className: 'flex-1 min-w-0', children: [
                       jsx('p', { className: 'text-sm font-medium', children: n.message }),
                       n.details && jsx('p', { className: 'text-xs mt-1 opacity-80', children: n.details }),
-                      n.platform && jsx('span', {
-                        className: 'inline-block mt-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-black/5 dark:bg-white/5',
-                        children: n.platform,
-                      }),
+                      jsxs('div', { className: 'mt-1.5 flex flex-wrap items-center gap-2', children: [
+                        jsx('time', {
+                          dateTime: n.created_at,
+                          className: 'text-[10px] opacity-70 tabular-nums',
+                          children: formatNoticeTimestamp(n.created_at),
+                        }),
+                        n.platform && jsx('span', {
+                          className: 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-black/5 dark:bg-white/5',
+                          children: n.platform,
+                        }),
+                      ]}),
                     ]}),
+                    jsx('button', {
+                      onClick: () => dismissNotice(n),
+                      className: 'flex-shrink-0 p-1 -mt-1 -mr-1 rounded opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition-colors',
+                      title: 'Dismiss notice',
+                      'aria-label': 'Dismiss notice',
+                      children: jsx(CloseIcon, { className: 'w-5 h-5' }),
+                    }),
                   ]}),
                 ],
               });
