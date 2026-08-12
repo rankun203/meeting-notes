@@ -17,6 +17,7 @@ function App() {
   const [offset, setOffset] = useState(0);
   const [sources, setSources] = useState([]);
   const [fields, setFields] = useState({});
+  const [capabilities, setCapabilities] = useState({});
   const [selectedId, setSelectedId] = useState(initialRoute.selectedId ?? null);
   const [showNew, setShowNew] = useState(false);
   const [mobileView, setMobileView] = useState(initialRoute.selectedId ? 'detail' : 'list');
@@ -180,7 +181,11 @@ function App() {
   useWebSocket(handleWsEvent);
 
   useEffect(() => {
-    api('/config').then(d => { setSources(d.sources || []); setFields(d.fields || {}); }).catch(() => {});
+    api('/config').then(d => {
+      setSources(d.sources || []);
+      setFields(d.fields || {});
+      setCapabilities(d.capabilities || {});
+    }).catch(() => {});
   }, []);
 
   const refreshPeople = useCallback(() => {
@@ -271,6 +276,7 @@ function App() {
       isMobile: isMobile,
       onSelectPerson: (personId) => navigateTo(buildPath('people', personId)),
       fields,
+      capabilities,
       routeQuery,
     });
   }

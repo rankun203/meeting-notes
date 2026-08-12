@@ -76,6 +76,7 @@ pub fn session_routes() -> Router<AppState> {
         .route("/sessions/{id}", delete(delete_session))
         .route("/sessions/{id}/recording/start", post(start_recording))
         .route("/sessions/{id}/recording/stop", post(stop_recording))
+        .route("/sessions/{id}/notices/{created_at}", delete(dismiss_notice))
         .route("/sessions/{id}/files", get(get_files))
         .route("/sessions/{id}/files/{filename}", get(serve_file))
         .route("/sessions/{id}/transcript", get(get_transcript))
@@ -179,11 +180,48 @@ async fn rename_session(
             .await
             .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
     }
-    if let Some(auto_stop) = body.get("auto_stop").and_then(|v| v.as_bool()) {
+    if let Some(auto_stop) = body.get("auto_stop") {
+        let (silence_secs, screen_lock, system_sleep) = match auto_stop {
+            // Backward compatibility for older web clients.
+            Value::Bool(enabled) => (
+                Some(if *enabled { Some(60) } else { None }),
+                None,
+                None,
+            ),
+            Value::Object(settings) => {
+                let silence_secs = match settings.get("system_audio_silence_secs") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(value) => match value.as_u64() {
+                        Some(seconds) => Some(Some(seconds)),
+                        None => return Err((StatusCode::BAD_REQUEST, Json(json!({
+                            "error": "auto_stop.system_audio_silence_secs must be a positive integer or null"
+                        })))),
+                    },
+                };
+                let parse_bool = |key: &str| -> Result<Option<bool>, (StatusCode, Json<Value>)> {
+                    match settings.get(key) {
+                        None => Ok(None),
+                        Some(value) => value.as_bool().map(Some).ok_or((
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error": format!("auto_stop.{} must be a boolean", key)})),
+                        )),
+                    }
+                };
+                (
+                    silence_secs,
+                    parse_bool("screen_lock")?,
+                    parse_bool("system_sleep")?,
+                )
+            }
+            _ => return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "auto_stop must be an object"
+            })))),
+        };
         state.session_manager
-            .set_auto_stop(&id, auto_stop)
+            .update_auto_stop(&id, silence_secs, screen_lock, system_sleep)
             .await
-            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
     }
     state.refresh_recordings_index();
     state.session_manager
@@ -209,6 +247,20 @@ async fn delete_session(
         state.refresh_recordings_index();
     }
     result
+}
+
+async fn dismiss_notice(
+    State(state): State<AppState>,
+    Path((id, created_at)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid notice timestamp"}))))?;
+    state.session_manager
+        .dismiss_notice(&id, created_at)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
 }
 
 async fn start_recording(
@@ -376,6 +428,10 @@ async fn get_config() -> Json<Value> {
     let sources = crate::audio::discover_sources();
     Json(json!({
         "sources": sources,
+        "capabilities": {
+            "auto_stop_screen_lock": cfg!(target_os = "macos"),
+            "auto_stop_system_sleep": cfg!(target_os = "macos"),
+        },
         "fields": {
             "language": {
                 "type": "select",

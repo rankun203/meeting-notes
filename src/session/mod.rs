@@ -14,7 +14,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use self::config::SessionConfig;
-use self::session::{Session, SessionInfo, SessionMetadata, SessionState, Notice, NoticeLevel};
+use self::session::{
+    AutoStopSettings, Notice, NoticeLevel, Session, SessionInfo, SessionMetadata, SessionState,
+};
 use crate::audio::mic::MicSource;
 use crate::audio::recorder::{LostSource, Recorder};
 use crate::audio::source::{AudioSource, SourceDescriptor, SourceType};
@@ -79,6 +81,48 @@ pub enum ServerEvent {
         id: String,
         error: String,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum AutoStopTrigger {
+    SystemAudioSilence { seconds: u64 },
+    ScreenLock,
+    SystemSleep,
+}
+
+impl AutoStopTrigger {
+    fn enabled(self, settings: AutoStopSettings) -> bool {
+        match self {
+            Self::SystemAudioSilence { seconds } => {
+                settings.system_audio_silence_secs == Some(seconds)
+            }
+            Self::ScreenLock => settings.screen_lock,
+            Self::SystemSleep => settings.system_sleep,
+        }
+    }
+
+    fn notice(self) -> Notice {
+        let message = match self {
+            Self::SystemAudioSilence { seconds } => format!(
+                "Recording auto-stopped: system audio was silent for {} second{}",
+                seconds,
+                if seconds == 1 { "" } else { "s" },
+            ),
+            Self::ScreenLock => "Recording auto-stopped: the screen was locked".to_string(),
+            Self::SystemSleep => "Recording auto-stopped: the system was going to sleep".to_string(),
+        };
+        Notice {
+            key: None,
+            level: NoticeLevel::Info,
+            message,
+            platform: match self {
+                Self::SystemAudioSilence { .. } => None,
+                _ => Some(std::env::consts::OS.to_string()),
+            },
+            details: None,
+            created_at: Utc::now(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -147,7 +191,7 @@ impl SessionManager {
 
                 // Phase 1: broadcast file sizes, detect silent sources, find device-lost sessions.
                 let mut device_lost_sessions: Vec<String> = Vec::new();
-                let mut auto_stop_sessions: Vec<String> = Vec::new();
+                let mut auto_stop_sessions: Vec<(String, u64)> = Vec::new();
                 {
                     let mut sessions = sessions.write().await;
                     for session in sessions.values_mut() {
@@ -159,7 +203,11 @@ impl SessionManager {
 
                         // Auto-stop: detect silence via RMS at the raw PCM level.
                         let mut auto_stop_remaining_secs: Option<u64> = None;
-                        if session.auto_stop {
+                        if let Some(silence_threshold_secs) = session
+                            .auto_stop
+                            .system_audio_silence_secs
+                            .filter(|seconds| *seconds > 0)
+                        {
                             if let Some(ref recorder) = session.recorder {
                                 if let Some(last_active_ms) = recorder.system_audio_last_active_ms() {
                                     if last_active_ms > 0 {
@@ -168,13 +216,16 @@ impl SessionManager {
                                             .unwrap_or_default()
                                             .as_millis() as u64;
                                         let silent_secs = now_ms.saturating_sub(last_active_ms) / 1000;
-                                        if silent_secs >= 60 {
-                                            auto_stop_sessions.push(session.id.clone());
-                                        } else if silent_secs >= 10 {
-                                            if silent_secs < 12 {
-                                                info!("Session {}: system audio silent for {}s, auto-stop countdown started", session.id, silent_secs);
+                                        if silent_secs >= silence_threshold_secs {
+                                            auto_stop_sessions.push((session.id.clone(), silence_threshold_secs));
+                                        } else {
+                                            let countdown_start = silence_threshold_secs.saturating_sub(50);
+                                            if silent_secs >= countdown_start {
+                                                if silent_secs < countdown_start.saturating_add(2) {
+                                                    info!("Session {}: system audio silent for {}s, auto-stop countdown started", session.id, silent_secs);
+                                                }
+                                                auto_stop_remaining_secs = Some(silence_threshold_secs - silent_secs);
                                             }
-                                            auto_stop_remaining_secs = Some(60 - silent_secs);
                                         }
                                     }
                                 }
@@ -311,7 +362,11 @@ impl SessionManager {
                                     details: None,
                                     created_at: Utc::now(),
                                 };
-                                session.notices.push(notice.clone());
+                                // Successful reconnects are transient status
+                                // messages. Send them to connected clients but
+                                // do not retain them in the session, otherwise
+                                // every later SessionUpdated event resurrects
+                                // an already-dismissed banner.
                                 let _ = event_tx_ref.send(ServerEvent::SessionNotice {
                                     id: sid.clone(),
                                     notice,
@@ -376,28 +431,16 @@ impl SessionManager {
                 }
 
                 // Phase 3: auto-stop sessions where system audio went silent.
-                for session_id in auto_stop_sessions {
-                    info!("Auto-stopping session {} (system audio silent for 60s)", session_id);
-                    match manager.stop_recording(&session_id).await {
-                        Ok(_) => {
-                            let mut sessions_guard = sessions.write().await;
-                            if let Some(session) = sessions_guard.get_mut(&session_id) {
-                                let notice = Notice {
-                                    key: None,
-                                    level: NoticeLevel::Info,
-                                    message: "Recording auto-stopped: system audio was silent for 1 minute".to_string(),
-                                    platform: None,
-                                    details: None,
-                                    created_at: Utc::now(),
-                                };
-                                session.notices.push(notice);
-                                let info = session.info();
-                                let _ = event_tx.send(ServerEvent::SessionUpdated(info));
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to auto-stop session {}: {}", session_id, e);
-                        }
+                for (session_id, seconds) in auto_stop_sessions {
+                    info!("Auto-stopping session {} (system audio silent for {}s)", session_id, seconds);
+                    if let Err(e) = manager
+                        .auto_stop_recording(
+                            &session_id,
+                            AutoStopTrigger::SystemAudioSilence { seconds },
+                        )
+                        .await
+                    {
+                        warn!("Failed to auto-stop session {}: {}", session_id, e);
                     }
                 }
             }
@@ -485,6 +528,31 @@ impl SessionManager {
         self.sessions.read().await.get(id).map(|s| s.info())
     }
 
+    pub async fn dismiss_notice(
+        &self,
+        id: &str,
+        created_at: DateTime<Utc>,
+    ) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        let original_len = session.notices.len();
+        for notice in session.notices.iter().filter(|notice| notice.created_at == created_at) {
+            if let Some(key) = &notice.key {
+                session.dismissed_notice_keys.insert(key.clone());
+            }
+        }
+        session.notices.retain(|notice| notice.created_at != created_at);
+        if session.notices.len() == original_len {
+            return Err("notice not found".to_string());
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionNotices {
+            id: id.to_string(),
+            notices: session.notices.clone(),
+        });
+        Ok(info)
+    }
+
     /// IDs of all sessions currently in `Recording` state. Used for graceful
     /// shutdown so writers can finalize before the process exits.
     pub async fn recording_session_ids(&self) -> Vec<String> {
@@ -511,6 +579,56 @@ impl SessionManager {
                 Err(e) => warn!("Shutdown: failed to stop session {}: {}", id, e),
             }
         }
+    }
+
+    /// Stop every active recording that opted into this system event. Stops
+    /// run concurrently so all writers can finish within macOS's pre-sleep
+    /// acknowledgement window.
+    pub async fn auto_stop_recordings(&self, trigger: AutoStopTrigger) -> usize {
+        let ids: Vec<String> = self.sessions
+            .read()
+            .await
+            .values()
+            .filter(|session| {
+                session.state == SessionState::Recording
+                    && trigger.enabled(session.auto_stop)
+            })
+            .map(|session| session.id.clone())
+            .collect();
+
+        let results = futures::future::join_all(ids.into_iter().map(|id| {
+            let manager = self.clone();
+            async move { manager.auto_stop_recording(&id, trigger).await }
+        }))
+        .await;
+        results.into_iter().filter(Result::is_ok).count()
+    }
+
+    async fn auto_stop_recording(
+        &self,
+        id: &str,
+        trigger: AutoStopTrigger,
+    ) -> Result<(), String> {
+        let still_enabled = self.sessions
+            .read()
+            .await
+            .get(id)
+            .map(|session| {
+                session.state == SessionState::Recording
+                    && trigger.enabled(session.auto_stop)
+            })
+            .unwrap_or(false);
+        if !still_enabled {
+            return Err("auto-stop trigger is no longer enabled".to_string());
+        }
+        self.stop_recording(id).await?;
+
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(id) {
+            session.notices.push(trigger.notice());
+            self.emit(ServerEvent::SessionUpdated(session.info()));
+        }
+        Ok(())
     }
 
     pub async fn list_sessions(
@@ -549,15 +667,28 @@ impl SessionManager {
         Ok(info)
     }
 
-    pub async fn set_auto_stop(&self, id: &str, auto_stop: bool) -> Result<SessionInfo, String> {
+    pub async fn update_auto_stop(
+        &self,
+        id: &str,
+        system_audio_silence_secs: Option<Option<u64>>,
+        screen_lock: Option<bool>,
+        system_sleep: Option<bool>,
+    ) -> Result<SessionInfo, String> {
         let mut sessions = self.sessions.write().await;
         let session = sessions.get_mut(id).ok_or("session not found")?;
-        if auto_stop {
-            info!("Auto-stop enabled for session {}", id);
-        } else {
-            info!("Auto-stop disabled for session {}", id);
+        if matches!(system_audio_silence_secs, Some(Some(0))) {
+            return Err("system_audio_silence_secs must be at least 1".to_string());
         }
-        session.auto_stop = auto_stop;
+        if let Some(seconds) = system_audio_silence_secs {
+            session.auto_stop.system_audio_silence_secs = seconds;
+        }
+        if let Some(enabled) = screen_lock {
+            session.auto_stop.screen_lock = enabled;
+        }
+        if let Some(enabled) = system_sleep {
+            session.auto_stop.system_sleep = enabled;
+        }
+        info!("Auto-stop settings updated for session {}: {:?}", id, session.auto_stop);
         session.touch();
         if let Err(e) = Self::write_metadata(session) {
             warn!("Failed to write metadata on auto_stop update: {}", e);
@@ -1259,6 +1390,13 @@ fn update_source_notices(
         }
     }
 
+    // A dismissed live warning stays hidden while the same problem remains,
+    // but becomes eligible to appear again after the condition resolves once.
+    session
+        .dismissed_notice_keys
+        .retain(|key| expected_keys.contains_key(key));
+    expected_keys.retain(|key, _| !session.dismissed_notice_keys.contains(key));
+
     // Compute what changed: compare current keyed notices with expected
     let current_keys: std::collections::HashSet<String> = session.notices.iter()
         .filter_map(|n| n.key.clone())
@@ -1281,4 +1419,63 @@ fn update_source_notices(
         id: session.id.clone(),
         notices: session.notices.clone(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dismissed_live_notice_stays_hidden_until_condition_resolves() {
+        let dir = std::env::temp_dir().join(format!(
+            "meeting-notes-notice-test-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        ));
+        let manager = SessionManager::new(dir.clone());
+        let info = manager.create_session(SessionConfig::default()).await;
+        let created_at = Utc::now();
+        {
+            let mut sessions = manager.sessions.write().await;
+            let session = sessions.get_mut(&info.id).unwrap();
+            session.source_meta.push(session::SourceMetadata {
+                filename: "mic.opus".to_string(),
+                source_type: SourceType::Mic,
+                source_label: "Test Mic".to_string(),
+                channels: 1,
+                raw_sample_rate: 48_000,
+            });
+            session.notices.push(Notice {
+                key: Some("silent:mic.opus".to_string()),
+                level: NoticeLevel::Warning,
+                message: "not receiving audio".to_string(),
+                platform: None,
+                details: None,
+                created_at,
+            });
+        }
+
+        let mut events = manager.subscribe();
+        manager.dismiss_notice(&info.id, created_at).await.unwrap();
+        match events.recv().await.unwrap() {
+            ServerEvent::SessionNotices { notices, .. } => assert!(notices.is_empty()),
+            _ => panic!("expected a full notices replacement"),
+        }
+
+        let mut sessions = manager.sessions.write().await;
+        let session = sessions.get_mut(&info.id).unwrap();
+        update_source_notices(session, &HashMap::new(), &manager.event_tx);
+        assert!(session.notices.is_empty(), "dismissed condition reappeared");
+
+        let mut healthy_sizes = HashMap::new();
+        healthy_sizes.insert("mic.opus".to_string(), 2048);
+        update_source_notices(session, &healthy_sizes, &manager.event_tx);
+        assert!(session.dismissed_notice_keys.is_empty());
+
+        update_source_notices(session, &HashMap::new(), &manager.event_tx);
+        assert_eq!(session.notices.len(), 1, "a new occurrence should be shown");
+        drop(sessions);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -7,6 +7,8 @@ pub mod people;
 pub mod server;
 pub mod session;
 pub mod settings;
+#[cfg(target_os = "macos")]
+pub mod system_events;
 pub mod tags;
 pub mod understanding;
 pub mod waveform;
