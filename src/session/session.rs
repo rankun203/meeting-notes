@@ -40,7 +40,7 @@ pub struct Notice {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoStopSettings {
     /// Stop after this many seconds without non-silent system audio. `None`
     /// disables silence-based auto-stop.
@@ -50,6 +50,16 @@ pub struct AutoStopSettings {
     pub screen_lock: bool,
     #[serde(default)]
     pub system_sleep: bool,
+}
+
+impl Default for AutoStopSettings {
+    fn default() -> Self {
+        Self {
+            system_audio_silence_secs: None,
+            screen_lock: true,
+            system_sleep: true,
+        }
+    }
 }
 
 fn deserialize_auto_stop<'de, D>(deserializer: D) -> Result<AutoStopSettings, D::Error>
@@ -68,9 +78,14 @@ where
         // system-audio silence. Preserve that behavior when loading old data.
         StoredAutoStop::Legacy(true) => AutoStopSettings {
             system_audio_silence_secs: Some(60),
-            ..AutoStopSettings::default()
+            screen_lock: false,
+            system_sleep: false,
         },
-        StoredAutoStop::Legacy(false) => AutoStopSettings::default(),
+        StoredAutoStop::Legacy(false) => AutoStopSettings {
+            system_audio_silence_secs: None,
+            screen_lock: false,
+            system_sleep: false,
+        },
         StoredAutoStop::Settings(settings) => settings,
     })
 }
@@ -519,6 +534,14 @@ mod tests {
         assert_eq!(metadata.auto_stop.system_audio_silence_secs, Some(60));
         assert!(!metadata.auto_stop.screen_lock);
         assert!(!metadata.auto_stop.system_sleep);
+    }
+
+    #[test]
+    fn new_sessions_enable_lock_and_sleep_auto_stop_by_default() {
+        let settings = AutoStopSettings::default();
+        assert_eq!(settings.system_audio_silence_secs, None);
+        assert!(settings.screen_lock);
+        assert!(settings.system_sleep);
     }
 
     #[test]
