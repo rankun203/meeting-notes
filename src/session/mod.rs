@@ -20,6 +20,7 @@ use self::session::{
 use crate::audio::mic::MicSource;
 use crate::audio::recorder::{LostSource, Recorder};
 use crate::audio::source::{AudioSource, SourceDescriptor, SourceType};
+use crate::audio::writer::AudioFormat;
 use crate::audio::system_audio::SystemAudioSource;
 
 #[derive(Debug, Clone, Serialize)]
@@ -526,6 +527,53 @@ impl SessionManager {
 
     pub async fn get_session(&self, id: &str) -> Option<SessionInfo> {
         self.sessions.read().await.get(id).map(|s| s.info())
+    }
+
+    /// Finalize a freshly created session after an uploaded media file has
+    /// been converted to the app's target Opus format.
+    pub async fn complete_media_import(
+        &self,
+        id: &str,
+        original_filename: &str,
+        opus_filename: String,
+    ) -> Result<SessionInfo, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or("session not found")?;
+        if session.state != SessionState::Created {
+            return Err("files can only be uploaded to a newly created session".to_string());
+        }
+
+        session.config.format = AudioFormat::Opus;
+        session.config.raw_sample_rate = 48_000;
+        session.config.sources = Some(Vec::new());
+        session.state = SessionState::Stopped;
+        session.started_at = Some(Utc::now());
+        session.files = vec![opus_filename.clone(), "metadata.json".to_string()];
+        session.source_meta = vec![session::SourceMetadata {
+            filename: opus_filename,
+            source_type: SourceType::App,
+            source_label: original_filename.to_string(),
+            channels: 1,
+            raw_sample_rate: 48_000,
+        }];
+
+        if session.name.is_none() {
+            let stem = std::path::Path::new(original_filename)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Uploaded recording");
+            session.name = Some(stem.to_string());
+        }
+
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            warn!("Failed to write metadata after media import: {}", e);
+        }
+        let info = session.info();
+        self.emit(ServerEvent::SessionUpdated(info.clone()));
+        Ok(info)
     }
 
     pub async fn dismiss_notice(
@@ -1475,6 +1523,47 @@ mod tests {
         update_source_notices(session, &HashMap::new(), &manager.event_tx);
         assert_eq!(session.notices.len(), 1, "a new occurrence should be shown");
         drop(sessions);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn completed_media_import_becomes_a_stopped_opus_session() {
+        let dir = std::env::temp_dir().join(format!(
+            "meeting-notes-import-test-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        ));
+        let manager = SessionManager::new(dir.clone());
+        let created = manager.create_session(SessionConfig::default()).await;
+        std::fs::write(
+            manager.session_dir(&created.id).join("meeting.opus"),
+            b"test",
+        )
+        .unwrap();
+
+        let imported = manager
+            .complete_media_import(
+                &created.id,
+                "Quarterly Meeting.mp4",
+                "meeting.opus".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(imported.state, SessionState::Stopped);
+        assert_eq!(imported.name.as_deref(), Some("Quarterly Meeting"));
+        assert_eq!(imported.format, Some(AudioFormat::Opus));
+        assert_eq!(imported.raw_sample_rate, Some(48_000));
+        assert_eq!(imported.files, vec!["meeting.opus", "metadata.json"]);
+        assert_eq!(imported.source_meta.len(), 1);
+        assert_eq!(imported.source_meta[0].source_type, SourceType::App);
+        assert_eq!(imported.source_meta[0].channels, 1);
+
+        let metadata =
+            std::fs::read_to_string(manager.session_dir(&created.id).join("metadata.json"))
+                .unwrap();
+        assert!(metadata.contains("\"format\": \"opus\""));
 
         let _ = std::fs::remove_dir_all(dir);
     }

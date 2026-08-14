@@ -70,6 +70,16 @@ export const RecordIcon = () => jsx('svg', {
   children: jsx('circle', { cx: '12', cy: '12', r: '8' }),
 });
 
+// File upload icon
+export const UploadIcon = ({ className } = {}) => jsx('svg', {
+  xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor',
+  className: className || 'w-4 h-4',
+  children: jsx('path', {
+    fillRule: 'evenodd', clipRule: 'evenodd',
+    d: 'M3.5 13.25a.75.75 0 00-1.5 0v2A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2a.75.75 0 00-1.5 0v2c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2zm7.03-10.78a.75.75 0 00-1.06 0l-3.5 3.5a.75.75 0 001.06 1.06l2.22-2.22v7.44a.75.75 0 001.5 0V4.81l2.22 2.22a.75.75 0 101.06-1.06l-3.5-3.5z',
+  }),
+});
+
 // Pause icon
 export const PauseIcon = () => jsx('svg', {
   xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 20 20', fill: 'currentColor', className: 'w-4 h-4',

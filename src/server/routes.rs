@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::path::{Path as FsPath, PathBuf};
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     response::IntoResponse,
     response::sse::{Event, Sse},
@@ -12,7 +13,9 @@ use axum::{
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 use tracing::{info, warn, error};
+use uuid::Uuid;
 
 use crate::chat::manager::ConversationManager;
 use crate::chat::types::{ContextCriteria, Mention, Message};
@@ -76,6 +79,7 @@ pub fn session_routes() -> Router<AppState> {
         .route("/sessions/{id}", delete(delete_session))
         .route("/sessions/{id}/recording/start", post(start_recording))
         .route("/sessions/{id}/recording/stop", post(stop_recording))
+        .route("/sessions/{id}/recording/upload", post(upload_recording))
         .route("/sessions/{id}/notices/{created_at}", delete(dismiss_notice))
         .route("/sessions/{id}/files", get(get_files))
         .route("/sessions/{id}/files/{filename}", get(serve_file))
@@ -272,6 +276,257 @@ async fn start_recording(
         .await
         .map(|files| Json(json!({"status": "recording", "files": files})))
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))
+}
+
+const MAX_MEDIA_UPLOAD_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct UploadRecordingParams {
+    filename: String,
+}
+
+async fn upload_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<UploadRecordingParams>,
+    request: Request,
+) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
+    let original_filename = FsPath::new(&params.filename)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "a valid filename is required"))?
+        .to_string();
+
+    if !is_supported_media_filename(&original_filename) {
+        return Err(api_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "choose a common audio or video file",
+        ));
+    }
+
+    let session = state
+        .session_manager
+        .get_session(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "session not found"))?;
+    if session.state != crate::session::session::SessionState::Created {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "files can only be uploaded to a newly created session",
+        ));
+    }
+
+    if request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > MAX_MEDIA_UPLOAD_BYTES)
+    {
+        return Err(api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the selected file is larger than the 20 GB upload limit",
+        ));
+    }
+
+    let session_dir = state.session_manager.session_dir(&id);
+    tokio::fs::create_dir_all(&session_dir)
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to prepare upload: {e}"),
+            )
+        })?;
+
+    let upload_path = session_dir.join(format!(".upload-{}.media", Uuid::new_v4()));
+    let converted_path = session_dir.join(format!(".converting-{}.opus", Uuid::new_v4()));
+    let mut upload_file = tokio::fs::File::create(&upload_path)
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create upload: {e}"),
+            )
+        })?;
+    let mut stream = request.into_body().into_data_stream();
+    let mut uploaded_bytes = 0_u64;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                drop(upload_file);
+                remove_file_if_present(&upload_path).await;
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("upload interrupted: {e}"),
+                ));
+            }
+        };
+        uploaded_bytes = uploaded_bytes.saturating_add(chunk.len() as u64);
+        if uploaded_bytes > MAX_MEDIA_UPLOAD_BYTES {
+            drop(upload_file);
+            remove_file_if_present(&upload_path).await;
+            return Err(api_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the selected file is larger than the 20 GB upload limit",
+            ));
+        }
+        if let Err(e) = upload_file.write_all(&chunk).await {
+            drop(upload_file);
+            remove_file_if_present(&upload_path).await;
+            return Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to save upload: {e}"),
+            ));
+        }
+    }
+
+    if let Err(e) = upload_file.flush().await {
+        drop(upload_file);
+        remove_file_if_present(&upload_path).await;
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to finish upload: {e}"),
+        ));
+    }
+    drop(upload_file);
+
+    if uploaded_bytes == 0 {
+        remove_file_if_present(&upload_path).await;
+        return Err(api_error(StatusCode::BAD_REQUEST, "the selected file is empty"));
+    }
+
+    let opus = session.opus.unwrap_or_default();
+    let mut ffmpeg = tokio::process::Command::new("ffmpeg");
+    ffmpeg
+        .kill_on_drop(true)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(&upload_path)
+        .args([
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-c:a",
+            "libopus",
+            "-application",
+            "voip",
+            "-vbr",
+            "on",
+            "-b:a",
+            &format!("{}k", opus.bitrate_kbps),
+            "-compression_level",
+            &opus.complexity.to_string(),
+            "-f",
+            "opus",
+        ])
+        .arg(&converted_path);
+
+    let output = ffmpeg.output().await;
+    remove_file_if_present(&upload_path).await;
+    let output = match output {
+        Ok(output) => output,
+        Err(e) => {
+            remove_file_if_present(&converted_path).await;
+            let message = if e.kind() == std::io::ErrorKind::NotFound {
+                "FFmpeg is not installed or is not available on PATH".to_string()
+            } else {
+                format!("failed to run FFmpeg: {e}")
+            };
+            return Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, message));
+        }
+    };
+
+    if !output.status.success() {
+        remove_file_if_present(&converted_path).await;
+        let detail = String::from_utf8_lossy(&output.stderr);
+        warn!("FFmpeg media import failed for session {}: {}", id, detail.trim());
+        return Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "FFmpeg could not find a readable audio track in this file",
+        ));
+    }
+
+    let output_filename = unique_opus_filename(&session_dir, &original_filename);
+    let final_path = session_dir.join(&output_filename);
+    if let Err(e) = tokio::fs::rename(&converted_path, &final_path).await {
+        remove_file_if_present(&converted_path).await;
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to finish conversion: {e}"),
+        ));
+    }
+
+    let info = match state
+        .session_manager
+        .complete_media_import(&id, &original_filename, output_filename)
+        .await
+    {
+        Ok(info) => info,
+        Err(e) => {
+            remove_file_if_present(&final_path).await;
+            return Err(api_error(StatusCode::CONFLICT, e));
+        }
+    };
+    state.refresh_recordings_index();
+    Ok(Json(info))
+}
+
+fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+    (status, Json(json!({"error": message.into()})))
+}
+
+fn is_supported_media_filename(filename: &str) -> bool {
+    let extension = FsPath::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
+    matches!(
+        extension.as_deref(),
+        Some(
+            "aac" | "aiff" | "avi" | "flac" | "m4a" | "m4v" | "mkv" | "mov" | "mp3"
+                | "mp4" | "mpeg" | "mpg" | "oga" | "ogg" | "opus" | "wav" | "webm" | "wma"
+        )
+    )
+}
+
+fn unique_opus_filename(session_dir: &FsPath, original_filename: &str) -> String {
+    let original_stem = FsPath::new(original_filename)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("upload");
+    let mut stem = crate::audio::source::sanitize_label(original_stem);
+    if stem.is_empty() {
+        stem = "upload".to_string();
+    }
+    stem = stem.chars().take(80).collect();
+
+    let first = format!("{stem}.opus");
+    if !session_dir.join(&first).exists() {
+        return first;
+    }
+    for suffix in 2..10_000 {
+        let candidate = format!("{stem}-{suffix}.opus");
+        if !session_dir.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    format!("upload-{}.opus", Uuid::new_v4())
+}
+
+async fn remove_file_if_present(path: &PathBuf) {
+    if let Err(e) = tokio::fs::remove_file(path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!("Failed to remove temporary upload file {}: {}", path.display(), e);
+        }
+    }
 }
 
 async fn stop_recording(
@@ -2381,4 +2636,34 @@ async fn list_models(
         .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
 
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+
+    #[test]
+    fn media_upload_extensions_are_allowlisted_case_insensitively() {
+        assert!(is_supported_media_filename("meeting.MP4"));
+        assert!(is_supported_media_filename("audio.opus"));
+        assert!(!is_supported_media_filename("notes.txt"));
+        assert!(!is_supported_media_filename("recording"));
+    }
+
+    #[test]
+    fn opus_output_names_are_sanitized() {
+        let dir =
+            std::env::temp_dir().join(format!("meeting-notes-name-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            unique_opus_filename(&dir, "Quarterly Meeting (final).mp4"),
+            "quarterly_meeting__final.opus"
+        );
+        std::fs::write(dir.join("quarterly_meeting__final.opus"), b"existing").unwrap();
+        assert_eq!(
+            unique_opus_filename(&dir, "Quarterly Meeting (final).mp4"),
+            "quarterly_meeting__final-2.opus"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

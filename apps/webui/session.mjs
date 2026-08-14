@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
          formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor, autoResize,
          ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon,
-         RecordIcon, TranscriptIcon, TagIcon, PlusIcon, CloseIcon } from './utils.mjs';
+         RecordIcon, UploadIcon, TranscriptIcon, TagIcon, PlusIcon, CloseIcon } from './utils.mjs';
 import { SyncedPlayer } from './player.mjs';
 import { TranscriptViewer, SpeakerAttributionWrapper } from './transcript.mjs';
 import { SearchableList } from './searchable-list.mjs';
@@ -20,6 +20,8 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
   const [vals, setVals] = useState(initVals);
   const [selectedSources, setSelectedSources] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [mode, setMode] = useState('record');
+  const [uploadFile, setUploadFile] = useState(null);
   const [error, setError] = useState(null);
   const [creating, setCreating] = useState(false);
 
@@ -44,7 +46,7 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
   }
 
   function buildBody() {
-    const body = { sources: selectedSources };
+    const body = { sources: mode === 'record' ? selectedSources : [] };
     for (const [key, f] of fieldEntries) {
       const v = vals[key];
       if (v === '' && f.type !== 'text') continue;
@@ -60,6 +62,7 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
         body[key] = typeof f.default === 'number' ? Number(v) : v;
       }
     }
+    if (mode === 'upload') body.format = 'opus';
     return body;
   }
 
@@ -81,6 +84,34 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
     finally { setCreating(false); }
   }
 
+  async function upload() {
+    if (!uploadFile) {
+      setError('Choose an audio or video file first.');
+      return;
+    }
+    setError(null);
+    setCreating(true);
+    try {
+      const session = await api('/sessions', { method: 'POST', body: JSON.stringify(buildBody()) });
+      const res = await fetch(`${API}/sessions/${session.id}/recording/upload?filename=${encodeURIComponent(uploadFile.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': uploadFile.type || 'application/octet-stream' },
+        body: uploadFile,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const imported = await res.json();
+      await onCreated();
+      onSelect(imported.id);
+    } catch (e) {
+      setError(`Upload failed: ${e.message}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
   function renderField(key, f) {
     if (!isVisible(f)) return null;
     const label = jsx('label', { className: LABEL_CLS, title: f.description, children: f.label });
@@ -89,7 +120,9 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
       input = jsxs('select', {
         value: vals[key],
         onChange: e => setVal(key, typeof f.default === 'number' ? Number(e.target.value) : e.target.value),
-        className: INPUT_CLS, title: f.description,
+        disabled: mode === 'upload' && key === 'format',
+        className: INPUT_CLS + (mode === 'upload' && key === 'format' ? ' opacity-70 cursor-not-allowed' : ''),
+        title: mode === 'upload' && key === 'format' ? 'Uploaded media is always converted to Opus' : f.description,
         children: (f.options || []).map(o => jsx('option', { key: o.value, value: o.value, title: o.title || '', children: o.label })),
       });
     } else if (f.type === 'textarea') {
@@ -113,10 +146,22 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
   const visibleAdvanced = advancedFields.filter(([, f]) => isVisible(f));
 
   return jsxs('div', { className: 'space-y-3', children: [
+    jsx('div', { className: 'grid grid-cols-2 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1', children: [
+      jsx('button', {
+        type: 'button', onClick: () => { setMode('record'); setError(null); }, disabled: creating,
+        className: `flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${mode === 'record' ? 'bg-white dark:bg-gray-700 text-red-600 dark:text-red-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`,
+        children: jsxs(Fragment, { children: [jsx(RecordIcon, {}), 'Record live'] }),
+      }),
+      jsx('button', {
+        type: 'button', onClick: () => { setMode('upload'); setVal('format', 'opus'); setError(null); }, disabled: creating,
+        className: `flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${mode === 'upload' ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`,
+        children: jsxs(Fragment, { children: [jsx(UploadIcon, {}), 'Upload file'] }),
+      }),
+    ]}),
     jsx('div', { className: `grid grid-cols-${Math.min(basicFields.length, 2)} gap-2`,
       children: basicFields.map(([k, f]) => renderField(k, f)),
     }),
-    jsxs('div', { children: [
+    mode === 'record' && jsxs('div', { children: [
       jsx('label', { className: LABEL_CLS, children: 'Sources' }),
       jsx('div', { className: 'space-y-0.5', children:
         availableSources.map(s => jsx('label', {
@@ -138,6 +183,17 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
         })),
       }),
     ]}),
+    mode === 'upload' && jsxs('div', { children: [
+      jsx('label', { className: LABEL_CLS, children: 'Recording file' }),
+      jsx('input', {
+        type: 'file',
+        accept: 'audio/*,video/*,.mkv,.m4a,.m4v,.mov,.mp4,.webm,.wav,.mp3,.flac,.ogg,.opus',
+        onChange: e => setUploadFile(e.target.files?.[0] || null),
+        disabled: creating,
+        className: 'block w-full text-xs text-gray-500 dark:text-gray-400 file:mr-2 file:rounded-md file:border-0 file:bg-blue-50 file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300',
+      }),
+      jsx('p', { className: 'mt-1 text-[10px] leading-4 text-gray-400 dark:text-gray-500', children: 'Audio is extracted and converted to Opus. The video is not kept.' }),
+    ]}),
     visibleAdvanced.length > 0 && jsx('button', {
       className: 'flex items-center gap-1 text-[11px] text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors',
       onClick: () => setShowAdvanced(!showAdvanced),
@@ -147,11 +203,11 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
       children: advancedFields.map(([k, f]) => renderField(k, f)),
     }),
     jsx('button', {
-      onClick: create, disabled: creating,
-      className: 'w-full flex justify-center items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 transition-colors',
-      children: creating ? 'Starting...' : jsxs(Fragment, { children: [
-        jsx(RecordIcon, {}),
-        'Start Recording',
+      onClick: mode === 'record' ? create : upload, disabled: creating || (mode === 'upload' && !uploadFile),
+      className: `w-full flex justify-center items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-colors ${mode === 'record' ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'}`,
+      children: creating ? (mode === 'record' ? 'Starting...' : 'Uploading & converting...') : jsxs(Fragment, { children: [
+        mode === 'record' ? jsx(RecordIcon, {}) : jsx(UploadIcon, {}),
+        mode === 'record' ? 'Start Recording' : 'Upload Recording',
       ]}),
     }),
     error && jsx('p', { className: 'text-xs text-red-500', children: error }),
