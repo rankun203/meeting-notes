@@ -1,6 +1,6 @@
 # Acquire a Teams recording
 
-Acquire an authorized Teams meeting recording, preserve its audio in meeting-notes, and save the source or reconstructed video to `~/Downloads`. Assume FFmpeg is installed. Treat the user as unfamiliar with browser developer tools and explain one step at a time.
+Acquire an authorized Teams meeting recording, preserve its audio in meeting-notes, and save the source or reconstructed video to `~/Downloads`. Assume FFmpeg is installed. Treat the user as unfamiliar with browser developer tools. When a HAR is required, provide the complete capture procedure in one message and ask the user to return only after the HAR has been saved.
 
 ## Workflow
 
@@ -42,7 +42,7 @@ Loading the recording URL is sufficient only when the available browser tooling 
 
 ## Ask for a HAR when needed
 
-Guide the user through these steps one at a time:
+Give the user all of these steps together in one message, then ask for the saved HAR's local path:
 
 1. Open the recording in Chrome or Edge and confirm it plays.
 2. Open Developer Tools:
