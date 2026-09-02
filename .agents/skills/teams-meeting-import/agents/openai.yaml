@@ -1,0 +1,4 @@
+interface:
+  display_name: "Import Teams Meeting"
+  short_description: "Retrieve Teams recordings and transcripts"
+  default_prompt: "Use $teams-meeting-import to import this Teams meeting from the best available recording or transcript source."

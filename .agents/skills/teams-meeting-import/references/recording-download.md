@@ -1,21 +1,15 @@
----
-name: download-teams-recording
-description: Adaptively download authorized Microsoft Teams meeting recordings hosted by SharePoint, OneDrive, Stream, or Clipchamp into the user's Downloads folder. Use when a user provides a recording link, cannot find a download button, has view-only playback access, or supplies a HAR capture. Inspect the current site and network traffic instead of relying on fixed private endpoints or a long-lived downloader script.
----
+# Acquire a Teams recording
 
-# Download Teams Recording
-
-Save an authorized Teams meeting recording to `~/Downloads`. Assume FFmpeg is installed. Treat the user as unfamiliar with browser developer tools and explain one step at a time.
+Acquire an authorized Teams meeting recording, preserve its audio in meeting-notes, and save the source or reconstructed video to `~/Downloads`. Assume FFmpeg is installed. Treat the user as unfamiliar with browser developer tools and explain one step at a time.
 
 ## Workflow
 
-1. Confirm the user is signed in to the Microsoft account that can play the recording and is authorized to retain it.
-2. Open the supplied recording link using the available browser-control skill.
-3. Look for a visible **Download** action in the recording title menu or **More options** menu.
-4. If Microsoft permits the normal download, use it, save the file in `~/Downloads`, verify it with `ffprobe`, and stop.
-5. If the page is view-only or omits Download, inspect the current page and network behavior before choosing a fallback.
-
-Do not ask the user to find or copy media URLs, cookies, encryption keys, or request headers.
+1. Open the supplied meeting or recording link using the available browser-control skill.
+2. Find the recording and look for a visible **Download** action in its title menu or **More options** menu.
+3. If Microsoft permits the normal download, use it and save the file in `~/Downloads`. Verify with `ffprobe` that it has a readable audio stream, then perform a full FFmpeg audio decode check.
+4. Import the downloaded audio or video through meeting-notes' media-upload flow. The app accepts common video files, extracts the first audio stream, and stores it as Opus. Verify that the resulting session has its audio file and `metadata.json` before continuing to transcription or summarization.
+5. If the page is view-only or omits Download, inspect the current page and network behavior and reconstruct the streamed recording as described below.
+6. Fall back to the transcript workflow only when direct download and reconstruction cannot produce a usable recording, the user declines the required capture, or the user explicitly requests transcript-only import.
 
 ## Observe the current player
 
@@ -60,9 +54,9 @@ Guide the user through these steps one at a time:
 6. After playback has started and the first audio/video fragments appear, right-click inside the Network request list and choose **Save all as HAR with content**. This initial HAR must capture the page reload and playback bootstrap, including the encryption-key or equivalent decryption-material response.
 7. Ask for the saved HAR's local path. Keep the recording tab open and playing while the download runs.
 
-If browser control is available, handle opening the page, starting playback, and selecting 2× directly. Capture the startup requests and responses directly only when the browser tooling exposes their full bodies; otherwise have the user export the initial HAR. After the encryption bootstrap passes validation, capture the exact media request URLs as the player emits them and download each fragment promptly before its playback-scoped URL expires.
+If browser control is available, handle opening the page, starting playback, and selecting 2x directly. Capture the startup requests and responses directly only when the browser tooling exposes their full bodies; otherwise have the user export the initial HAR. After the encryption bootstrap passes validation, capture the exact media request URLs as the player emits them and download each fragment promptly before its playback-scoped URL expires.
 
-Treat the HAR as sensitive authentication material. Never print its full contents, signed URLs, cookies, or `x-spopactoken` values. Ask before deleting the user's HAR after completion.
+Treat the HAR as sensitive authentication material. Never print its full contents, signed URLs, cookies, or `x-spopactoken` values.
 
 ## Build only what this recording needs
 
@@ -70,21 +64,21 @@ After the encryption-bootstrap validation passes, write the smallest one-off dow
 
 Prefer the highest-quality original-copy audio and video representations. If the recording is segmented, make the temporary program resumable and tolerant of SharePoint's transcode-ahead boundary. Consume only the exact segment URLs observed from the signed-in player; never synthesize additional media URLs by rewriting their parameters. Download, decrypt when required, and validate every observed fragment immediately, retaining completed fragments across retries. When segments are encrypted, derive the required decryption procedure only from the current manifest and captured requests. Never embed or log credentials.
 
-Keep the player advancing continuously at 2× when SharePoint only emits media URLs near the playback position. Observe requests at a restrained rate without seeking around the timeline, and continue until the player reaches the end. Deduplicate captured URLs by the manifest's segment identity, verify complete audio and video timeline coverage, and only then construct the tracks and remux the final recording. Report concise progress during long downloads.
+Keep the player advancing continuously at 2x when SharePoint only emits media URLs near the playback position. Observe requests at a restrained rate without seeking around the timeline, and continue until the player reaches the end. Deduplicate captured URLs by the manifest's segment identity, verify complete audio and video timeline coverage, and only then construct the tracks and remux the final recording. Report concise progress during long downloads.
 
 Use FFmpeg to remux compatible tracks without re-encoding. Choose a collision-safe `.mp4` filename based on the recording title and write it to `~/Downloads`. Request filesystem approval when required.
 
-Verify the result with both `ffprobe` and a full FFmpeg decode pass. Remove the temporary program and segment directory after success, but do not delete the user's HAR without permission.
+Verify the result with both `ffprobe` and a full FFmpeg decode pass, including confirmation of a readable audio stream. Import the reconstructed video through meeting-notes' media-upload flow and verify the session's Opus audio file and `metadata.json`. Remove the temporary program and segment directory after success, but do not delete the user's HAR without permission.
 
 ## Troubleshooting
 
-- **No usable manifest found**: repeat the HAR capture, ensuring **with content** was selected after reloading and playing the recording.
-- **No decryption material was captured**: stop before the long playback pass. Open Network with Preserve log enabled, reload the page, start playback, and export a fresh HAR with content after the first media fragments appear.
-- **Authentication, key, or initialization fetch fails**: the signed capture may have expired. Export a fresh bootstrap HAR and retry promptly; revalidate sample audio and video before continuing.
-- **Waiting at a segment**: resume the recording tab, keep it in the signed-in browser, confirm 2× playback is still active, and download the exact URL when the player emits it. Do not rewrite a previously captured URL to request the missing segment.
-- **The player ended but requests still fail**: reload, play again at 2×, export a fresh HAR, and reuse already validated temporary segments when safe.
-- **Normal download returns 401/403**: do not guess endpoints or expose credentials; return to current browser/network evidence.
+- **No usable manifest found:** Repeat the HAR capture, ensuring **with content** was selected after reloading and playing the recording.
+- **No decryption material was captured:** Stop before the long playback pass. Open Network with Preserve log enabled, reload the page, start playback, and export a fresh HAR with content after the first media fragments appear.
+- **Authentication, key, or initialization fetch fails:** The signed capture may have expired. Export a fresh bootstrap HAR and retry promptly; revalidate sample audio and video before continuing.
+- **Waiting at a segment:** Resume the recording tab, keep it in the signed-in browser, confirm 2x playback is still active, and download the exact URL when the player emits it. Do not rewrite a previously captured URL to request the missing segment.
+- **The player ended but requests still fail:** Reload, play again at 2x, export a fresh HAR, and reuse already validated temporary segments when safe.
+- **Normal download returns 401/403:** Do not guess endpoints or expose credentials; return to current browser/network evidence.
 
-## Completion
+## Completion details
 
-Report the clickable output path, verified duration, codecs, resolution, and file size. If reconstructed from streamed tracks, explain that the result is a remux and may not be byte-identical to Microsoft's source container.
+Report the clickable video path, meeting-notes session, verified duration, audio/video codecs, resolution, and file size. State whether the recording was downloaded directly or reconstructed. If reconstructed from streamed tracks, explain that the result is a remux and may not be byte-identical to Microsoft's source container.

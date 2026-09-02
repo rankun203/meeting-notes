@@ -1,4 +1,0 @@
-interface:
-  display_name: "Download Teams Recording"
-  short_description: "Adaptively download Teams recordings"
-  default_prompt: "Use $download-teams-recording to help me save a Teams meeting recording into my Downloads folder."
