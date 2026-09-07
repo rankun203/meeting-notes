@@ -20,7 +20,7 @@
 Requires [Rust toolchain](https://rustup.rs).
 
 ```bash
-cargo install --git https://github.com/rankun203/meeting-notes
+cargo install --git https://github.com/rankun203/meeting-notes meeting-notes-daemon
 ```
 
 ## Usage
