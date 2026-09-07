@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
          formatFileSize, formatDuration, formatTime, typeBadgeColor, tagColor, autoResize,
@@ -98,6 +99,7 @@ export function NewSessionPanel({ sources: availableSources, fields, onCreated, 
         headers: { 'Content-Type': uploadFile.type || 'application/octet-stream' },
         body: uploadFile,
       });
+      track('feature_used', { feature: 'recording_upload', outcome: res.ok ? 'success' : 'error' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
@@ -634,6 +636,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   }
 
   async function exportLrc() {
+    track('transcript_exported', { format: 'lrc' });
     setExportOpen(false);
     const t = await api(`/sessions/${session.id}/transcript`);
     const lines = (t.segments || []).map(seg => {
@@ -651,6 +654,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   }
 
   async function exportChatGpt() {
+    track('transcript_exported', { format: 'chatgpt' });
     setExportOpen(false);
     const [t, settings] = await Promise.all([
       api(`/sessions/${session.id}/transcript`),
@@ -671,12 +675,14 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   }
 
   function exportSummaryMarkdown() {
+    track('summary_exported', { format: 'markdown' });
     setExportOpen(false);
     if (!summary?.content) return;
     downloadFile(`${session.name || session.id}_summary.md`, summary.content, 'text/markdown');
   }
 
   function exportSummaryHtml() {
+    track('summary_exported', { format: 'html' });
     setExportOpen(false);
     if (!summary?.content) return;
     const html = `<!DOCTYPE html>
@@ -689,6 +695,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
   }
 
   function exportSummaryPdf() {
+    track('summary_exported', { format: 'pdf' });
     setExportOpen(false);
     if (!summary?.content) return;
     const html = renderMarkdown(summary.content);
@@ -1128,12 +1135,12 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                 // Tab buttons
                 jsxs('div', { className: 'flex gap-1', children: [
                   jsx('button', {
-                    onClick: () => setActiveTab('transcript'),
+                    onClick: () => { track('content_tab_opened', { tab: 'transcript' }); setActiveTab('transcript'); },
                     className: `px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider transition-colors ${activeTab === 'transcript' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
                     children: 'Transcript',
                   }),
                   jsx('button', {
-                    onClick: () => setActiveTab('summary'),
+                    onClick: () => { track('content_tab_opened', { tab: 'summary' }); setActiveTab('summary'); },
                     className: `px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider transition-colors ${activeTab === 'summary' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
                     children: 'Summary',
                   }),

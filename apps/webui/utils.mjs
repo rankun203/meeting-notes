@@ -1,3 +1,4 @@
+import { track, apiFeature } from './analytics.mjs';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { jsx as _jsx, jsxs as _jsxs, Fragment } from 'react/jsx-runtime';
 
@@ -59,10 +60,17 @@ export const PROCESSING_LABELS = {
 // ── API helper ──
 
 export async function api(path, opts = {}) {
-  const res = await fetch(`${API}${path}`, {
+  const feature = apiFeature(path, opts.method);
+  let res;
+  try { res = await fetch(`${API}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
+  } catch (error) {
+    if (feature) track('feature_used', { feature, outcome: 'error' });
+    throw error;
+  }
+  if (feature) track('feature_used', { feature, outcome: res.ok ? 'success' : 'error' });
   if (!res.ok && res.status !== 204) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${res.status}`);

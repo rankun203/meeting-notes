@@ -37,11 +37,19 @@ fn host_key(host: &str) -> String {
     hostname.to_lowercase()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmSecrets {
     /// API keys indexed by encoded host provider key.
     #[serde(default)]
     pub api_keys: HashMap<String, String>,
+
+    /// PostHog project token; the existing snake_case key remains canonical.
+    #[serde(default, alias = "posthog.project.token")]
+    pub posthog_project_token: Option<String>,
+    #[serde(default = "analytics_enabled_default")]
+    pub posthog_enabled: bool,
+    #[serde(default = "analytics_host_default")]
+    pub posthog_host: String,
 
     // Legacy field — migrated to api_keys on load.
     #[serde(default, skip_serializing)]
@@ -52,7 +60,24 @@ pub struct LlmSecrets {
     secrets_path: PathBuf,
 }
 
+fn analytics_enabled_default() -> bool { true }
+fn analytics_host_default() -> String { "https://us.i.posthog.com".into() }
+
+impl Default for LlmSecrets {
+    fn default() -> Self {
+        Self {
+            api_keys: HashMap::new(), llm_api_key: None, secrets_path: PathBuf::new(),
+            posthog_project_token: None, posthog_enabled: true,
+            posthog_host: analytics_host_default(),
+        }
+    }
+}
+
 impl LlmSecrets {
+    pub fn analytics_enabled(&self) -> bool {
+        self.posthog_enabled && self.posthog_project_token.as_ref().is_some_and(|v| !v.trim().is_empty())
+    }
+
     /// Load secrets from `{data_dir}/secrets.json`, creating with 0600 perms if missing.
     pub fn load_or_create(data_dir: &Path) -> Self {
         let path = data_dir.join("secrets.json");
@@ -141,6 +166,33 @@ impl LlmSecrets {
 #[cfg(test)]
 mod tests {
     use super::host_key;
+
+    #[test]
+    fn analytics_token_survives_provider_key_updates() {
+        let dir = std::env::temp_dir().join(format!("meeting-secrets-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("secrets.json"), r#"{"posthog_project_token":"phc_test"}"#).unwrap();
+        let mut secrets = super::LlmSecrets::load_or_create(&dir);
+        assert!(secrets.analytics_enabled());
+        secrets.set_api_key("https://example.com", Some("test".into())).unwrap();
+        let loaded = super::LlmSecrets::load_or_create(&dir);
+        assert_eq!(loaded.posthog_project_token.as_deref(), Some("phc_test"));
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.join("secrets.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn absent_token_disables_tracking_and_dotted_alias_loads() {
+        assert!(!super::LlmSecrets::default().analytics_enabled());
+        let secrets: super::LlmSecrets = serde_json::from_str(r#"{"posthog.project.token":"phc_test"}"#).unwrap();
+        assert!(secrets.analytics_enabled());
+        let value = serde_json::to_value(secrets).unwrap();
+        assert_eq!(value["posthog_project_token"], "phc_test");
+        assert!(value.get("posthog.project.token").is_none());
+    }
 
     #[test]
     fn test_host_key() {

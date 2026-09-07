@@ -1,3 +1,4 @@
+import { AnalyticsSettings } from './analytics-settings.mjs';
 import { useState, useEffect, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, autoResize, TagIcon, ChevronIcon } from './utils.mjs';
 import { ConversationsSettings } from './chat.mjs';
@@ -5,6 +6,7 @@ import { SearchableList } from './searchable-list.mjs';
 
 const SETTINGS_CATEGORIES = [
   { id: 'services', label: 'Services' },
+  { id: 'analytics', label: 'Usage analytics' },
   { id: 'pipeline', label: 'Pipeline' },
   { id: 'tags', label: 'Tags' },
   { id: 'conversations', label: 'Conversations' },
@@ -700,6 +702,7 @@ export function SettingsPage({ category, onSelectSession }) {
       ]}),
     ]}),
 
+    analytics: jsx(AnalyticsSettings, {}),
     tags: jsx(TagsSettings, { onSelectSession }),
     conversations: jsx(ConversationsSettings, {}),
   };
@@ -712,7 +715,7 @@ export function SettingsPage({ category, onSelectSession }) {
         className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5',
         children: categoryContent[cat],
       }),
-      (cat !== 'tags' && cat !== 'conversations') && jsxs('div', { className: 'flex items-center gap-3', children: [
+      (cat !== 'tags' && cat !== 'conversations' && cat !== 'analytics') && jsxs('div', { className: 'flex items-center gap-3', children: [
         jsx('button', {
           onClick: save, disabled: saving,
           className: 'px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors',

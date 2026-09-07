@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import { useState, useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { jsx, jsxs, Fragment, API, fmtTime } from './utils.mjs';
 import { SourceIcon, PlayIcon, PauseIcon, StopSquareIcon, FastForwardIcon } from './icons.mjs';
@@ -134,6 +135,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   useImperativeHandle(ref, () => ({
     seekTo,
     seekAndPlay(t) {
+      track('playback_seeked', { source: 'link', position_seconds: t });
       seekTo(t);
       const audios = getAudios();
       if (audios.length > 0 && !playingRef.current) {
@@ -165,6 +167,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   function cycleSpeed() {
     const idx = SPEED_STEPS.indexOf(speed);
     const next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.length];
+    track('playback_speed_changed', { speed: next });
     setSpeed(next);
     applySpeed(next);
   }
@@ -187,6 +190,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   function togglePlay() {
     const audios = getAudios();
     if (playing) {
+      track('playback_paused', { position_seconds: currentTime });
       audios.forEach(a => { a.pause(); a.playbackRate = 1; });
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       setPlaying(false);
@@ -232,6 +236,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
     if (!draggingRef.current) return;
     draggingRef.current = false;
     seekFromPointer(e);
+    track('playback_seeked', { source: 'player', position_seconds: getAudios()[0]?.currentTime || 0 });
     setDragTime(null);
     document.removeEventListener('pointermove', onPointerMove);
     document.removeEventListener('pointerup', onPointerUp);
@@ -246,6 +251,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   }
 
   function stopAll() {
+    track('playback_paused', { position_seconds: currentTime });
     const audios = getAudios();
     audios.forEach(a => { a.pause(); a.currentTime = 0; a.playbackRate = 1; });
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -257,6 +263,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   }
 
   function toggleMute(idx) {
+    track('playback_track_toggled');
     setMutedTracks(prev => {
       const next = { ...prev, [idx]: !prev[idx] };
       if (audioRefs.current[idx]) audioRefs.current[idx].muted = next[idx];
@@ -281,6 +288,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   function onEnded() {
     const audios = getAudios();
     if (audios.every(a => a.ended || a.currentTime >= a.duration - 0.1)) {
+      track('playback_completed', { duration_seconds: duration });
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       audios.forEach(a => { a.pause(); a.currentTime = 0; });
       setPlaying(false);
@@ -304,6 +312,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
         preload: 'metadata',
         muted: !!mutedTracks[i],
         onLoadedMetadata,
+        onPlay: i === 0 ? () => track('playback_started', { source: 'player', position_seconds: audioRefs.current[0]?.currentTime || 0, duration_seconds: duration }) : undefined,
         onEnded,
         onPause,
         className: 'hidden',
@@ -321,7 +330,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
           duration,
           currentTime,
           muted: !!mutedTracks[i],
-          onSeek: seekTo,
+          onSeek: t => { track('playback_seeked', { source: 'waveform', position_seconds: t }); seekTo(t); },
         })
       ),
     }),

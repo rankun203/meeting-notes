@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod routes;
 pub mod web_ui;
 pub mod ws;
@@ -27,6 +28,7 @@ pub fn create_router(
     claude_runner: ClaudeCodeRunner,
     enable_web_ui: bool,
 ) -> Router {
+    let llm_secrets_for_analytics = llm_secrets.clone();
     let state = AppState {
         session_manager,
         people_manager,
@@ -40,6 +42,7 @@ pub fn create_router(
 
     // All API routes (REST + WebSocket) under /api
     let api_routes = Router::new()
+        .merge(analytics::routes(llm_secrets_for_analytics))
         .merge(routes::session_routes())
         .merge(routes::conversation_routes())
         .merge(routes::claude_routes())

@@ -1,3 +1,4 @@
+import { track } from '../analytics.mjs';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { jsx, jsxs, Fragment, api, API, useIsMobile } from '../utils.mjs';
 import { ChatIcon, CloseIcon } from '../icons.mjs';
@@ -266,6 +267,7 @@ export function ChatBubble() {
         throw new Error(err.error || `HTTP ${res.status}`);
       }
 
+      track('chat_message_sent', { backend: 'claude_code' });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -462,6 +464,7 @@ export function ChatBubble() {
         throw new Error(err.error || `HTTP ${res.status}`);
       }
 
+      track('chat_message_sent', { backend: 'openrouter' });
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';

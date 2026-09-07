@@ -1,3 +1,4 @@
+import { initAnalytics, track } from './analytics.mjs';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsx, jsxs, Fragment, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
@@ -31,6 +32,9 @@ function App() {
   selectedIdRef.current = selectedId;
   // Track whether the URL already had a session ID on load (suppress auto-select)
   const hadInitialId = useRef(!!initialRoute.selectedId);
+
+  useEffect(() => { void initAnalytics().then(() => track('view_opened', { view: initialRoute.view })); }, []);
+  useEffect(() => { track('view_opened', { view: currentView }); }, [currentView]);
 
   // Central navigation function — updates state + pushes URL
   function navigateTo(path, replace) {
@@ -215,6 +219,7 @@ function App() {
   }, [sessions, currentView]);
 
   function handleSelect(id) {
+    track('meeting_opened');
     navigateTo(buildPath('sessions', id));
   }
 

@@ -1,3 +1,4 @@
+import { track } from './analytics.mjs';
 import { jsx, jsxs, Fragment, PAGE_SIZE, CloseIcon, RecordIcon } from './utils.mjs';
 import { NewSessionPanel, SidebarItem } from './session.mjs';
 import { PeopleSidebar } from './people.mjs';
@@ -18,6 +19,7 @@ export function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageC
               onSelect(recording.id);
             } else {
               if (currentView !== 'sessions') onViewChange('sessions');
+              if (!showNew) track('recording_form_opened');
               setShowNew(!showNew);
             }
           },
