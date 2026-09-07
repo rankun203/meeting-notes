@@ -61,7 +61,7 @@ pub struct LlmSecrets {
 }
 
 fn analytics_enabled_default() -> bool { true }
-fn analytics_host_default() -> String { "https://us.i.posthog.com".into() }
+fn analytics_host_default() -> String { "https://ph.dsync.net".into() }
 
 impl Default for LlmSecrets {
     fn default() -> Self {
@@ -174,6 +174,7 @@ mod tests {
         std::fs::write(dir.join("secrets.json"), r#"{"posthog_project_token":"phc_test"}"#).unwrap();
         let mut secrets = super::LlmSecrets::load_or_create(&dir);
         assert!(secrets.analytics_enabled());
+        assert_eq!(secrets.posthog_host, "https://ph.dsync.net");
         secrets.set_api_key("https://example.com", Some("test".into())).unwrap();
         let loaded = super::LlmSecrets::load_or_create(&dir);
         assert_eq!(loaded.posthog_project_token.as_deref(), Some("phc_test"));

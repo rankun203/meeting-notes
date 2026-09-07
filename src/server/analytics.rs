@@ -39,7 +39,10 @@ pub fn routes(secrets: SharedSecrets) -> Router<AppState> {
                 continue;
             }
             let result = client
-                .post(format!("{}/batch/", config.posthog_host))
+                .post(format!(
+                    "{}/batch/",
+                    config.posthog_host.trim().trim_end_matches('/')
+                ))
                 .json(&json!({"api_key": config.posthog_project_token, "batch": batch}))
                 .send()
                 .await;
@@ -56,10 +59,19 @@ pub fn routes(secrets: SharedSecrets) -> Router<AppState> {
 }
 
 fn valid_host(host: &str) -> bool {
-    matches!(
-        host,
-        "https://us.i.posthog.com" | "https://eu.i.posthog.com"
-    )
+    if host.len() > 2048 {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(host.trim()) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
 }
 
 fn masked_config(secrets: &crate::llm::secrets::LlmSecrets) -> Value {
@@ -93,13 +105,15 @@ async fn update_config(
     {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Choose a PostHog Cloud region and a valid project token"})),
+            Json(
+                json!({"error": "Enter an HTTPS PostHog domain without credentials, a path, query, or fragment, and a valid project token"}),
+            ),
         ));
     }
     let mut secrets = state.secrets.write().await;
     let mut updated = secrets.clone();
     updated.posthog_enabled = body.posthog_enabled;
-    updated.posthog_host = body.posthog_host;
+    updated.posthog_host = body.posthog_host.trim().trim_end_matches('/').into();
     if let Some(token) = body.posthog_project_token {
         updated.posthog_project_token = if token.trim().is_empty() {
             None
@@ -272,13 +286,18 @@ mod tests {
             State(state.clone()),
             Json(ConfigUpdate {
                 posthog_enabled: false,
-                posthog_host: "https://eu.i.posthog.com".into(),
+                posthog_host: " https://ph.dsync.net/ ".into(),
                 posthog_project_token: None,
             }),
         )
         .await
         .unwrap();
         assert_eq!(response.0["enabled"], false);
+        assert_eq!(response.0["posthog_host"], "https://ph.dsync.net");
+        assert_eq!(
+            crate::llm::secrets::LlmSecrets::load_or_create(&dir).posthog_host,
+            "https://ph.dsync.net"
+        );
         assert!(!response.0.to_string().contains("phc_private_test"));
         assert_eq!(
             secrets.read().await.posthog_project_token.as_deref(),
@@ -317,5 +336,29 @@ mod tests {
         .unwrap();
         assert!(!crate::llm::secrets::LlmSecrets::load_or_create(&dir).analytics_enabled());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn accepts_https_instances_and_rejects_non_origin_urls() {
+        for host in [
+            "https://ph.dsync.net",
+            "https://ph.dsync.net/",
+            "https://us.i.posthog.com",
+            "https://eu.i.posthog.com",
+            "https://analytics.example.com:8443",
+        ] {
+            assert!(valid_host(host), "{host}");
+        }
+        for host in [
+            "",
+            "ph.dsync.net",
+            "http://localhost",
+            "https://ph.dsync.net/api",
+            "https://user:pass@ph.dsync.net",
+            "https://ph.dsync.net?token=private",
+            "https://ph.dsync.net#fragment",
+        ] {
+            assert!(!valid_host(host), "{host}");
+        }
     }
 }

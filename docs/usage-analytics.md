@@ -7,8 +7,11 @@ as snake_case. Do not configure both keys. This is a PostHog **project token**,
 not a personal API key. Existing provider-key updates preserve it.
 
 `posthog_enabled` defaults to true, but tracking stays off without a token.
-`posthog_host` defaults to `https://us.i.posthog.com`; select EU Cloud for an EU
-project. Only these two cloud ingestion hosts are supported. The admin form
+`posthog_host` defaults to `https://ph.dsync.net`. The **PostHog domain** input
+appears immediately before the project token and accepts an HTTPS instance origin,
+including PostHog Cloud hosts. Do not include an API path, credentials, query, or
+fragment. A trailing slash is removed when saving. An explicitly saved host is
+preserved; change it in this input if it still points to a Cloud host. The admin form
 preserves a blank token input, offers explicit removal, and never reads it back.
 Secrets retain the existing file permission of 0600. Other tabs refresh the
 configuration every minute; the server stops accepting events immediately when

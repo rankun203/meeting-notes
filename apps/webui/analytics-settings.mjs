@@ -33,19 +33,17 @@ export function AnalyticsSettings() {
       'Enable usage tracking when a token is configured',
     ]}),
     jsxs('div', { children: [
+      jsx('label', { htmlFor: 'posthog-host', className: LABEL_CLS, children: 'PostHog domain' }),
+      jsx('input', { id: 'posthog-host', type: 'url', required: true, value: config.posthog_host, onChange: e => setConfig({ ...config, posthog_host: e.target.value }), className: INPUT_CLS, placeholder: 'https://ph.dsync.net' }),
+      jsx('p', { className: 'text-xs text-gray-500 mt-2', children: 'HTTPS address of the PostHog instance, without an API path.' }),
+    ]}),
+    jsxs('div', { children: [
       jsx('label', { htmlFor: 'posthog-token', className: LABEL_CLS, children: 'Project token' }),
       jsx('input', { id: 'posthog-token', type: 'password', autoComplete: 'new-password', value: token, disabled: clearToken, onChange: e => setToken(e.target.value), className: INPUT_CLS, placeholder: config.posthog_project_token_set ? 'Configured — leave blank to keep' : 'phc_…' }),
       jsx('p', { className: 'text-xs text-gray-500 mt-2', children: 'Stored as posthog_project_token in secrets.json. Use the project token, not a personal API key.' }),
     ]}),
     config.posthog_project_token_set && jsxs('label', { className: 'flex items-center gap-2 text-sm', children: [
       jsx('input', { type: 'checkbox', checked: clearToken, onChange: e => setClearToken(e.target.checked) }), 'Remove the saved token',
-    ]}),
-    jsxs('div', { children: [
-      jsx('label', { htmlFor: 'posthog-region', className: LABEL_CLS, children: 'Project region' }),
-      jsxs('select', { id: 'posthog-region', value: config.posthog_host, onChange: e => setConfig({ ...config, posthog_host: e.target.value }), className: INPUT_CLS, children: [
-        jsx('option', { value: 'https://us.i.posthog.com', children: 'US Cloud' }),
-        jsx('option', { value: 'https://eu.i.posthog.com', children: 'EU Cloud' }),
-      ]}),
     ]}),
     jsx('p', { className: 'text-sm font-medium', children: config.enabled ? 'Status: enabled' : 'Status: disabled — enable tracking and configure a token to begin.' }),
     jsx('button', { type: 'submit', disabled: saving, className: 'px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50', children: saving ? 'Saving…' : 'Save analytics settings' }),
