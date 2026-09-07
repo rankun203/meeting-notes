@@ -20,7 +20,7 @@ use self::session::{
 use crate::audio::mic::MicSource;
 use crate::audio::recorder::{LostSource, Recorder};
 use crate::audio::source::{AudioSource, SourceDescriptor, SourceType};
-use crate::audio::writer::AudioFormat;
+use crate::audio::writer::{AudioActivitySnapshot, AudioFormat};
 use crate::audio::system_audio::SystemAudioSource;
 
 #[derive(Debug, Clone, Serialize)]
@@ -240,12 +240,14 @@ impl SessionManager {
                         });
 
                         // Update live notices (silent mic, no system audio, etc).
-                        // 10s grace period: AVAudioEngine + opus buffering can delay
-                        // the first bytes reaching disk.
+                        // Allow devices and the permission prompt time to start.
+                        // Use PCM activity, not buffered/encoded file sizes.
                         if let Some(started) = session.started_at {
                             let elapsed = Utc::now() - started;
                             if elapsed.num_seconds() >= 10 {
-                                update_source_notices(session, &info.file_sizes, &event_tx);
+                                let activity = session.recorder.as_ref()
+                                    .map(Recorder::source_activity).unwrap_or_default();
+                                update_source_notices(session, &activity, Utc::now().timestamp_millis() as u64, &event_tx);
                             }
                         }
 
@@ -1365,27 +1367,29 @@ fn max_attempts_notice() -> Notice {
 
 fn update_source_notices(
     session: &mut Session,
-    file_sizes: &HashMap<String, u64>,
+    activity: &HashMap<String, AudioActivitySnapshot>,
+    now_ms: u64,
     event_tx: &broadcast::Sender<ServerEvent>,
 ) {
     let platform = std::env::consts::OS;
     let mut expected_keys: HashMap<String, Notice> = HashMap::new();
 
     for meta in &session.source_meta {
-        let size = file_sizes.get(&meta.filename).copied().unwrap_or(0);
+        let activity = activity.get(&meta.filename).copied().unwrap_or_default();
+        let no_data = activity.last_received_ms == 0
+            || now_ms.saturating_sub(activity.last_received_ms) >= 10_000;
         let key = format!("silent:{}", meta.filename);
 
         match meta.source_type {
             SourceType::Mic => {
-                // Under 1 KB after 10s means no real audio data.
-                if size < 1024 {
+                if no_data {
                     let (message, details) = if platform == "macos" {
                         (
                             format!("\"{}\" is not receiving audio", meta.source_label),
                             Some(
                                 "macOS may have denied microphone access. \
                                 Check System Settings > Privacy & Security > Microphone \
-                                and ensure your terminal app (or VS Code) is allowed."
+                                and allow Meeting Notes (or your terminal app when running the CLI)."
                                     .to_string(),
                             ),
                         )
@@ -1406,30 +1410,30 @@ fn update_source_notices(
                 }
             }
             SourceType::SystemMix => {
-                // 0 bytes = no system audio captured. Could be no permission
-                // or just nothing playing.
-                if size == 0 {
-                    let (message, details) = if platform == "macos" {
-                        (
-                            "System audio is not receiving data".to_string(),
-                            Some(
-                                "Either nothing is playing, or permission is missing. \
-                                Check System Settings > Privacy & Security > Screen & System Audio Recording."
-                                    .to_string(),
-                            ),
-                        )
+                // Initial silence is suspicious after the startup grace period.
+                // Once sound has arrived, tolerate normal pauses up to 30 seconds.
+                let silent = activity.last_active_ms == 0
+                    || now_ms.saturating_sub(activity.last_active_ms) >= 30_000;
+                if no_data || silent {
+                    let message = if no_data {
+                        "System audio is not receiving data"
                     } else {
-                        (
-                            "System audio is not receiving data".to_string(),
-                            None,
-                        )
+                        "System audio is receiving only silence"
+                    };
+                    let details = if platform == "macos" {
+                        "If sound is playing, check System Settings > Privacy & Security > \
+                        Screen & System Audio Recording and allow Meeting Notes (or your terminal app \
+                        when running the CLI), then restart recording. If no permission dialog appears, \
+                        launch Meeting Notes with bash scripts/run-macos.sh as described in the README."
+                    } else {
+                        "If sound is playing, check the system audio source, output device, and recording permissions."
                     };
                     expected_keys.insert(key, Notice {
                         key: Some(format!("silent:{}", meta.filename)),
-                        level: NoticeLevel::Info,
-                        message,
+                        level: NoticeLevel::Warning,
+                        message: message.to_string(),
                         platform: Some(platform.to_string()),
-                        details,
+                        details: Some(details.to_string()),
                         created_at: Utc::now(),
                     });
                 }
@@ -1446,13 +1450,27 @@ fn update_source_notices(
     expected_keys.retain(|key, _| !session.dismissed_notice_keys.contains(key));
 
     // Compute what changed: compare current keyed notices with expected
-    let current_keys: std::collections::HashSet<String> = session.notices.iter()
-        .filter_map(|n| n.key.clone())
+    let current: HashMap<_, _> = session.notices.iter()
+        .filter_map(|n| n.key.as_ref().map(|key| (key.clone(), n)))
         .collect();
-    let expected_key_set: std::collections::HashSet<String> = expected_keys.keys().cloned().collect();
-
-    if current_keys == expected_key_set {
+    let unchanged = current.len() == expected_keys.len() && expected_keys.iter().all(|(key, notice)| {
+        current.get(key).is_some_and(|old| old.message == notice.message && old.details == notice.details)
+    });
+    if unchanged {
         return; // No change
+    }
+
+    // Log transitions once, including when no browser is connected. Preserve
+    // timestamps of unchanged notices so dismissal by created_at still works.
+    for (key, notice) in &mut expected_keys {
+        if let Some(old) = current.get(key).filter(|old| old.message == notice.message && old.details == notice.details) {
+            notice.created_at = old.created_at;
+        } else {
+            warn!(session_id = %session.id, "{}: {}", notice.message, notice.details.as_deref().unwrap_or_default());
+        }
+    }
+    for key in current.keys().filter(|key| !expected_keys.contains_key(*key)) {
+        info!(session_id = %session.id, source = %key, "Audio capture warning cleared");
     }
 
     // Remove stale keyed notices, keep non-keyed (manual) notices
@@ -1512,19 +1530,79 @@ mod tests {
 
         let mut sessions = manager.sessions.write().await;
         let session = sessions.get_mut(&info.id).unwrap();
-        update_source_notices(session, &HashMap::new(), &manager.event_tx);
+        let now_ms = Utc::now().timestamp_millis() as u64;
+        update_source_notices(session, &HashMap::new(), now_ms, &manager.event_tx);
         assert!(session.notices.is_empty(), "dismissed condition reappeared");
 
-        let mut healthy_sizes = HashMap::new();
-        healthy_sizes.insert("mic.opus".to_string(), 2048);
-        update_source_notices(session, &healthy_sizes, &manager.event_tx);
+        let mut healthy_activity = HashMap::new();
+        healthy_activity.insert("mic.opus".to_string(), AudioActivitySnapshot {
+            last_received_ms: now_ms,
+            last_active_ms: now_ms,
+        });
+        update_source_notices(session, &healthy_activity, now_ms, &manager.event_tx);
         assert!(session.dismissed_notice_keys.is_empty());
 
-        update_source_notices(session, &HashMap::new(), &manager.event_tx);
+        update_source_notices(session, &HashMap::new(), now_ms, &manager.event_tx);
         assert_eq!(session.notices.len(), 1, "a new occurrence should be shown");
         drop(sessions);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn system_audio_notices_follow_samples_even_when_silence_file_grows() {
+        let dir = std::env::temp_dir().join(format!("mn-silence-test-{}", uuid::Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+        let info = manager.create_session(SessionConfig::default()).await;
+        let mut events = manager.subscribe();
+        let mut sessions = manager.sessions.write().await;
+        let session = sessions.get_mut(&info.id).unwrap();
+        session.source_meta.push(session::SourceMetadata {
+            filename: "system_audio.opus".to_string(),
+            source_type: SourceType::SystemMix,
+            source_label: "System Audio".to_string(),
+            channels: 2,
+            raw_sample_rate: 48_000,
+        });
+        // Reproduces the observed incident: a nonempty file of encoded silence.
+        std::fs::write(session.config.output_dir.join("system_audio.opus"), vec![0u8; 40_000]).unwrap();
+        let now = 100_000;
+        let silent = HashMap::from([("system_audio.opus".to_string(), AudioActivitySnapshot {
+            last_received_ms: now,
+            last_active_ms: 0,
+        })]);
+        update_source_notices(session, &silent, now, &manager.event_tx);
+        assert_eq!(session.notices.len(), 1);
+        assert_eq!(session.notices[0].message, "System audio is receiving only silence");
+        assert!(matches!(events.try_recv(), Ok(ServerEvent::SessionNotices { .. })));
+        let created_at = session.notices[0].created_at;
+        update_source_notices(session, &silent, now + 2_000, &manager.event_tx);
+        assert!(events.try_recv().is_err(), "unchanged warning must not repeat");
+        assert_eq!(session.notices[0].created_at, created_at);
+
+        // A stalled callback changes the message even though its key is the same.
+        update_source_notices(session, &silent, now + 10_000, &manager.event_tx);
+        assert_eq!(session.notices[0].message, "System audio is not receiving data");
+        assert!(matches!(events.try_recv(), Ok(ServerEvent::SessionNotices { .. })));
+
+        // Audible PCM is healthy even while the output file is still buffered.
+        std::fs::write(session.config.output_dir.join("system_audio.opus"), []).unwrap();
+        let healthy = HashMap::from([("system_audio.opus".to_string(), AudioActivitySnapshot {
+            last_received_ms: now + 12_000,
+            last_active_ms: now + 12_000,
+        })]);
+        update_source_notices(session, &healthy, now + 12_000, &manager.event_tx);
+        assert!(session.notices.is_empty());
+        let pause = HashMap::from([("system_audio.opus".to_string(), AudioActivitySnapshot {
+            last_received_ms: now + 41_999,
+            last_active_ms: now + 12_000,
+        })]);
+        update_source_notices(session, &pause, now + 41_999, &manager.event_tx);
+        assert!(session.notices.is_empty(), "short pauses are normal");
+        update_source_notices(session, &pause, now + 42_000, &manager.event_tx);
+        assert_eq!(session.notices[0].message, "System audio is receiving only silence");
+        drop(sessions);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

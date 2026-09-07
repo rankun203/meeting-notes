@@ -136,7 +136,7 @@ impl MacosSystemAudio {
             )));
         }
 
-        info!("System audio capture started");
+        info!("System audio capture device started; waiting for audible samples (device startup does not confirm recording permission)");
         Ok(())
     }
 

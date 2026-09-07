@@ -20,6 +20,45 @@ const FLUSH_INTERVAL_CHUNKS: u64 = 100;
 /// -60 dBFS ≈ 0.001 amplitude.
 const SILENCE_RMS_THRESHOLD: f32 = 0.001;
 
+/// Capture health must be measured before encoding: buffered files can stay
+/// empty while recording works, and encoded silence can produce a growing file.
+#[derive(Default)]
+pub struct AudioActivity {
+    last_received_ms: AtomicU64,
+    last_active_ms: AtomicU64,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct AudioActivitySnapshot {
+    pub last_received_ms: u64,
+    pub last_active_ms: u64,
+}
+
+impl AudioActivity {
+    pub fn snapshot(&self) -> AudioActivitySnapshot {
+        AudioActivitySnapshot {
+            last_received_ms: self.last_received_ms.load(Ordering::Relaxed),
+            last_active_ms: self.last_active_ms.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Returns true on the first audible chunk so the writer can log success.
+    fn observe(&self, samples: &[f32]) -> bool {
+        if samples.is_empty() {
+            return false;
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mean_sq = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+        let first_signal = mean_sq.sqrt() > SILENCE_RMS_THRESHOLD
+            && self.last_active_ms.swap(now_ms, Ordering::Relaxed) == 0;
+        self.last_received_ms.store(now_ms, Ordering::Relaxed);
+        first_signal
+    }
+}
+
 /// Resample interleaved audio from `from_rate` to `to_rate` using linear interpolation.
 /// Returns the input unchanged if rates match.
 fn resample_linear(input: &[f32], channels: u16, from_rate: u32, to_rate: u32) -> Vec<f32> {
@@ -501,23 +540,15 @@ fn write_one(
     path: &PathBuf,
     mp3_config: &Mp3Config,
     opus_config: &OpusConfig,
-    last_active_ms: &AtomicU64,
+    activity: &AudioActivity,
 ) -> Result<(), AudioError> {
     if writer.is_none() {
         info!("Writer for \"{}\": {}ch {}Hz", path.display(), chunk.channels, chunk.sample_rate);
         *writer = Some(create_writer(format, path, chunk.channels, chunk.sample_rate, mp3_config, opus_config)?);
     }
 
-    // Update last-active timestamp when audio is non-silent.
-    if !chunk.samples.is_empty() {
-        let mean_sq = chunk.samples.iter().map(|s| s * s).sum::<f32>() / chunk.samples.len() as f32;
-        if mean_sq.sqrt() > SILENCE_RMS_THRESHOLD {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            last_active_ms.store(now_ms, Ordering::Relaxed);
-        }
+    if activity.observe(&chunk.samples) {
+        info!("Audio signal received: \"{}\"", path.display());
     }
 
     writer.as_mut().unwrap().write_chunk(chunk)?;
@@ -541,7 +572,7 @@ impl AudioWriterHandle {
         mp3_config: Mp3Config,
         opus_config: OpusConfig,
         receiver: Receiver<AudioChunk>,
-        last_active_ms: Arc<AtomicU64>,
+        activity: Arc<AudioActivity>,
     ) -> Result<Self, AudioError> {
         info!("Audio writer started ({}): \"{}\"", format, path.display());
 
@@ -564,7 +595,7 @@ impl AudioWriterHandle {
                     while drained < STOP_DRAIN_MAX_CHUNKS {
                         match receiver.try_recv() {
                             Ok(chunk) => {
-                                if let Err(e) = write_one(&mut writer, &chunk, &mut chunk_count, format, &path, &mp3_config, &opus_config, &last_active_ms) {
+                                if let Err(e) = write_one(&mut writer, &chunk, &mut chunk_count, format, &path, &mp3_config, &opus_config, &activity) {
                                     write_error = Some(e);
                                     break;
                                 }
@@ -577,7 +608,7 @@ impl AudioWriterHandle {
                 }
                 match receiver.recv_timeout(RECV_POLL_INTERVAL) {
                     Ok(chunk) => {
-                        if let Err(e) = write_one(&mut writer, &chunk, &mut chunk_count, format, &path, &mp3_config, &opus_config, &last_active_ms) {
+                        if let Err(e) = write_one(&mut writer, &chunk, &mut chunk_count, format, &path, &mp3_config, &opus_config, &activity) {
                             write_error = Some(e);
                             break;
                         }
@@ -653,6 +684,21 @@ mod tests {
     use super::*;
     use crossbeam_channel::bounded;
 
+    #[test]
+    fn activity_distinguishes_missing_data_silence_and_sound() {
+        let activity = AudioActivity::default();
+        activity.observe(&[]);
+        assert_eq!(activity.snapshot().last_received_ms, 0);
+        activity.observe(&[0.0; 960]);
+        assert!(activity.snapshot().last_received_ms > 0);
+        assert_eq!(activity.snapshot().last_active_ms, 0);
+        activity.observe(&[0.1; 960]);
+        let audible_at = activity.snapshot().last_active_ms;
+        assert!(audible_at > 0);
+        activity.observe(&[0.00001; 960]);
+        assert_eq!(activity.snapshot().last_active_ms, audible_at);
+    }
+
     fn chunk(samples: usize) -> AudioChunk {
         AudioChunk {
             samples: vec![0.1f32; samples],
@@ -670,7 +716,7 @@ mod tests {
             Mp3Config::default(),
             OpusConfig::default(),
             receiver,
-            Arc::new(AtomicU64::new(0)),
+            Arc::new(AudioActivity::default()),
         )
         .unwrap()
     }

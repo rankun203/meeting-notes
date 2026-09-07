@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::collections::HashMap;
 
 use crossbeam_channel::{self, Sender};
 use tracing::{info, warn};
 
 use super::source::{AudioChunk, AudioError, AudioSource, SourceDescriptor, SourceType, sanitize_label};
-use super::writer::{AudioFormat, AudioWriterHandle, Mp3Config, OpusConfig};
+use super::writer::{AudioActivity, AudioActivitySnapshot, AudioFormat, AudioWriterHandle, Mp3Config, OpusConfig};
 
 struct ActiveSource {
     descriptor: SourceDescriptor,
@@ -14,8 +14,7 @@ struct ActiveSource {
     writer: Option<AudioWriterHandle>,
     sender: Option<Sender<AudioChunk>>,
     file_path: Option<PathBuf>,
-    /// Epoch millis of last non-silent audio chunk (updated by writer thread).
-    last_active_ms: Arc<AtomicU64>,
+    activity: Arc<AudioActivity>,
 }
 
 pub struct Recorder {
@@ -46,7 +45,7 @@ impl Recorder {
                 writer: None,
                 sender: None,
                 file_path: None,
-                last_active_ms: Arc::new(AtomicU64::new(0)),
+                activity: Arc::new(AudioActivity::default()),
             })
             .collect();
         Self {
@@ -84,7 +83,7 @@ impl Recorder {
                 self.mp3_config,
                 self.opus_config,
                 receiver,
-                active.last_active_ms.clone(),
+                active.activity.clone(),
             )?;
             active.source.as_mut().unwrap().start(sender.clone())?;
             active.writer = Some(writer);
@@ -167,7 +166,14 @@ impl Recorder {
     pub fn system_audio_last_active_ms(&self) -> Option<u64> {
         self.sources.iter()
             .find(|a| a.descriptor.source_type == SourceType::SystemMix)
-            .map(|a| a.last_active_ms.load(std::sync::atomic::Ordering::Relaxed))
+            .map(|a| a.activity.snapshot().last_active_ms)
+    }
+
+    pub fn source_activity(&self) -> HashMap<String, AudioActivitySnapshot> {
+        self.sources.iter().filter_map(|source| {
+            let filename = source.file_path.as_ref()?.file_name()?.to_str()?;
+            Some((filename.to_string(), source.activity.snapshot()))
+        }).collect()
     }
 
     /// Take ownership of any sources that lost their device, leaving the
