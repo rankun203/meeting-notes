@@ -204,6 +204,81 @@ try {
       r.request().method() === 'PATCH',
   );
   assert.deepEqual(errors, []);
+  // Stress the library with a full page of meetings, without changing demo data.
+  // Supply the same list through initial WebSocket snapshots and pagination.
+  const library = await browser.newPage();
+  const originals = (await (await fetch(`${base}/api/sessions`)).json())
+    .sessions;
+  const densityData = {
+    sessions: Array.from({ length: 50 }, (_, i) => ({
+      ...originals[i % originals.length],
+      id: i < originals.length ? originals[i].id : `density-meeting-${i}`,
+    })),
+    total: 75,
+  };
+  await library.routeWebSocket('**/api/ws', (socket) => {
+    socket.send(JSON.stringify({ type: 'init', data: densityData }));
+  });
+  await library.route('**/api/sessions?*', (route) =>
+    route.fulfill({ json: densityData }),
+  );
+  for (const [width, height, minimumRows] of [
+    [1366, 768, 8],
+    [1280, 720, 7],
+    [390, 844, 8],
+  ]) {
+    await library.setViewportSize({ width, height });
+    await library.goto(
+      `${base}/${width < 768 ? '' : 'sessions/demo-meeting-1'}`,
+    );
+    await library.waitForFunction(
+      () => document.querySelectorAll('.meeting-list-item').length === 50,
+    );
+    if (width >= 768)
+      await library.locator('.summary-scroll .md-content h2').first().waitFor();
+    const metrics = await library.locator('.meeting-list').evaluate((list) => {
+      const box = list.getBoundingClientRect();
+      return {
+        height: box.height,
+        visibleRows: [...list.children].filter((row) => {
+          const r = row.getBoundingClientRect();
+          return r.top >= box.top && r.bottom <= box.bottom;
+        }).length,
+        scrolls: list.scrollHeight > list.clientHeight,
+      };
+    });
+    assert.ok(
+      metrics.visibleRows >= minimumRows,
+      `${width}×${height}: only ${metrics.visibleRows} complete meetings fit`,
+    );
+    assert.ok(
+      metrics.height >= height * 0.55,
+      'The meeting list needs most of the sidebar height.',
+    );
+    assert.ok(metrics.scrolls, 'The long library must scroll.');
+    await library.screenshot({ path: `${output}/library-${width}.png` });
+    await library.locator('.meeting-list').evaluate((list) => {
+      list.scrollTop = list.scrollHeight;
+    });
+    assert.ok(
+      await library
+        .getByRole('button', { name: 'Record a meeting', exact: true })
+        .isVisible(),
+    );
+    assert.ok(
+      await library
+        .getByRole('button', { name: 'Next', exact: true })
+        .isVisible(),
+    );
+    if (width >= 768) {
+      const player = await library.locator('.playback-dock').boundingBox();
+      assert.ok(player.y + player.height <= height + 1);
+    }
+    console.log(
+      `${width}×${height}: ${metrics.visibleRows} complete meetings; ${Math.round(metrics.height)}px list height.`,
+    );
+  }
+  await library.close();
   console.log(
     'Passed: playback, seeking, highlights, keyboard tabs, resize continuity, four viewport sizes, files, recording setup, search, quick play, mobile admin, notes persistence.',
   );

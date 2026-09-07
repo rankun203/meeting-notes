@@ -74,7 +74,7 @@ export function RecordingDialog({
             }),
           ],
         }),
-        jsx('h2', { children: 'Make room for listening.' }),
+        jsx('h2', { children: 'Record or import' }),
         jsx('p', {
           className: 'muted',
           children:
@@ -157,10 +157,6 @@ export function FilesPanel({ session, onPlay }) {
           jsx('h3', { children: 'Meeting files' }),
           jsx('span', { className: 'count-badge', children: files.length }),
         ],
-      }),
-      jsx('p', {
-        className: 'muted text-xs mb-3',
-        children: 'Everything from this conversation.',
       }),
       ...primary.map(fileRow),
       supporting.length > 0 &&

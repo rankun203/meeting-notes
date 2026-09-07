@@ -560,7 +560,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
           method: 'PATCH',
           body: JSON.stringify({ notes: val || null }),
         });
-      } catch { setError('Your notes could not be saved. Please try editing them again.'); }
+      } catch { setError('Notes could not be saved. Please try editing them again.'); }
       setNotesSaving(false);
     }, 800);
   }
@@ -957,7 +957,6 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                 onSpeakerUpdate: onRefresh,
               }),
               activeTab === 'summary' && jsxs('div', { className: 'summary-scroll', role: 'tabpanel', id: 'summary-panel', 'aria-labelledby': 'summary-tab', children: [
-                jsx('div', { className: 'reader-intro', children: jsxs(Fragment, { children: [jsx('span', { className: 'eyebrow', children: 'THE BIG PICTURE' }), jsx('h2', { children: 'A conversation, distilled.' }), jsx('p', { children: hasAudio ? 'Click a timestamp to listen. Cited passages light up with the audio.' : 'Click a timestamp to find the source passage in the transcript.' })] }) }),
                 // Additional instructions input (shown for both generate and re-generate)
                 regenPrompt != null && jsxs('div', { className: 'mb-3 space-y-2', children: [
                   jsx('textarea', {
@@ -1090,10 +1089,9 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
 
   return jsxs('div', { className: 'meeting-workspace', children: [
     jsxs('header', { className: 'meeting-header', children: [
-      jsxs('div', { className: 'meeting-breadcrumb', children: [
-        isMobile && jsx('button', { onClick: onBack, className: 'icon-button', 'aria-label': 'Back to library', children: jsx(BackIcon,{}) }),
-        jsx('span', { children: 'WORKSPACE' }), jsx('span', { children: '/' }), jsx('span', { children: 'Meeting library' }),
-        jsx('span', { className: 'edition-label', children: 'NEXT / 01' }),
+      isMobile && jsxs('div', { className: 'meeting-breadcrumb', children: [
+        jsx('button', { onClick: onBack, className: 'icon-button', 'aria-label': 'Back to library', children: jsx(BackIcon,{}) }),
+        jsx('span', { children: 'Meetings' }),
       ]}),
       jsxs('div', { className: 'meeting-title-row', children: [
         jsxs('div', { className: 'meeting-title-group', children: [
@@ -1201,8 +1199,8 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
       jsxs('aside', { id:'meeting-context', className: `meeting-context ${contextOpen ? 'context-open' : ''}`, 'aria-label':'Meeting context', children: [
         jsx(FilesPanel, { session:s, onPlay:() => playerRef.current?.seekAndPlay(0) }),
         jsxs('section', { className:'context-card notes-card', children:[
-          jsxs('div', { className:'section-heading', children:[jsx('h3',{children:'Your notes'}),notesSaving && jsx('span',{className:'text-xs',children:'Saving…'})] }),
-          jsx('textarea', { value:notes, onChange:handleNotesChange, placeholder:'A thought to come back to…', 'aria-label':'Meeting notes', rows:4 }),
+          jsxs('div', { className:'section-heading', children:[jsx('h3',{children:'Notes'}),notesSaving && jsx('span',{className:'text-xs',children:'Saving…'})] }),
+          jsx('textarea', { value:notes, onChange:handleNotesChange, placeholder:'Add notes…', 'aria-label':'Meeting notes', rows:3 }),
         ]}),
         s.transcript_available && jsx(SpeakerAttributionWrapper, {
             sessionId: s.id,
@@ -1304,8 +1302,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
     hasAudio && jsxs('footer', { className:'playback-dock', 'aria-label':'Meeting playback', children:[
       jsxs('div', { className:'dock-heading', children:[
         jsx('span',{className:'dock-mark',children:jsx(Glyph,{name:'sound',size:24})}),
-        jsxs('div',{children:[jsx('span',{className:'eyebrow',children:'LISTEN BACK'}),jsx('strong',{children:s.name || 'Meeting recording'})]}),
-        jsx('span',{className:'dock-hint',children:'Stay in the conversation.'}),
+        jsx('div',{children:jsx('strong',{children:s.name || 'Meeting recording'})}),
       ]}),
       jsx(SyncedPlayer, { key:s.id, ref:playerRef, sessionId:s.id, onTimeUpdate:setPlaybackTime, files:audioFiles.map(name => { const meta = (s.source_meta || []).find(src => src.filename === name); return { name, label:meta?.source_label || name.replace(/\.[^.]+$/, '').replace(/_/g,' '), sourceType:meta?.source_type || null }; }) }),
     ]}),

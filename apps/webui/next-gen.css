@@ -9,7 +9,7 @@
   --forest-2: #203d35;
   --lime: #d2ef9c;
   --teal: #266555;
-  --radius: 16px;
+  --radius: 10px;
   color-scheme: light;
 }
 * {
@@ -73,7 +73,7 @@ select {
   overflow: hidden;
 }
 .sidebar-column {
-  width: 292px;
+  width: 272px;
   flex-shrink: 0;
   min-height: 0;
 }
@@ -114,31 +114,24 @@ select {
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 28px 22px 26px;
+  gap: 9px;
+  padding: 12px 14px;
 }
 .brand-symbol {
   background: var(--lime);
   color: var(--forest);
-  height: 40px;
-  width: 40px;
-  border-radius: 13px;
+  height: 30px;
+  width: 30px;
+  border-radius: 9px;
   display: grid;
   place-items: center;
   transform: rotate(-5deg);
 }
 .brand strong {
   display: block;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 650;
   letter-spacing: -0.5px;
-}
-.brand div > span {
-  display: block;
-  font-size: 10px;
-  color: #a4b9aa;
-  letter-spacing: 0.25px;
-  margin-top: 4px;
 }
 .new-recording {
   display: flex;
@@ -147,13 +140,15 @@ select {
   background: var(--lime);
   color: #1b3529;
   border: 0;
-  border-radius: 10px;
-  padding: 13px 15px;
-  margin: 0 18px 22px;
+  border-radius: 7px;
+  padding: 8px 12px;
+  margin: 0 12px 8px;
   font-size: 12px;
   font-weight: 700;
   text-align: left;
   box-shadow: 0 3px 0 #0e241d;
+  min-height: 38px;
+  flex-shrink: 0;
 }
 .new-recording > span {
   margin-left: auto;
@@ -170,7 +165,7 @@ select {
 .workspace-nav {
   display: flex;
   gap: 4px;
-  padding: 0 18px 20px;
+  padding: 0 12px 8px;
   border-bottom: 1px solid #365046;
 }
 .workspace-nav button {
@@ -179,10 +174,11 @@ select {
   justify-content: center;
   gap: 6px;
   border-radius: 8px;
-  padding: 9px 8px;
+  padding: 6px;
   flex: 1;
   font-size: 11px;
   color: #b4c6ba;
+  min-height: 32px;
 }
 .workspace-nav .nav-active {
   color: var(--lime);
@@ -195,7 +191,7 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 23px 22px 13px;
+  padding: 10px 14px 7px;
 }
 .library-heading h2 {
   font-size: 12px;
@@ -212,8 +208,8 @@ select {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin: 0 18px 12px;
-  padding: 10px 11px;
+  margin: 0 12px 6px;
+  padding: 7px 9px;
   background: #203b32;
   border: 1px solid #405749;
   border-radius: 8px;
@@ -226,22 +222,23 @@ select {
   background: none;
   border: 0;
   outline-offset: 5px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .library-search input::placeholder {
   color: #a3b8a8;
 }
 .library-filters {
   display: flex;
-  gap: 6px;
-  padding: 0 18px 16px;
+  gap: 4px;
+  padding: 0 12px 8px;
 }
 .library-filters button {
-  font-size: 10px;
-  padding: 5px 9px;
+  font-size: 11px;
+  padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: 6px;
   color: #b0c3b4;
+  min-height: 28px;
 }
 .library-filters button[aria-pressed='true'] {
   border-color: #72816a;
@@ -251,7 +248,7 @@ select {
 .meeting-list {
   flex: 1;
   overflow: auto;
-  padding: 0 12px 20px;
+  padding: 0 8px 8px;
   min-height: 0;
   scrollbar-width: thin;
   scrollbar-color: #5c7261 transparent;
@@ -259,8 +256,8 @@ select {
 .meeting-list-item {
   position: relative;
   border: 1px solid transparent;
-  border-radius: 11px;
-  margin-bottom: 5px;
+  border-radius: 7px;
+  margin-bottom: 2px;
 }
 .meeting-list-item:hover {
   background: #203d33;
@@ -271,59 +268,59 @@ select {
   box-shadow: inset 3px 0 0 var(--lime);
 }
 .meeting-select {
-  display: block;
+  display: grid;
   width: 100%;
-  padding: 14px 38px 14px 14px;
+  padding: 9px 38px 9px 10px;
   text-align: left;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
 }
 .meeting-list-date {
   display: block;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
   color: #afc0a9;
-  margin-bottom: 7px;
+  margin-bottom: 0;
+  grid-column: 1;
+  grid-row: 2;
+  line-height: 1.5;
 }
 .meeting-select strong {
   display: block;
   font-size: 12px;
   font-weight: 550;
-  line-height: 1.5;
+  line-height: 1.4;
   color: #eef1e6;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .meeting-list-meta {
   display: flex;
   gap: 5px;
   align-items: center;
-  font-size: 9px;
+  font-size: 10px;
   color: #b9c9b4;
-  margin-top: 9px;
-  line-height: 1.4;
-}
-.meeting-list-tags {
-  display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-.meeting-list-tags span {
-  font-size: 9px;
-  color: #bdc8b4;
-  border: 1px solid #486145;
-  border-radius: 4px;
-  padding: 1px 5px;
+  margin-top: 0;
+  line-height: 1.5;
+  grid-column: 2;
+  grid-row: 2;
 }
 .quick-play {
   position: absolute;
-  top: 37px;
-  right: 10px;
-  width: 25px;
-  height: 25px;
+  top: 50%;
+  right: 6px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   display: grid;
   place-items: center;
   border: 1px solid #718568;
   color: var(--lime);
+  transform: translateY(-50%);
 }
 .quick-play:hover {
   background: var(--lime);
@@ -332,25 +329,6 @@ select {
 .quick-play svg {
   width: 11px;
   height: 11px;
-}
-.library-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 9px;
-  color: #b0c3b2;
-  border-top: 1px solid #365046;
-  padding: 18px 20px;
-}
-.library-footer > span:last-child {
-  margin-left: auto;
-  color: #8da38e;
-}
-.local-dot {
-  height: 6px;
-  width: 6px;
-  background: #b4d58a;
-  border-radius: 50%;
 }
 .library-empty {
   font-size: 12px;
@@ -362,12 +340,13 @@ select {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  padding: 15px;
+  padding: 8px 12px;
+  flex-shrink: 0;
 }
 .live-recording-link {
-  margin: 0 18px 15px;
+  margin: 0 12px 8px;
   font-size: 11px;
-  padding: 10px;
+  padding: 7px;
   border: 1px solid #ac735d;
   border-radius: 8px;
   color: #ffd1b4;
@@ -400,7 +379,7 @@ select {
   position: relative;
 }
 .meeting-header {
-  padding: 25px 34px 22px;
+  padding: 14px 18px 12px;
   flex-shrink: 0;
 }
 .meeting-breadcrumb {
@@ -415,20 +394,12 @@ select {
   font-weight: 700;
   color: #3e5547;
 }
-.edition-label {
-  margin-left: auto;
-  border: 1px solid #b5c2aa;
-  border-radius: 4px;
-  padding: 4px 7px;
-  font-size: 8px;
-  letter-spacing: 1.3px;
-}
 .meeting-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  margin-top: 20px;
+  gap: 12px;
+  margin-top: 0;
 }
 .meeting-title-group {
   min-width: 0;
@@ -437,8 +408,8 @@ select {
 .meeting-title {
   display: block;
   font-family: Georgia, 'Times New Roman', serif;
-  font-size: clamp(25px, 2.6vw, 38px);
-  letter-spacing: -1.2px;
+  font-size: clamp(24px, 2vw, 29px);
+  letter-spacing: -0.7px;
   line-height: 1.18;
   text-align: left;
   color: #253c32;
@@ -462,11 +433,11 @@ select {
 }
 .meeting-subtitle {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
-  font-size: 10px;
+  font-size: 11px;
   color: #677363;
-  margin-top: 12px;
+  margin-top: 6px;
 }
 .meeting-subtitle > span + span::before {
   content: '·';
@@ -524,7 +495,7 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 9px;
+  margin-bottom: 6px;
 }
 .section-heading h3 {
   font-size: 12px;
@@ -553,16 +524,16 @@ select {
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 268px;
-  gap: 24px;
-  padding: 0 34px 25px;
+  grid-template-columns: minmax(0, 1fr) 252px;
+  gap: 12px;
+  padding: 0 18px 12px;
 }
 .meeting-reader {
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 .reader-card {
   display: flex;
@@ -581,16 +552,16 @@ select {
   justify-content: space-between;
   gap: 14px;
   flex-shrink: 0;
-  min-height: 61px;
+  min-height: 42px;
   border-bottom: 1px solid var(--line);
-  padding: 0 22px;
+  padding: 0 16px;
   background: #fffefa;
   z-index: 2;
 }
 .reader-tabs {
   align-self: stretch;
   display: flex;
-  gap: 24px;
+  gap: 20px;
 }
 .reader-tabs button {
   position: relative;
@@ -598,7 +569,7 @@ select {
   border-radius: 0 !important;
   padding: 0 !important;
   color: #707c67 !important;
-  font-size: 11px !important;
+  font-size: 12px !important;
   letter-spacing: 0 !important;
   text-transform: none !important;
   font-weight: 550;
@@ -625,32 +596,14 @@ select {
 .summary-scroll {
   overflow: auto;
   min-height: 0;
-  padding: 30px 30px 48px;
+  padding: 16px 20px 24px;
   scrollbar-width: thin;
   scrollbar-color: #c9d3be transparent;
   overscroll-behavior: contain;
 }
-.reader-intro {
-  margin-bottom: 30px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 25px;
-}
-.reader-intro h2 {
-  font:
-    25px Georgia,
-    serif;
-  letter-spacing: -0.7px;
-  margin: 11px 0 10px;
-  color: #2d4436;
-}
-.reader-intro p {
-  font-size: 11px;
-  line-height: 1.7;
-  color: #617254;
-}
 .summary-scroll .md-content {
   font-size: 13px !important;
-  line-height: 1.9 !important;
+  line-height: 1.65 !important;
   color: #394a3b !important;
   word-break: normal;
   overflow-wrap: anywhere;
@@ -662,7 +615,7 @@ select {
   color: #2d4a37;
   font-size: 14px !important;
   font-weight: 650;
-  margin: 27px 0 12px !important;
+  margin: 18px 0 8px !important;
   border: 0;
   padding: 0;
   line-height: 1.5;
@@ -681,7 +634,7 @@ select {
     box-shadow 0.25s;
 }
 .summary-scroll .md-content p {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 .summary-scroll .md-content a {
   font-size: 10px;
@@ -720,8 +673,8 @@ select {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 20px 18px 0;
-  gap: 15px;
+  padding: 12px 12px 0;
+  gap: 8px;
 }
 .transcript-panel > div:first-child {
   flex-shrink: 0;
@@ -735,10 +688,10 @@ select {
 }
 .transcript-row {
   opacity: 1 !important;
-  padding: 9px 0;
+  padding: 6px 0;
   border-bottom: 1px solid #eef0e9;
   border-radius: 0 !important;
-  line-height: 1.8;
+  line-height: 1.6;
 }
 .transcript-row > span:last-child {
   color: #405143 !important;
@@ -768,17 +721,17 @@ select {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 10px;
   scrollbar-width: thin;
   scrollbar-color: #c9d3be transparent;
   overscroll-behavior: contain;
-  padding-bottom: 10px;
+  padding-bottom: 0;
 }
 .context-card {
   border: 1px solid #dce2d4;
-  border-radius: 13px;
+  border-radius: 9px;
   background: #fdfcf6;
-  padding: 18px;
+  padding: 12px;
   flex-shrink: 0;
 }
 .files-card {
@@ -790,8 +743,8 @@ select {
 .file-row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 12px 0;
+  gap: 7px;
+  padding: 6px 0;
   border-bottom: 1px solid #dce2cf;
 }
 .file-row:last-child {
@@ -799,8 +752,8 @@ select {
   padding-bottom: 1px;
 }
 .file-type {
-  height: 31px;
-  width: 28px;
+  height: 26px;
+  width: 24px;
   display: grid;
   place-items: center;
   color: #718064;
@@ -827,10 +780,10 @@ select {
 }
 .file-meta {
   display: block;
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.4px;
   color: #617254;
-  margin-top: 4px;
+  margin-top: 1px;
 }
 .file-action {
   display: grid;
@@ -866,18 +819,18 @@ select {
   background: transparent;
   width: 100%;
   resize: vertical;
-  font-size: 11px;
+  font-size: 12px;
   color: #665e40;
-  line-height: 1.9;
+  line-height: 1.6;
   border: 0;
-  min-height: 95px;
+  min-height: 64px;
 }
 .notes-card textarea::placeholder {
   color: #8a8061;
 }
 .meeting-context > .rounded-xl {
   background: #fdfcf6;
-  padding: 17px;
+  padding: 12px;
   border-color: #dce2d4;
 }
 .meeting-context .space-y-2 > div {
@@ -893,12 +846,12 @@ select {
   margin-left: 13px;
 }
 .metadata-panel {
-  padding-top: 18px;
+  padding-top: 12px;
 }
 .metadata-panel > .grid {
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  gap: 10px;
 }
 .metadata-panel .text-sm {
   font-size: 11px;
@@ -952,33 +905,27 @@ select {
   background: var(--forest);
   color: #e6eedb;
   border-top: 1px solid #536d4c;
-  padding: 14px 34px 17px;
+  padding: 7px 18px 9px;
   position: relative;
   z-index: 10;
 }
 .dock-heading {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 7px;
+  margin-bottom: 2px;
 }
 .dock-mark {
   color: var(--lime);
   background: #2d4537;
-  border-radius: 8px;
-  width: 33px;
-  height: 33px;
+  border-radius: 4px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
 }
-.dock-heading .eyebrow {
-  color: #c4d4ad;
-  font-size: 7px;
-  letter-spacing: 1.8px;
-  margin-bottom: 3px;
-}
 .dock-heading strong {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   display: block;
   max-width: 300px;
@@ -986,31 +933,24 @@ select {
   text-overflow: ellipsis;
   overflow: hidden;
 }
-.dock-hint {
-  margin-left: auto;
-  color: #b5c7a3;
-  font-size: 10px;
-  font-family: Georgia, serif;
-  font-style: italic;
-}
 .synced-player {
   display: grid;
-  grid-template-columns: 144px minmax(100px, 1fr) auto;
-  gap: 24px;
+  grid-template-columns: 126px minmax(100px, 1fr) auto;
+  gap: 16px;
   align-items: center;
 }
 .player-transport {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 .main-play-button {
   background: var(--lime);
   color: #23442d;
   display: grid;
   place-items: center;
-  width: 43px;
-  height: 43px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -1035,17 +975,17 @@ select {
   min-width: 0;
 }
 .player-timeline > div:first-child {
-  height: 31px;
+  height: 20px;
   overflow: hidden;
 }
 .player-timeline > div:first-child > span {
   display: none;
 }
 .player-timeline canvas {
-  height: 30px !important;
+  height: 20px !important;
 }
 .player-timeline > div:first-child > div {
-  height: 31px !important;
+  height: 20px !important;
 }
 .player-progress {
   display: flex;
@@ -1187,19 +1127,16 @@ select {
 @media (min-width: 1600px) {
   .workspace-grid {
     grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 30px;
-    padding-left: 44px;
-    padding-right: 44px;
+    gap: 16px;
+    padding-left: 20px;
+    padding-right: 20px;
   }
   .meeting-header {
-    padding-left: 44px;
-    padding-right: 44px;
+    padding-left: 20px;
+    padding-right: 20px;
   }
   .summary-scroll {
-    padding: 35px 48px;
-  }
-  .reader-intro h2 {
-    font-size: 30px;
+    padding: 16px 24px;
   }
   .summary-scroll .md-content {
     font-size: 14px !important;
@@ -1210,15 +1147,15 @@ select {
     width: 255px;
   }
   .workspace-grid {
-    padding: 0 22px 20px;
-    gap: 17px;
+    padding: 0 14px 10px;
+    gap: 10px;
     grid-template-columns: minmax(0, 1fr) 235px;
   }
   .meeting-header {
-    padding: 22px;
+    padding: 12px 14px;
   }
   .summary-scroll {
-    padding: 22px;
+    padding: 14px 18px;
   }
   .reader-toolbar {
     padding: 0 16px;
@@ -1228,7 +1165,7 @@ select {
     gap: 15px;
   }
   .context-card {
-    padding: 14px;
+    padding: 12px;
   }
   .playback-dock {
     padding-left: 22px;
@@ -1241,15 +1178,12 @@ select {
   .player-transport {
     gap: 10px;
   }
-  .reader-intro h2 {
-    font-size: 23px;
-  }
   .meeting-title {
     font-size: 29px;
   }
   .brand {
-    padding-left: 18px;
-    padding-right: 18px;
+    padding-left: 14px;
+    padding-right: 14px;
   }
 }
 @media (max-width: 1050px) {
@@ -1265,9 +1199,9 @@ select {
   .meeting-context.context-open {
     display: flex;
     position: absolute;
-    top: 140px;
+    top: 88px;
     right: 22px;
-    bottom: 170px;
+    bottom: 100px;
     width: 285px;
     background: var(--paper);
     border: 1px solid #b6c6a7;
@@ -1277,7 +1211,7 @@ select {
     z-index: 8;
   }
   .summary-scroll {
-    padding: 28px;
+    padding: 14px 18px;
   }
   .meeting-title-row {
     gap: 10px;
@@ -1285,11 +1219,8 @@ select {
   .meeting-title {
     font-size: 27px;
   }
-  .dock-hint {
-    display: none;
-  }
   .reader-toolbar {
-    min-height: 58px;
+    min-height: 42px;
   }
 }
 @media (max-width: 767px) {
@@ -1297,30 +1228,27 @@ select {
     width: 100%;
   }
   .brand {
-    padding: 23px;
+    padding: 12px 14px;
   }
   .brand strong {
-    font-size: 21px;
+    font-size: 17px;
   }
   .workspace-nav button {
     font-size: 12px;
   }
   .meeting-list-item {
-    margin-bottom: 8px;
+    margin-bottom: 2px;
   }
   .meeting-select strong {
     font-size: 14px;
   }
   .meeting-select {
-    padding: 16px 45px 16px 16px;
+    padding: 10px 48px 10px 12px;
   }
   .meeting-list-meta {
     font-size: 11px;
   }
   .meeting-list-date {
-    font-size: 10px;
-  }
-  .library-footer {
     font-size: 10px;
   }
   .library-heading h2 {
@@ -1330,9 +1258,9 @@ select {
     font-size: 13px;
   }
   .new-recording {
-    padding: 15px;
+    padding: 10px 12px;
     font-size: 14px;
-    margin-bottom: 16px;
+    margin-bottom: 8px;
   }
   .library-filters button {
     font-size: 11px;
@@ -1341,19 +1269,19 @@ select {
     width: 100%;
   }
   .meeting-header {
-    padding: 13px 16px 17px;
+    padding: 8px 12px 10px;
   }
   .meeting-breadcrumb {
     font-size: 8px;
     gap: 8px;
   }
   .meeting-title-row {
-    margin-top: 12px;
+    margin-top: 6px;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: 8px;
   }
   .meeting-title {
-    font-size: 26px;
+    font-size: 24px;
   }
   .meeting-title-group {
     flex-basis: 100%;
@@ -1364,8 +1292,8 @@ select {
   }
   .meeting-header-actions {
     position: absolute;
-    right: 16px;
-    top: 17px;
+    right: 12px;
+    top: 8px;
   }
   .meeting-header-actions .quiet-button {
     padding: 6px 8px;
@@ -1376,15 +1304,12 @@ select {
     padding: 7px 8px;
     font-size: 10px;
   }
-  .edition-label {
-    display: none;
-  }
   .workspace-grid {
     padding: 0 12px 12px;
   }
   .reader-toolbar {
     padding: 0 14px;
-    min-height: 52px;
+    min-height: 44px;
     gap: 10px;
   }
   .reader-tabs {
@@ -1397,34 +1322,25 @@ select {
     font-size: 12px !important;
   }
   .summary-scroll {
-    padding: 23px 20px 32px;
-  }
-  .reader-intro {
-    padding-bottom: 20px;
-    margin-bottom: 20px;
-  }
-  .reader-intro h2 {
-    font-size: 24px;
-  }
-  .reader-intro p {
-    font-size: 10px;
+    padding: 12px 16px 20px;
   }
   .summary-scroll .md-content {
-    font-size: 12px !important;
+    font-size: 13px !important;
   }
   .playback-dock {
-    padding: 11px 17px max(14px, env(safe-area-inset-bottom));
-    min-height: 122px;
+    padding: 8px 12px max(10px, env(safe-area-inset-bottom));
+    min-height: 96px;
   }
   .dock-heading {
-    margin-bottom: 8px;
+    margin-bottom: 4px;
+    padding-right: 120px;
   }
   .dock-mark {
-    height: 28px;
-    width: 28px;
+    height: 24px;
+    width: 24px;
   }
   .dock-heading strong {
-    max-width: 240px;
+    max-width: 100%;
     font-size: 10px;
   }
   .synced-player {
@@ -1445,7 +1361,7 @@ select {
   .player-options {
     position: absolute;
     right: 0;
-    top: -38px;
+    top: -30px;
     font-size: 9px;
     gap: 10px;
   }
@@ -1473,16 +1389,16 @@ select {
     min-width: 26px;
   }
   .meeting-context.context-open {
-    top: 133px;
+    top: 115px;
     right: 12px;
     left: 12px;
     width: auto;
-    bottom: 144px;
+    bottom: 110px;
     padding: 15px;
     box-shadow: 0 10px 60px #183a2966;
   }
   .transcript-panel {
-    padding: 15px 10px 0;
+    padding: 10px 10px 0;
   }
   .transcript-row {
     grid-template-columns: 53px 1fr !important;
@@ -1528,8 +1444,8 @@ select {
 }
 .supporting-files {
   border-top: 1px solid #dce2cf;
-  margin-top: 8px;
-  padding-top: 10px;
+  margin-top: 5px;
+  padding-top: 6px;
 }
 .supporting-files summary {
   color: #68775e;
@@ -1542,7 +1458,7 @@ select {
 }
 .participant {
   border-bottom: 1px solid #e6e9df;
-  padding: 12px 0;
+  padding: 7px 0;
 }
 .participant:last-of-type {
   border-bottom: 0;
@@ -1558,8 +1474,8 @@ select {
   display: none;
 }
 .participant-avatar {
-  height: 31px;
-  width: 31px;
+  height: 27px;
+  width: 27px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -1711,4 +1627,24 @@ select {
 }
 .reader-tabs button:focus-visible {
   outline-offset: -4px;
+}
+
+.summary-scroll .md-content > :first-child {
+  margin-top: 0 !important;
+}
+.dock-heading > div {
+  min-width: 0;
+}
+.dock-mark svg {
+  width: 16px;
+  height: 16px;
+}
+@media (max-width: 767px) {
+  .quick-play {
+    width: 36px;
+    height: 36px;
+  }
+  .library-filters button {
+    min-height: 32px;
+  }
 }

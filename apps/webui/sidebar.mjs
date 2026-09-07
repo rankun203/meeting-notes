@@ -59,15 +59,13 @@ export function Sidebar({
             children: jsx(Glyph, { name: 'sound', size: 25 }),
           }),
           jsxs('div', {
-            children: [
-              jsx('strong', { children: 'Meeting Notes' }),
-              jsx('span', { children: 'A little more presence.' }),
-            ],
+            children: [jsx('strong', { children: 'Meeting Notes' })],
           }),
         ],
       }),
       jsx('button', {
         className: 'new-recording',
+        'aria-label': 'Record a meeting',
         onClick: () => {
           track('recording_form_opened');
           setShowNew(true);
@@ -111,7 +109,7 @@ export function Sidebar({
             jsxs('div', {
               className: 'library-heading',
               children: [
-                jsx('h2', { children: 'Your meetings' }),
+                jsx('h2', { children: 'Meetings' }),
                 jsx('span', { children: total }),
               ],
             }),
@@ -159,6 +157,10 @@ export function Sidebar({
                       children: [
                         jsx('button', {
                           className: 'meeting-select',
+                          title: [
+                            s.name || 'Untitled meeting',
+                            ...(s.tags || []),
+                          ].join(' · '),
                           onClick: () => onSelect(s.id),
                           'aria-current':
                             selectedId === s.id ? 'true' : undefined,
@@ -185,24 +187,15 @@ export function Sidebar({
                                   }),
                                   s.state === 'recording'
                                     ? 'Recording'
-                                    : s.summary_available
-                                      ? 'Summary ready'
-                                      : s.transcript_available
-                                        ? 'Transcript ready'
-                                        : 'Audio session',
-                                  s.duration_secs != null &&
-                                    ` · ${formatDuration(s.duration_secs)}`,
+                                    : s.duration_secs != null
+                                      ? formatDuration(s.duration_secs)
+                                      : s.summary_available
+                                        ? 'Summary'
+                                        : s.transcript_available
+                                          ? 'Transcript'
+                                          : 'Audio',
                                 ],
                               }),
-                              !!s.tags?.length &&
-                                jsx('span', {
-                                  className: 'meeting-list-tags',
-                                  children: s.tags
-                                    .slice(0, 2)
-                                    .map((t) =>
-                                      jsx('span', { key: t, children: t }),
-                                    ),
-                                }),
                             ],
                           }),
                         }),
@@ -223,7 +216,7 @@ export function Sidebar({
                     children:
                       query || filter !== 'all'
                         ? 'No matching meetings. Try another search or filter.'
-                        : 'Your next good conversation starts here.',
+                        : 'No meetings yet. Record or import a meeting to get started.',
                   }),
             }),
             total > PAGE_SIZE &&
@@ -266,14 +259,6 @@ export function Sidebar({
             onSelect: setSettingsCategory,
           }),
         }),
-      jsxs('div', {
-        className: 'library-footer',
-        children: [
-          jsx('span', { className: 'local-dot' }),
-          jsx('span', { children: 'Your workspace. Your words.' }),
-          jsx('span', { children: '01' }),
-        ],
-      }),
     ],
   });
 }
