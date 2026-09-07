@@ -18,6 +18,8 @@ export function Glyph({ name, size = 18 }) {
     search: 'M21 21l-5-5 M18 10a8 8 0 1 0-16 0 8 8 0 0 0 16 0',
     file: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h5',
     download: 'M12 3v12 M7 10l5 5 5-5 M5 16v5h14v-5',
+    refresh: 'M20 7v5h-5 M4 17v-5h5 M6.1 7a7 7 0 0 1 11.6-2L20 8 M4 16l2.3 3A7 7 0 0 0 17.9 17',
+    chevron: 'M6 9l6 6 6-6',
     sound: 'M4 10v4 M8 5v14 M12 2v20 M16 7v10 M20 10v4',
     arrow: 'M4 12h16 M14 6l6 6-6 6',
     spark: 'M12 2l3 7 7 3-7 3-3 7-3-7-7-3 7-3z',

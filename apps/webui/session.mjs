@@ -565,13 +565,24 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
     }, 800);
   }
 
-  // Close export dropdown on outside click
+  // Close export dropdown on outside click or Escape.
   useEffect(() => {
     if (!exportOpen) return;
     const handler = (e) => { if (exportRef.current && !exportRef.current.contains(e.target)) setExportOpen(false); };
+    const onKeyDown = (e) => {
+      if (e.key !== 'Escape') return;
+      setExportOpen(false);
+      exportRef.current?.querySelector('.export-trigger')?.focus();
+    };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [exportOpen]);
+
+  useEffect(() => { setExportOpen(false); }, [activeTab]);
 
   async function openTagPicker(e) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -874,78 +885,47 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                     children: 'Summary',
                   }),
                 ]}),
-                // Tab-specific controls
-                activeTab === 'transcript' && jsxs('div', { className: 'flex items-baseline gap-2', children: [
-                  jsxs('div', { ref: exportRef, className: 'relative inline-block', children: [
-                    jsx('button', {
+                (activeTab === 'transcript' || (s.summary_available && regenPrompt == null)) && jsxs('div', { className: 'reader-actions', children: [
+                  jsxs('div', { ref: exportRef, className: 'reader-export', children: [
+                    jsxs('button', {
                       onClick: () => setExportOpen(v => !v),
-                      className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
-                      children: 'Export',
+                      className: 'reader-action export-trigger',
+                      'aria-expanded': exportOpen,
+                      'aria-controls': 'export-options',
+                      children: [jsx(Glyph, { name: 'download', size: 14 }), 'Export', jsx(Glyph, { name: 'chevron', size: 12 })],
                     }),
-                    exportOpen && jsx('div', {
-                      className: 'absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-10 min-w-[180px]',
+                    exportOpen && jsxs('div', {
+                      id: 'export-options', className: 'export-popover', role: 'group', 'aria-label': 'Export formats',
                       children: [
-                        jsx('button', {
-                          key: 'lrc',
-                          onClick: exportLrc,
-                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
-                          children: 'Lyrics .lrc',
-                        }),
-                        jsx('button', {
-                          key: 'chatgpt',
-                          onClick: exportChatGpt,
-                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
-                          children: 'ChatGPT messages .txt',
-                        }),
+                        jsx('p', { className: 'export-heading', children: activeTab === 'summary' ? 'Export summary' : 'Export transcript' }),
+                        ...(activeTab === 'summary' ? [
+                          ['Markdown', '.md', 'Editable notes', exportSummaryMarkdown],
+                          ['HTML', '.html', 'Formatted document', exportSummaryHtml],
+                          ['PDF', 'Print', 'Print or save as PDF', exportSummaryPdf],
+                        ] : [
+                          ['Lyrics', '.lrc', 'Timestamped transcript', exportLrc],
+                          ['ChatGPT messages', '.txt', 'Speaker-labeled text', exportChatGpt],
+                        ]).map(([label, format, description, onClick]) => jsxs('button', {
+                          key: format, onClick, className: 'export-option',
+                          children: [
+                            jsx(Glyph, { name: 'file', size: 16 }),
+                            jsxs('span', { className: 'export-option-label', children: [jsx('strong', { children: label }), jsx('span', { children: description })] }),
+                            jsx('span', { className: 'export-format', children: format }),
+                          ],
+                        })),
                       ],
                     }),
                   ]}),
-                  jsx('button', {
-                    onClick: () => {
+                  jsxs('button', {
+                    onClick: activeTab === 'summary' ? startRegenerate : () => {
                       if (!confirm('Re-transcribe will delete the current transcript and summary. Continue?')) return;
-                      action(async () => {
-                        await api(`/sessions/${s.id}/transcript`, { method: 'DELETE' });
-                      });
+                      action(async () => { await api(`/sessions/${s.id}/transcript`, { method: 'DELETE' }); });
                     },
-                    className: 'text-[11px] text-gray-400 hover:text-red-500 transition-colors',
-                    children: 'Re-transcribe',
-                  }),
-                ]}),
-                activeTab === 'summary' && s.summary_available && regenPrompt == null && jsxs('div', { className: 'flex items-baseline gap-2', children: [
-                  jsxs('div', { ref: exportRef, className: 'relative inline-block', children: [
-                    jsx('button', {
-                      onClick: () => setExportOpen(v => !v),
-                      className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
-                      children: 'Export',
-                    }),
-                    exportOpen && jsx('div', {
-                      className: 'absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-10 min-w-[180px]',
-                      children: [
-                        jsx('button', {
-                          key: 'md',
-                          onClick: exportSummaryMarkdown,
-                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
-                          children: 'Markdown .md',
-                        }),
-                        jsx('button', {
-                          key: 'html',
-                          onClick: exportSummaryHtml,
-                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
-                          children: 'HTML .html',
-                        }),
-                        jsx('button', {
-                          key: 'pdf',
-                          onClick: exportSummaryPdf,
-                          className: 'w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors',
-                          children: 'PDF (Print)',
-                        }),
-                      ],
-                    }),
-                  ]}),
-                  jsx('button', {
-                    onClick: startRegenerate,
-                    className: 'text-[11px] text-gray-400 hover:text-blue-500 transition-colors',
-                    children: 'Re-generate',
+                    disabled: loading || (activeTab === 'summary' && (summaryLoading || !!s.summary_processing)),
+                    className: `reader-action reader-regenerate ${activeTab === 'transcript' ? 'is-retranscribe' : ''}`,
+                    'aria-label': activeTab === 'summary' ? 'Regenerate summary' : 'Re-transcribe',
+                    title: activeTab === 'summary' ? 'Regenerate summary with optional instructions' : 'Re-transcribe meeting',
+                    children: [jsx(Glyph, { name: 'refresh', size: 14 }), jsx('span', { className: 'reader-action-label', children: activeTab === 'summary' ? 'Regenerate' : 'Re-transcribe' })],
                   }),
                 ]}),
               ]}),

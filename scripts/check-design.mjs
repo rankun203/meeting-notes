@@ -1,6 +1,6 @@
 // Run against scripts/seed-design-demo.py fixtures, never your working data.
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 const { chromium } = await import(
   process.env.MEETING_NOTES_PLAYWRIGHT_MODULE || 'playwright'
 );
@@ -29,6 +29,35 @@ try {
   await page.locator('.summary-scroll .md-content h2').first().waitFor();
   await page.getByRole('slider', { name: 'Playback position' }).waitFor();
   await page.screenshot({ path: `${output}/desktop.png` });
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await page.getByRole('group', { name: 'Export formats' }).waitFor();
+  await page.screenshot({ path: `${output}/toolbar-export.png` });
+  const downloadReady = page.waitForEvent('download');
+  await page.getByRole('button', { name: /Markdown Editable notes/ }).click();
+  const download = await downloadReady;
+  assert.equal(download.suggestedFilename(), 'Monday product sync_summary.md');
+  assert.match(
+    await readFile(await download.path(), 'utf8'),
+    /The direction is clear/,
+  );
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#export-options').count(), 0);
+  assert.equal(
+    await page
+      .locator('.export-trigger')
+      .evaluate((el) => el === document.activeElement),
+    true,
+  );
+  await page
+    .getByRole('button', { name: 'Regenerate summary', exact: true })
+    .click();
+  const instructions = page.getByPlaceholder(
+    'Additional instructions (optional). Press Enter to generate, Esc to cancel...',
+  );
+  await instructions.waitFor();
+  await instructions.press('Escape');
   await page.getByRole('button', { name: 'Play meeting', exact: true }).click();
   await page
     .getByRole('button', { name: 'Pause meeting', exact: true })
@@ -100,6 +129,35 @@ try {
     '1.5',
   );
   await page.screenshot({ path: `${output}/mobile.png` });
+  // Both toolbar variants fit on narrow phones; mobile icons retain accessible names.
+  await page.getByRole('tab', { name: 'Summary', exact: true }).click();
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.getByRole('button', { name: 'Export', exact: true }).click();
+    const menu = await page.locator('#export-options').boundingBox();
+    assert.ok(
+      menu.x >= 0 && menu.x + menu.width <= width,
+      'Export formats must fit the phone width.',
+    );
+    const tabs = await page.locator('.reader-tabs').boundingBox();
+    const actions = await page.locator('.reader-actions').boundingBox();
+    assert.ok(
+      tabs.x + tabs.width <= actions.x,
+      'Toolbar actions must not crowd the tabs.',
+    );
+    await page.keyboard.press('Escape');
+  }
+  await page
+    .getByRole('button', { name: 'Regenerate summary', exact: true })
+    .click();
+  await instructions.waitFor();
+  await instructions.press('Escape');
+  await page.getByRole('tab', { name: 'Transcript', exact: true }).click();
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await page
+    .getByRole('button', { name: /Lyrics Timestamped transcript/ })
+    .waitFor();
+  await page.keyboard.press('Escape');
   assert.equal(
     await page.evaluate(
       () => document.documentElement.scrollWidth > innerWidth,
@@ -280,7 +338,7 @@ try {
   }
   await library.close();
   console.log(
-    'Passed: playback, seeking, highlights, keyboard tabs, resize continuity, four viewport sizes, files, recording setup, search, quick play, mobile admin, notes persistence.',
+    'Passed: export download, toolbar menus and regeneration setup, narrow phone toolbar, playback, seeking, highlights, keyboard tabs, resize continuity, files, recording setup, search, quick play, mobile admin, notes persistence.',
   );
   console.log(`Screenshots: ${output}`);
 } finally {
