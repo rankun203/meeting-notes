@@ -33,19 +33,13 @@ export function Sidebar({
   setSettingsCategory,
 }) {
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState('all');
   const recording = sessions.find((s) => s.state === 'recording');
   const visible = sessions.filter((s) => {
     const text = [s.name, ...(s.tags || [])]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
-    return (
-      text.includes(query.toLowerCase()) &&
-      (filter !== 'audio' ||
-        s.files?.some((f) => /\.(mp3|wav|opus)$/i.test(f))) &&
-      (filter !== 'summaries' || s.summary_available)
-    );
+    return text.includes(query.toLowerCase());
   });
   return jsxs('aside', {
     className: 'library-sidebar',
@@ -130,24 +124,6 @@ export function Sidebar({
               ],
             }),
             jsx('div', {
-              className: 'library-filters',
-              children: [
-                ['all', 'All'],
-                ['audio', 'With audio'],
-                ['summaries', 'Summarized'],
-              ].map(([id, label]) =>
-                jsx('button', {
-                  key: id,
-                  'aria-pressed': filter === id,
-                  onClick: () => {
-                    setFilter(id);
-                    track('library_filtered');
-                  },
-                  children: label,
-                }),
-              ),
-            }),
-            jsx('div', {
               className: 'meeting-list',
               children: visible.length
                 ? visible.map((s) =>
@@ -214,8 +190,8 @@ export function Sidebar({
                 : jsx('div', {
                     className: 'library-empty',
                     children:
-                      query || filter !== 'all'
-                        ? 'No matching meetings. Try another search or filter.'
+                      query
+                        ? 'No matching meetings. Try another search.'
                         : 'No meetings yet. Record or import a meeting to get started.',
                   }),
             }),

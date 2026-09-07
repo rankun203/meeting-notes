@@ -227,24 +227,6 @@ select {
 .library-search input::placeholder {
   color: #a3b8a8;
 }
-.library-filters {
-  display: flex;
-  gap: 4px;
-  padding: 0 12px 8px;
-}
-.library-filters button {
-  font-size: 11px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #b0c3b4;
-  min-height: 28px;
-}
-.library-filters button[aria-pressed='true'] {
-  border-color: #72816a;
-  color: #e3eacc;
-  background: #304635;
-}
 .meeting-list {
   flex: 1;
   overflow: auto;
@@ -1262,9 +1244,6 @@ select {
     font-size: 14px;
     margin-bottom: 8px;
   }
-  .library-filters button {
-    font-size: 11px;
-  }
   .main-column {
     width: 100%;
   }
@@ -1643,8 +1622,5 @@ select {
   .quick-play {
     width: 36px;
     height: 36px;
-  }
-  .library-filters button {
-    min-height: 32px;
   }
 }

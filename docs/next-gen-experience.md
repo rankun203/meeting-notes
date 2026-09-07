@@ -13,7 +13,7 @@ The `next_gen` branch turns the existing app into a working design demo: a fores
 - **Read with context.** The main area defaults to a summary when available. Tabs stay at the top of the reader; the transcript uses the available height. Arrow keys switch tabs and transcript timestamps are keyboard-accessible buttons.
 - **Keep files close.** Audio, transcript, and Markdown files appear in compact rows, with supporting JSON/cache files in a disclosure. Notes, speaker management, tags, language, and recording settings stay in the context pane. On smaller screens, “Files & details” opens that pane above the player.
 - **Follow the source.** Clicking a summary citation seeks and plays without leaving the summary. Explicit `[MM:SS-MM:SS]` ranges highlight their containing passage for that range. A point citation highlights until the next citation or 90 seconds, whichever comes first. This is an approximate playhead cue for point citations, not semantic audio alignment. Uncited text is never automatically aligned. Highlighting remains at the selected position while paused. In transcript-only meetings, citation clicks open the source transcript instead.
-- **Browse quickly.** Search matches meeting names and tags in the loaded page; audio/summary filters narrow that page. Above 50 meetings the search field explicitly says “Search this page.” Pagination remains available.
+- **Browse quickly.** Search matches meeting names and tags in the loaded page. Above 50 meetings the search field explicitly says “Search this page.” Pagination remains available. The list starts directly below search, without filter buttons.
 
 ## Review against the brief
 
