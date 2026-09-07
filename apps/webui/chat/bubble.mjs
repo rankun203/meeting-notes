@@ -5,7 +5,15 @@ import { ChatIcon, CloseIcon } from '../icons.mjs';
 import { BUBBLE_SNAP_KEY, BUBBLE_SIZE, BUBBLE_SIZE_MOBILE, getSnapPoints, nearestSnap, loadSnap } from './constants.mjs';
 import { ChatPanel } from './panel.mjs';
 
-export function ChatBubble() {
+export function ChatBubble({ reservePlaybackSpace = false }) {
+  const [dockHeight, setDockHeight] = useState(0);
+  useEffect(() => {
+    const dock = reservePlaybackSpace && document.querySelector('.playback-dock');
+    if (!dock) { setDockHeight(0); return; }
+    const observer = new ResizeObserver(() => setDockHeight(dock.getBoundingClientRect().height));
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [reservePlaybackSpace]);
   const isMobile = useIsMobile();
   const bSize = isMobile ? BUBBLE_SIZE_MOBILE : BUBBLE_SIZE;
 
@@ -132,7 +140,7 @@ export function ChatBubble() {
     if (e.button !== 0) return;
     e.preventDefault();
     setHovering(false);
-    dragRef.current = { startX: e.clientX, startY: e.clientY, startBX: bubblePos.x, startBY: bubblePos.y, moved: false };
+    dragRef.current = { startX: e.clientX, startY: e.clientY, startBX: bubblePos.x, startBY: Math.min(bubblePos.y, window.innerHeight - bSize - dockHeight - 20), moved: false };
     setDragging(true);
     setAnimating(false);
   }
@@ -547,6 +555,7 @@ export function ChatBubble() {
     }
   }
 
+  const safeBubblePos = { ...bubblePos, y: Math.min(bubblePos.y, window.innerHeight - bSize - dockHeight - 20) };
   const unreadCount = 0;
   const bCenterX = bubblePos.x + bSize / 2;
   const tooltipOnLeft = bCenterX > window.innerWidth / 2;
@@ -555,7 +564,7 @@ export function ChatBubble() {
     hovering && !panelOpen && !dragging && jsx('div', {
       className: 'chat-tooltip-enter fixed z-[9998] pointer-events-none',
       style: {
-        top: bubblePos.y + bSize / 2 - 16,
+        top: safeBubblePos.y + bSize / 2 - 16,
         ...(tooltipOnLeft
           ? { right: window.innerWidth - bubblePos.x + 8 }
           : { left: bubblePos.x + bSize + 8 }),
@@ -568,15 +577,17 @@ export function ChatBubble() {
 
     jsx('button', {
       onPointerDown,
+      'aria-label': panelOpen ? 'Close meeting assistant' : 'Open meeting assistant',
+      onClick: e => { if (e.detail === 0) togglePanel(); },
       onMouseEnter: () => setHovering(true),
       onMouseLeave: () => setHovering(false),
       style: {
-        position: 'fixed', left: bubblePos.x, top: bubblePos.y,
+        position: 'fixed', left: safeBubblePos.x, top: safeBubblePos.y,
         width: bSize, height: bSize, zIndex: 9999, touchAction: 'none',
         transition: animating ? 'left 0.3s cubic-bezier(0.25,1,0.5,1), top 0.3s cubic-bezier(0.25,1,0.5,1)' : 'none',
         cursor: dragging ? 'grabbing' : 'pointer',
       },
-      className: 'rounded-full bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl flex items-center justify-center text-white select-none active:scale-95 transition-shadow',
+      className: 'chat-launcher rounded-full bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl flex items-center justify-center text-white select-none active:scale-95 transition-shadow',
       children: jsxs(Fragment, { children: [
         panelOpen
           ? jsx(CloseIcon, { className: 'w-6 h-6 text-white pointer-events-none' })
@@ -597,7 +608,7 @@ export function ChatBubble() {
       onStop: handleStop,
       onDeleteMessage: handleDeleteMessage,
       onClose: closePanel, onMinimize: closePanel,
-      bubblePos, isMobile, closing: panelClosing,
+      bubblePos: safeBubblePos, isMobile, closing: panelClosing,
       streaming, streamingContent, streamingThinking, streamingPhase, tokenUsage, mentionData, llmConfigured,
       chatBackend, toolActivities,
       onSendToClaudeCode: chatBackend === 'claude_code' ? handleExportClaude : null,

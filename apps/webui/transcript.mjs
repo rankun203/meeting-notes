@@ -104,7 +104,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
       container.removeEventListener('scroll', onScroll);
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     };
-  }, []);
+  }, [loading]);
 
   if (loading) return jsx('div', { className: 'text-sm text-gray-400 py-4 text-center', children: 'Loading transcript...' });
   if (error) return jsx('div', { className: 'text-sm text-red-500 py-4', children: `Error: ${error}` });
@@ -145,7 +145,7 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     });
   }
 
-  return jsxs('div', { className: 'space-y-2', children: [
+  return jsxs('div', { className: 'transcript-panel', role:'tabpanel', id:'transcript-panel', 'aria-labelledby':'transcript-tab', children: [
     // Speaker filter chips
     jsx('div', {
       className: 'flex flex-wrap gap-1.5',
@@ -173,8 +173,8 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     // Scrollable transcript
     jsx('div', {
       ref: containerRef,
-      className: 'overflow-y-auto scroll-smooth',
-      style: { maxHeight: '400px' },
+      className: 'transcript-scroll overflow-y-auto scroll-smooth',
+
       children: jsx('div', {
         className: 'grid py-2 items-baseline',
         style: { gridTemplateColumns: 'auto auto 1fr' },
@@ -208,7 +208,8 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
               ref: i === firstActiveIdx ? activeRef : undefined,
               title: tooltipParts,
               className: [
-                'grid col-span-3 items-baseline cursor-pointer rounded-lg transition-all duration-200',
+                'transcript-row grid col-span-3 items-baseline cursor-pointer rounded-lg transition-all duration-200',
+                isActive ? 'transcript-active' : '',
                 isActive
                   ? 'bg-blue-50 dark:bg-blue-900/20'
                   : 'hover:bg-gray-50 dark:hover:bg-gray-800/30 opacity-60',
@@ -217,7 +218,9 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
               onClick: () => onSeek && onSeek(seg.start),
               children: [
                 // Col 1: timestamp
-                jsx('span', {
+                jsx('button', {
+                  onClick: e => { e.stopPropagation(); onSeek?.(seg.start); },
+                  'aria-label': `Play from ${fmtTimestamp(seg.start)}`,
                   className: [
                     'text-[11px] font-mono text-right py-1.5 pl-2 pr-2',
                     isActive
@@ -303,59 +306,25 @@ export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPe
     });
   }
 
-  return jsxs('div', { className: 'space-y-2', children: [
-    jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Speaker Attribution' }),
-    ...speakers.map(([speaker, info]) => {
+  return jsxs('div', { className:'participants', children: [
+    jsxs('div',{className:'section-heading',children:[jsx('h3',{children:'In the conversation'}),jsx('span',{className:'count-badge',children:speakers.length})]}),
+    ...speakers.map(([speaker, info], index) => {
       const matched = info.person_id != null;
-      const confidence = info.confidence != null ? Math.round(info.confidence * 100) : null;
       const isBusy = busy[speaker];
-
-      return jsx('div', {
-        key: speaker,
-        className: 'flex items-center gap-2 py-1.5 px-2 rounded-lg bg-gray-50 dark:bg-gray-800/40',
-        children: jsxs(Fragment, { children: [
-          jsx('span', {
-            className: `text-[10px] font-medium px-1.5 py-0.5 rounded-full flex-shrink-0 ${speakerColor(speaker)}`,
-            children: speaker,
-          }),
-          matched
-            ? jsxs(Fragment, { children: [
-                jsx('button', {
-                  onClick: () => onSelectPerson && onSelectPerson(info.person_id),
-                  className: 'text-sm text-blue-600 dark:text-blue-400 hover:underline flex-1 text-left',
-                  children: info.person_name,
-                }),
-                confidence != null && jsx('span', { className: 'text-[11px] text-gray-400', children: `${confidence}%` }),
-                jsx('button', {
-                  disabled: isBusy,
-                  onClick: () => submitAttribution(speaker, 'confirm', info.person_id),
-                  className: 'text-[11px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 disabled:opacity-40',
-                  children: 'Confirm',
-                }),
-                jsx('button', {
-                  disabled: isBusy,
-                  onClick: (e) => openPicker(e, speaker),
-                  className: 'text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40',
-                  children: 'Reassign',
-                }),
-                jsx('button', {
-                  disabled: isBusy,
-                  onClick: () => submitAttribution(speaker, 'reject'),
-                  className: 'text-[11px] px-2 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 disabled:opacity-40',
-                  children: 'Reject',
-                }),
-              ]})
-            : jsxs(Fragment, { children: [
-                jsx('span', { className: 'text-sm text-gray-400 dark:text-gray-500 italic flex-1', children: 'Unknown' }),
-                jsx('button', {
-                  disabled: isBusy,
-                  onClick: (e) => openPicker(e, speaker),
-                  className: 'text-[11px] px-2 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50 disabled:opacity-40',
-                  children: 'Assign Person',
-                }),
-              ]}),
+      const name = info.person_name || speaker;
+      return jsxs('details',{className:'participant',key:speaker,children:[
+        jsxs('summary',{children:[
+          jsx('span',{className:`participant-avatar avatar-${index%3}`,children:name.split(/\s+/).map(n=>n[0]).slice(0,2).join('')}),
+          jsxs('span',{className:'participant-name',children:[jsx('strong',{children:name}),jsx('span',{children:matched?'Matched speaker':'Needs a name'})]}),
+          jsx('span',{className:'participant-more',children:'···'}),
         ]}),
-      });
+        jsxs('div',{className:'participant-actions',children:[
+          matched && jsx('button',{disabled:isBusy,onClick:()=>onSelectPerson?.(info.person_id),children:'View person'}),
+          matched && jsx('button',{disabled:isBusy,onClick:()=>submitAttribution(speaker,'confirm',info.person_id),children:'Confirm'}),
+          jsx('button',{disabled:isBusy,onClick:e=>openPicker(e,speaker),children:matched?'Reassign':'Assign person'}),
+          matched && jsx('button',{disabled:isBusy,onClick:()=>submitAttribution(speaker,'reject'),children:'Reject match'}),
+        ]}),
+      ]});
     }),
 
     // Speaker picker (SearchableList portal)

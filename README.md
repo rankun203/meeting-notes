@@ -154,3 +154,15 @@ permission was denied: nothing playing or an output-routing issue can also cause
 # Run with debug logging
 RUST_BACKTRACE=1 RUST_LOG=meeting_notes_daemon=debug cargo run -- serve --web-ui
 ```
+
+## Usage analytics
+
+PostHog feature usage tracking is configured in **Settings → Usage analytics**.
+The existing `posthog_project_token` key in `secrets.json` is supported directly.
+See [event definitions and configuration](docs/usage-analytics.md).
+
+## Next-generation design demo
+
+The `next_gen` branch explores a recording-first workspace with persistent
+playback, a compact file panel, and summary citation highlighting.
+See the [design walkthrough, references, and demo instructions](docs/next-gen-experience.md).

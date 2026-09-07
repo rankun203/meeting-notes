@@ -1,3 +1,5 @@
+import { FilesPanel, Glyph } from './workspace.mjs';
+import { highlightSummary } from './summary-playback.mjs';
 import { track } from './analytics.mjs';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
@@ -293,9 +295,9 @@ function convertCitations(content, sessionId) {
   if (!content) return content;
   // Convert [MM:SS-MM:SS] ranges (use start time), [MM:SS], and 【MM:SS】 to markdown links
   return content
-    .replace(/[\[【](\d+):(\d{2})\s*[-–—‑\u2010-\u2015]\s*\d+:\d{2}[\]】](?!\()/g, (match, mins, secs) => {
+    .replace(/[\[【](\d+):(\d{2})\s*[-–—‑\u2010-\u2015]\s*(\d+):(\d{2})[\]】](?!\()/g, (match, mins, secs, endMins, endSecs) => {
       const total = parseInt(mins) * 60 + parseInt(secs);
-      return `[${mins}:${secs}](/sessions/${sessionId}?content_panel=transcript&jump=${total})`;
+      return `[${mins}:${secs}–${endMins}:${endSecs}](/sessions/${sessionId}?content_panel=summary&jump=${total}&jump_end=${parseInt(endMins) * 60 + parseInt(endSecs)})`;
     })
     .replace(/[\[【](\d+):(\d{2})[\]】](?!\()/g, (match, mins, secs) => {
       const total = parseInt(mins) * 60 + parseInt(secs);
@@ -304,19 +306,22 @@ function convertCitations(content, sessionId) {
     .replace(/\)\[/g, ') [');
 }
 
-export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, capabilities, onSelectPerson, routeQuery }) {
+export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, capabilities, onSelectPerson, routeQuery, onRecord }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const renameRef = useRef(null);
   const playerRef = useRef(null);
-  const [playbackTime, setPlaybackTime] = useState(0);
+  const [playbackTime, setPlaybackTime] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef(null);
   const [tagPicker, setTagPicker] = useState(null); // { anchorPoint, items } or null
   const [notes, setNotes] = useState(session?.notes || '');
-  const [activeTab, setActiveTab] = useState('transcript');
+  const [activeTab, setActiveTab] = useState(session?.summary_available ? 'summary' : 'transcript');
+  const [contextOpen, setContextOpen] = useState(false);
+  const summaryElementRef = useRef(null);
+
   const [summary, setSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState(null);
@@ -361,7 +366,9 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
     setSummary(null);
     setSummaryError(null);
     setRegenPrompt(null);
-    setActiveTab('transcript');
+    setActiveTab(session?.summary_available ? 'summary' : 'transcript');
+    setPlaybackTime(null);
+    setContextOpen(false);
   }, [session?.id]);
 
   // Sync notes when updated externally
@@ -374,9 +381,9 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   // Move to a point in the meeting. Highlighting and auto-scrolling the
   // transcript is driven by playbackTime alone, so this works whether or not
   // the session has audio — a transcript-only session just doesn't play.
-  function jumpTo(t) {
+  function jumpTo(t, stayInSummary = false) {
     if (t == null || isNaN(t)) return;
-    setActiveTab('transcript');
+    if (!stayInSummary || !playerRef.current) setActiveTab('transcript');
     setPlaybackTime(t);
     if (playerRef.current) playerRef.current.seekAndPlay(t);
   }
@@ -444,6 +451,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
 
   // Ensure marked is loaded when summary tab is shown
   const [markedReady, setMarkedReady] = useState(!!markedModule);
+  useEffect(() => { highlightSummary(summaryElementRef.current, playbackTime); }, [playbackTime, summary?.content, activeTab, markedReady]);
   useEffect(() => {
     if (activeTab === 'summary' && !markedModule) {
       ensureMarked(() => setMarkedReady(true));
@@ -552,7 +560,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
           method: 'PATCH',
           body: JSON.stringify({ notes: val || null }),
         });
-      } catch {}
+      } catch { setError('Your notes could not be saved. Please try editing them again.'); }
       setNotesSaving(false);
     }, 800);
   }
@@ -604,13 +612,13 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   }
 
   if (!session) {
-    return jsx('div', {
-      className: 'h-full flex items-center justify-center px-4',
-      children: jsx('p', {
-        className: 'text-gray-400 dark:text-gray-600 text-sm text-center',
-        children: 'Select a session or create a new one',
-      }),
-    });
+    return jsxs('div', { className:'workspace-welcome', children:[
+      jsx(Glyph,{name:'sound',size:64}),
+      jsx('span',{className:'eyebrow',children:'LESS NOTE-TAKING. MORE LISTENING.'}),
+      jsx('h1',{children:'Be in the moment.'}),
+      jsx('p',{children:'A thoughtful home for your conversations. Record a meeting, revisit the details, and keep the ideas that move things forward.'}),
+      jsx('button',{className:'new-recording',onClick:onRecord,children:'Record your first meeting'}),
+    ]});
   }
 
   async function action(fn) {
@@ -744,85 +752,8 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
   // falls back to claiming WAV when no codec config is present, so hide it.
   const audioless = s.state === 'stopped' && audioFiles.length === 0;
 
-  return jsx('div', {
-    className: 'h-full flex flex-col',
-    children: jsxs(Fragment, { children: [
-      // Header
-      jsxs('div', {
-        className: 'flex-shrink-0 px-4 md:px-6 py-3 md:py-4 border-b border-gray-200 dark:border-gray-800',
-        children: [
-          jsxs('div', { className: 'flex items-center justify-between gap-2', children: [
-            jsxs('div', { className: 'flex items-center gap-2 min-w-0', children: [
-              isMobile && jsx('button', {
-                onClick: onBack,
-                className: 'p-1 -ml-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors',
-                children: jsx(BackIcon, {}),
-              }),
-              jsx('h2', { className: 'text-base md:text-lg font-semibold tracking-tight flex-shrink-0', children: 'Session' }),
-              renaming
-                ? jsxs(Fragment, { children: [
-                    jsx('input', {
-                      ref: renameRef,
-                      value: renameValue,
-                      onChange: e => setRenameValue(e.target.value),
-                      onBlur: submitRename,
-                      onKeyDown: e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setRenaming(false); } },
-                      className: 'text-xs md:text-sm px-1.5 py-0.5 border border-blue-400 rounded outline-none bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 min-w-0 w-96',
-                      placeholder: 'Session name...',
-                    }),
-                    jsx('span', { className: 'text-xs md:text-sm font-mono text-gray-500 dark:text-gray-400', children: `(${s.id})` }),
-                  ]})
-                : jsx('span', {
-                    onDoubleClick: startRename,
-                    className: 'text-xs md:text-sm text-gray-500 dark:text-gray-400 truncate cursor-default select-none',
-                    title: 'Double-click to rename',
-                    children: s.name
-                      ? jsxs(Fragment, { children: [
-                          s.name, ' ',
-                          jsx('span', { className: 'font-mono', children: `(${s.id})` }),
-                        ]})
-                      : jsx('span', { className: 'font-mono', children: s.id }),
-                  }),
-              jsx(StateBadge, { state: s.state }),
-            ]}),
-            jsxs('div', { className: 'flex items-center gap-1.5 md:gap-2 flex-shrink-0', children: [
-              s.state === 'created' && jsx('button', {
-                disabled: loading,
-                onClick: () => action(() => api(`/sessions/${s.id}/recording/start`, { method: 'POST' })),
-                className: 'inline-flex items-center gap-1.5 px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 transition-colors',
-                children: jsxs(Fragment, { children: [jsx(PlayIcon, {}), isMobile ? null : 'Record'] }),
-              }),
-              s.state === 'recording' && jsx('button', {
-                disabled: loading,
-                onClick: () => action(() => api(`/sessions/${s.id}/recording/stop`, { method: 'POST' })),
-                className: 'inline-flex items-center gap-1.5 px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-40 transition-colors',
-                children: jsxs(Fragment, { children: [jsx(StopIcon, {}), isMobile ? null : 'Stop'] }),
-              }),
-              jsx('button', {
-                disabled: loading,
-                onClick: () => {
-                  if (!confirm('Delete this session and all its files? This cannot be undone.')) return;
-                  action(async () => {
-                    await api(`/sessions/${s.id}`, { method: 'DELETE' });
-                    onDeleted();
-                  });
-                },
-                className: 'inline-flex items-center px-2.5 md:px-3 py-1.5 md:py-2 rounded-lg text-xs md:text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-40 transition-colors',
-                children: 'Delete',
-              }),
-            ]}),
-          ]}),
-          error && jsx('p', { className: 'mt-2 text-sm text-red-500', children: error }),
-        ],
-      }),
-
-      // Content
-      jsx('div', {
-        className: 'flex-1 overflow-y-auto px-4 md:px-6 py-4 md:py-5',
-        children: jsxs('div', { className: 'max-w-3xl space-y-4 md:space-y-6', children: [
-          // Info grid
-          jsx('div', {
-            className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
+  const metadataPanel = jsx('div', {
+            className: 'metadata-panel',
             children: jsxs('div', {
               className: 'grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4',
               children: [
@@ -919,227 +850,25 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                     }),
                   ]}),
                 ]}),
-                // Notes
-                jsxs('div', { className: 'col-span-2 md:col-span-3', children: [
-                  jsxs('div', { className: 'flex items-center gap-2 mb-0.5', children: [
-                    jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500', children: 'Notes' }),
-                    notesSaving && jsx('span', { className: 'text-[10px] text-blue-500', children: 'Saving...' }),
-                  ]}),
-                  jsx('textarea', {
-                    value: notes,
-                    onChange: e => { handleNotesChange(e); autoResize(e); },
-                    onInput: autoResize,
-                    ref: el => { if (el) { el.style.height = 'auto'; autoResize({ target: el }); } },
-                    placeholder: 'Add notes about this session...',
-                    rows: 1,
-                    className: INPUT_CLS + ' text-xs overflow-hidden',
-                  }),
-                ]}),
               ],
             }),
-          }),
-
-          // Recording indicator
-          s.state === 'recording' && jsx('div', {
-            className: 'rounded-xl border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/10 p-4 md:p-5',
+          });
+  const readerPanel = s.transcript_available && jsx('div', {
+            className: 'reader-card', 'aria-label': 'Meeting content',
             children: jsxs(Fragment, { children: [
-              jsxs('div', { className: 'flex items-center gap-2 mb-3', children: [
-                jsx('span', { className: 'w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse-recording' }),
-                jsx('p', { className: 'text-sm font-medium text-red-700 dark:text-red-300', children: 'Recording in progress' }),
-              ]}),
-              jsxs('div', { className: 'mb-3 rounded-lg border border-red-200/80 dark:border-red-900/50 bg-white/50 dark:bg-black/10 px-3 py-2.5', children: [
-                jsx('p', { className: 'text-xs font-medium text-red-700 dark:text-red-300 mb-2', children: 'Auto-stop when:' }),
-                jsxs('div', { className: 'grid text-xs text-red-700 dark:text-red-300', children: [
-                  jsxs('div', { className: 'flex min-h-7 items-center gap-2 select-none', children: [
-                    jsxs('label', { className: 'flex items-center gap-2 cursor-pointer', children: [
-                      jsx('input', {
-                        type: 'checkbox',
-                        checked: s.auto_stop?.system_audio_silence_secs != null,
-                        onChange: e => updateAutoStop({
-                          system_audio_silence_secs: e.target.checked ? Math.min(86400, Math.max(1, Number(autoStopSilenceSecs) || 60)) : null,
-                        }),
-                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
-                      }),
-                      jsx('span', { children: 'System audio is silent for' }),
-                    ]}),
-                    jsx('input', {
-                      type: 'number',
-                      min: 1,
-                      max: 86400,
-                      value: autoStopSilenceSecs,
-                      disabled: s.auto_stop?.system_audio_silence_secs == null,
-                      onChange: e => setAutoStopSilenceSecs(e.target.value),
-                      onBlur: e => {
-                        const seconds = Math.min(86400, Math.max(1, Math.round(Number(e.target.value) || 60)));
-                        setAutoStopSilenceSecs(seconds);
-                        if (s.auto_stop?.system_audio_silence_secs != null) {
-                          updateAutoStop({ system_audio_silence_secs: seconds });
-                        }
-                      },
-                      onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur(); },
-                      className: 'w-20 rounded border border-red-200 dark:border-red-800 bg-white dark:bg-gray-900 px-2 py-1 text-xs disabled:opacity-50',
-                    }),
-                    jsx('span', { children: 'seconds' }),
-                  ]}),
-                  jsxs('label', {
-                    className: `flex min-h-7 items-center gap-2 select-none ${capabilities?.auto_stop_screen_lock === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
-                    title: capabilities?.auto_stop_screen_lock === false ? 'Not supported on this server' : 'Stop when the current macOS user locks the screen',
-                    children: [
-                      jsx('input', {
-                        type: 'checkbox',
-                        checked: s.auto_stop?.screen_lock || false,
-                        disabled: capabilities?.auto_stop_screen_lock === false,
-                        onChange: e => updateAutoStop({ screen_lock: e.target.checked }),
-                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
-                      }),
-                      jsx('span', { children: 'User locks the screen' }),
-                    ],
-                  }),
-                  jsxs('label', {
-                    className: `flex min-h-7 items-center gap-2 select-none ${capabilities?.auto_stop_system_sleep === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
-                    title: capabilities?.auto_stop_system_sleep === false ? 'Not supported on this server' : 'Stop and finalize audio before macOS sleeps',
-                    children: [
-                      jsx('input', {
-                        type: 'checkbox',
-                        checked: s.auto_stop?.system_sleep || false,
-                        disabled: capabilities?.auto_stop_system_sleep === false,
-                        onChange: e => updateAutoStop({ system_sleep: e.target.checked }),
-                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
-                      }),
-                      jsx('span', { children: 'System is going to sleep' }),
-                    ],
-                  }),
-                ]}),
-              ]}),
-              s.files.length > 0 && jsx('div', { className: 'flex flex-wrap gap-1.5', children:
-                s.files.map(f => jsx('span', {
-                  key: f,
-                  className: 'inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 font-mono',
-                  children: jsxs(Fragment, { children: [
-                    f,
-                    s.file_sizes && s.file_sizes[f] != null && jsx('span', {
-                      className: 'text-red-400 dark:text-red-500',
-                      children: formatFileSize(s.file_sizes[f]),
-                    }),
-                  ]}),
-                })),
-              }),
-            ]}),
-          }),
-
-          // Auto-stop countdown notice
-          autoStopCountdown != null && s.state === 'recording' && jsxs('div', {
-            className: 'rounded-xl border p-4 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-200',
-            children: [
-              jsxs('div', { className: 'flex items-start gap-2', children: [
-                jsx('span', { className: 'flex-shrink-0 text-sm', children: '\u23F1\uFE0F' }),
-                jsx('p', { className: 'text-sm font-medium', children: `Auto-stopping in ${autoStopCountdown}s — system audio not receiving data` }),
-              ]}),
-            ],
-          }),
-
-          // Notices
-          s.notices && s.notices.length > 0 && jsx('div', {
-            className: 'space-y-2',
-            children: s.notices.filter(n => !dismissedNoticeIds.has(noticeId(n))).map((n, i) => {
-              const colors = {
-                warning: 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-200',
-                error: 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/10 text-red-800 dark:text-red-200',
-                info: 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/10 text-blue-800 dark:text-blue-200',
-              };
-              const icons = { warning: '\u26A0\uFE0F', error: '\u274C', info: '\u2139\uFE0F' };
-              return jsxs('div', {
-                key: noticeId(n) || i,
-                className: `rounded-xl border p-4 ${colors[n.level] || colors.info}`,
-                children: [
-                  jsxs('div', { className: 'flex items-start gap-2', children: [
-                    jsx('span', { className: 'flex-shrink-0 text-sm', children: icons[n.level] || icons.info }),
-                    jsxs('div', { className: 'flex-1 min-w-0', children: [
-                      jsx('p', { className: 'text-sm font-medium', children: n.message }),
-                      n.details && jsx('p', { className: 'text-xs mt-1 opacity-80', children: n.details }),
-                      jsxs('div', { className: 'mt-1.5 flex flex-wrap items-center gap-2', children: [
-                        jsx('time', {
-                          dateTime: n.created_at,
-                          className: 'text-[10px] opacity-70 tabular-nums',
-                          children: formatNoticeTimestamp(n.created_at),
-                        }),
-                        n.platform && jsx('span', {
-                          className: 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-black/5 dark:bg-white/5',
-                          children: n.platform,
-                        }),
-                      ]}),
-                    ]}),
-                    jsx('button', {
-                      onClick: () => dismissNotice(n),
-                      className: 'flex-shrink-0 p-1 -mt-1 -mr-1 rounded opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition-colors',
-                      title: 'Dismiss notice',
-                      'aria-label': 'Dismiss notice',
-                      children: jsx(CloseIcon, { className: 'w-5 h-5' }),
-                    }),
-                  ]}),
-                ],
-              });
-            }),
-          }),
-
-          // Audio player
-          hasAudio && jsx('div', {
-            className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
-            children: jsxs(Fragment, { children: [
-              jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3', children: 'Recordings' }),
-              jsx(SyncedPlayer, {
-                ref: playerRef,
-                sessionId: s.id,
-                onTimeUpdate: setPlaybackTime,
-                files: audioFiles.map(f => {
-                  const ext = f.split('.').pop();
-                  const meta = (s.source_meta || []).find(src => src.filename === f);
-                  return {
-                    name: f,
-                    label: meta?.source_label || f.replace(`.${ext}`, '').replace(/_/g, ' '),
-                    sourceType: meta?.source_type || null,
-                  };
-                }),
-              }),
-            ]}),
-          }),
-
-          // Transcription controls
-          s.state === 'stopped' && !s.transcript_available && !s.processing_state && jsx('div', {
-            className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
-            children: jsx('button', {
-              disabled: loading,
-              onClick: () => action(() => api(`/sessions/${s.id}/transcribe`, { method: 'POST' })),
-              className: 'w-full flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition-colors',
-              children: jsxs(Fragment, { children: [
-                jsx(TranscriptIcon, {}),
-                'Transcribe',
-              ]}),
-            }),
-          }),
-
-          // Processing indicator
-          s.processing_state && jsx('div', {
-            className: 'rounded-xl border border-indigo-200 dark:border-indigo-900/40 bg-indigo-50 dark:bg-indigo-900/10 p-4 md:p-5',
-            children: jsxs('div', { className: 'flex items-center gap-3', children: [
-              jsx('div', { className: 'w-5 h-5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin flex-shrink-0' }),
-              jsx('p', { className: 'text-sm font-medium text-indigo-700 dark:text-indigo-300', children: PROCESSING_LABELS[s.processing_state] || s.processing_state }),
-            ]}),
-          }),
-
-          // Transcript / Summary tabbed viewer
-          s.transcript_available && jsx('div', {
-            className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
-            children: jsxs(Fragment, { children: [
-              jsxs('div', { className: 'flex items-center justify-between mb-3', children: [
+              jsxs('div', { className: 'reader-toolbar', children: [
                 // Tab buttons
-                jsxs('div', { className: 'flex gap-1', children: [
+                jsxs('div', { className: 'reader-tabs', role: 'tablist', 'aria-label': 'Meeting content', children: [
                   jsx('button', {
+                    role: 'tab', id: 'transcript-tab', 'aria-controls': 'transcript-panel', 'aria-selected': activeTab === 'transcript',
+                    onKeyDown: e => { if (['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'transcript' : e.key === 'End' ? 'summary' : activeTab === 'summary' ? 'transcript' : 'summary'; setActiveTab(next); document.getElementById(next + '-tab')?.focus(); } },
                     onClick: () => { track('content_tab_opened', { tab: 'transcript' }); setActiveTab('transcript'); },
                     className: `px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider transition-colors ${activeTab === 'transcript' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
                     children: 'Transcript',
                   }),
                   jsx('button', {
+                    role: 'tab', id: 'summary-tab', 'aria-controls': 'summary-panel', 'aria-selected': activeTab === 'summary',
+                    onKeyDown: e => { if (['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'transcript' : e.key === 'End' ? 'summary' : activeTab === 'summary' ? 'transcript' : 'summary'; setActiveTab(next); document.getElementById(next + '-tab')?.focus(); } },
                     onClick: () => { track('content_tab_opened', { tab: 'summary' }); setActiveTab('summary'); },
                     className: `px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider transition-colors ${activeTab === 'summary' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
                     children: 'Summary',
@@ -1227,7 +956,8 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                 onSeek: jumpTo,
                 onSpeakerUpdate: onRefresh,
               }),
-              activeTab === 'summary' && jsxs('div', { className: 'mt-2', children: [
+              activeTab === 'summary' && jsxs('div', { className: 'summary-scroll', role: 'tabpanel', id: 'summary-panel', 'aria-labelledby': 'summary-tab', children: [
+                jsx('div', { className: 'reader-intro', children: jsxs(Fragment, { children: [jsx('span', { className: 'eyebrow', children: 'THE BIG PICTURE' }), jsx('h2', { children: 'A conversation, distilled.' }), jsx('p', { children: hasAudio ? 'Click a timestamp to listen. Cited passages light up with the audio.' : 'Click a timestamp to find the source passage in the transcript.' })] }) }),
                 // Additional instructions input (shown for both generate and re-generate)
                 regenPrompt != null && jsxs('div', { className: 'mb-3 space-y-2', children: [
                   jsx('textarea', {
@@ -1290,7 +1020,9 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                           className: 'md-content text-sm text-gray-900 dark:text-gray-100',
                           dangerouslySetInnerHTML: { __html: renderMarkdown(convertCitations(summary.content, s.id)) },
                           ref: el => {
+                            summaryElementRef.current = el;
                             if (!el) return;
+                            highlightSummary(el, playbackTime);
                             el.querySelectorAll('input[type="checkbox"]').forEach((cb, idx) => {
                               cb.disabled = false;
                               const toggle = () => {
@@ -1321,7 +1053,7 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                                   e.preventDefault();
                                   e.stopPropagation();
                                   const url = new URL(href, window.location.origin);
-                                  jumpTo(parseFloat(url.searchParams.get('jump')));
+                                  jumpTo(parseFloat(url.searchParams.get('jump')), true);
                                 };
                               }
                             });
@@ -1354,51 +1086,230 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
                         }),
               ]}),
             ]}),
+          });
+
+  return jsxs('div', { className: 'meeting-workspace', children: [
+    jsxs('header', { className: 'meeting-header', children: [
+      jsxs('div', { className: 'meeting-breadcrumb', children: [
+        isMobile && jsx('button', { onClick: onBack, className: 'icon-button', 'aria-label': 'Back to library', children: jsx(BackIcon,{}) }),
+        jsx('span', { children: 'WORKSPACE' }), jsx('span', { children: '/' }), jsx('span', { children: 'Meeting library' }),
+        jsx('span', { className: 'edition-label', children: 'NEXT / 01' }),
+      ]}),
+      jsxs('div', { className: 'meeting-title-row', children: [
+        jsxs('div', { className: 'meeting-title-group', children: [
+          renaming ? jsx('input', { ref: renameRef, className: 'title-input', value: renameValue, onChange: e => setRenameValue(e.target.value), onBlur: submitRename, onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(false); }, 'aria-label': 'Meeting title' })
+            : jsx('h1', { children: jsx('button', { className: 'meeting-title', onClick: startRename, title: 'Rename meeting', children: s.name || 'Untitled meeting' }) }),
+          jsxs('div', { className: 'meeting-subtitle', children: [
+            jsx('span', { children: new Date(s.created_at).toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric', year:'numeric' }) }),
+            s.duration_secs != null && jsx('span', { children: formatDuration(s.duration_secs) }),
+            jsx('span', { className:`meeting-state ${s.state === 'recording' ? 'is-live' : ''}`, children:s.state === 'recording' ? '● Recording' : s.state === 'created' ? 'Ready to record' : audioless ? 'Transcript imported' : 'Ready to revisit' }),
+          ]}),
+        ]}),
+        jsxs('div', { className: 'meeting-header-actions', children: [
+          jsx('button', { className: 'context-toggle quiet-button', onClick: () => setContextOpen(v => !v), 'aria-expanded': contextOpen, 'aria-controls': 'meeting-context', children: contextOpen ? 'Close details' : 'Files & details' }),
+          s.state === 'created' && jsx('button', { className: 'record-button', disabled: loading, onClick: () => action(() => api(`/sessions/${s.id}/recording/start`, { method:'POST' })), children: jsxs(Fragment, { children: [jsx(RecordIcon,{}), 'Start recording'] }) }),
+          s.state === 'recording' && jsx('button', { className: 'record-button', disabled: loading, onClick: () => action(() => api(`/sessions/${s.id}/recording/stop`, { method:'POST' })), children: jsxs(Fragment, { children: [jsx(StopIcon,{}), 'Stop recording'] }) }),
+          isMobile && s.state === 'stopped' && jsx('button', { className: 'record-button', onClick: onRecord, 'aria-label': 'Record a meeting', children: jsx(RecordIcon,{}) }),
+        ]}),
+      ]}),
+      error && jsx('p', { role:'alert', className:'text-sm text-red-600 mt-2', children:error }),
+    ]}),
+    jsxs('div', { className: 'workspace-grid', children: [
+      jsxs('main', { className: 'meeting-reader', children: [
+        (autoStopCountdown != null || s.notices?.some(n => !dismissedNoticeIds.has(noticeId(n)))) && jsxs('div', { className:'meeting-alerts', role:'status', children:[autoStopCountdown != null && s.state === 'recording' && jsxs('div', {
+            className: 'rounded-xl border p-4 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-200',
+            children: [
+              jsxs('div', { className: 'flex items-start gap-2', children: [
+                jsx('span', { className: 'flex-shrink-0 text-sm', children: '\u23F1\uFE0F' }),
+                jsx('p', { className: 'text-sm font-medium', children: `Auto-stopping in ${autoStopCountdown}s — system audio not receiving data` }),
+              ]}),
+            ],
           }),
 
-          // Speaker attribution
-          s.transcript_available && jsx(SpeakerAttributionWrapper, {
+          // Notices
+          s.notices && s.notices.length > 0 && jsx('div', {
+            className: 'space-y-2',
+            children: s.notices.filter(n => !dismissedNoticeIds.has(noticeId(n))).map((n, i) => {
+              const colors = {
+                warning: 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 text-amber-800 dark:text-amber-200',
+                error: 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/10 text-red-800 dark:text-red-200',
+                info: 'border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/10 text-blue-800 dark:text-blue-200',
+              };
+              const icons = { warning: '\u26A0\uFE0F', error: '\u274C', info: '\u2139\uFE0F' };
+              return jsxs('div', {
+                key: noticeId(n) || i,
+                className: `rounded-xl border p-4 ${colors[n.level] || colors.info}`,
+                children: [
+                  jsxs('div', { className: 'flex items-start gap-2', children: [
+                    jsx('span', { className: 'flex-shrink-0 text-sm', children: icons[n.level] || icons.info }),
+                    jsxs('div', { className: 'flex-1 min-w-0', children: [
+                      jsx('p', { className: 'text-sm font-medium', children: n.message }),
+                      n.details && jsx('p', { className: 'text-xs mt-1 opacity-80', children: n.details }),
+                      jsxs('div', { className: 'mt-1.5 flex flex-wrap items-center gap-2', children: [
+                        jsx('time', {
+                          dateTime: n.created_at,
+                          className: 'text-[10px] opacity-70 tabular-nums',
+                          children: formatNoticeTimestamp(n.created_at),
+                        }),
+                        n.platform && jsx('span', {
+                          className: 'px-1.5 py-0.5 rounded text-[10px] font-medium bg-black/5 dark:bg-white/5',
+                          children: n.platform,
+                        }),
+                      ]}),
+                    ]}),
+                    jsx('button', {
+                      onClick: () => dismissNotice(n),
+                      className: 'flex-shrink-0 p-1 -mt-1 -mr-1 rounded opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition-colors',
+                      title: 'Dismiss notice',
+                      'aria-label': 'Dismiss notice',
+                      children: jsx(CloseIcon, { className: 'w-5 h-5' }),
+                    }),
+                  ]}),
+                ],
+              });
+            }),
+          })] }),
+        !s.transcript_available && jsx('div', { className: 'capture-intro', children: jsxs(Fragment, { children: [
+          jsx(Glyph, { name:'sound', size:40 }),
+          jsx('span', { className:'eyebrow', children: s.state === 'recording' ? 'LIVE SESSION' : 'READY WHEN YOU ARE' }),
+          jsx('h2', { children: s.state === 'recording' ? 'Be here. We’re listening.' : 'Every detail, in one place.' }),
+          jsx('p', { children: s.state === 'recording' ? 'Your audio is being captured. Notes and files stay within reach.' : 'Listen back below, or create a transcript to find the moments that matter.' }),
+        ]}) }),
+        s.state === 'stopped' && !s.transcript_available && !s.processing_state && jsx('div', {
+            className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
+            children: jsx('button', {
+              disabled: loading,
+              onClick: () => action(() => api(`/sessions/${s.id}/transcribe`, { method: 'POST' })),
+              className: 'w-full flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition-colors',
+              children: jsxs(Fragment, { children: [
+                jsx(TranscriptIcon, {}),
+                'Transcribe',
+              ]}),
+            }),
+          }),
+
+          // Processing indicator
+          s.processing_state && jsx('div', {
+            className: 'rounded-xl border border-indigo-200 dark:border-indigo-900/40 bg-indigo-50 dark:bg-indigo-900/10 p-4 md:p-5',
+            children: jsxs('div', { className: 'flex items-center gap-3', children: [
+              jsx('div', { className: 'w-5 h-5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin flex-shrink-0' }),
+              jsx('p', { className: 'text-sm font-medium text-indigo-700 dark:text-indigo-300', children: PROCESSING_LABELS[s.processing_state] || s.processing_state }),
+            ]}),
+          }),
+        readerPanel,
+      ]}),
+      jsxs('aside', { id:'meeting-context', className: `meeting-context ${contextOpen ? 'context-open' : ''}`, 'aria-label':'Meeting context', children: [
+        jsx(FilesPanel, { session:s, onPlay:() => playerRef.current?.seekAndPlay(0) }),
+        jsxs('section', { className:'context-card notes-card', children:[
+          jsxs('div', { className:'section-heading', children:[jsx('h3',{children:'Your notes'}),notesSaving && jsx('span',{className:'text-xs',children:'Saving…'})] }),
+          jsx('textarea', { value:notes, onChange:handleNotesChange, placeholder:'A thought to come back to…', 'aria-label':'Meeting notes', rows:4 }),
+        ]}),
+        s.transcript_available && jsx(SpeakerAttributionWrapper, {
             sessionId: s.id,
             onUpdate: onRefresh,
             onSelectPerson,
           }),
-
-          // All files
-          s.files.length > 0 && s.state === 'stopped' && jsx('div', {
-            className: 'rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 md:p-5',
+        s.state === 'recording' && jsx('div', {
+            className: 'rounded-xl border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/10 p-4 md:p-5',
             children: jsxs(Fragment, { children: [
-              jsx('p', { className: 'text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2', children: 'All Files' }),
-              jsx('div', { className: 'space-y-1', children:
-                s.files.map(f => jsxs('div', {
-                  key: f,
-                  className: 'flex items-center justify-between py-1 gap-2',
-                  children: [
-                    jsx('span', { className: 'text-sm font-mono text-gray-600 dark:text-gray-400 truncate min-w-0', children: f }),
-                    jsxs('span', { className: 'flex items-center gap-2 flex-shrink-0', children: [
-                      s.file_sizes && s.file_sizes[f] != null && jsx('span', {
-                        className: 'text-[11px] text-gray-400 dark:text-gray-500 font-mono',
-                        children: formatFileSize(s.file_sizes[f]),
+              jsxs('div', { className: 'flex items-center gap-2 mb-3', children: [
+                jsx('span', { className: 'w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse-recording' }),
+                jsx('p', { className: 'text-sm font-medium text-red-700 dark:text-red-300', children: 'Recording in progress' }),
+              ]}),
+              jsxs('div', { className: 'mb-3 rounded-lg border border-red-200/80 dark:border-red-900/50 bg-white/50 dark:bg-black/10 px-3 py-2.5', children: [
+                jsx('p', { className: 'text-xs font-medium text-red-700 dark:text-red-300 mb-2', children: 'Auto-stop when:' }),
+                jsxs('div', { className: 'grid text-xs text-red-700 dark:text-red-300', children: [
+                  jsxs('div', { className: 'flex min-h-7 items-center gap-2 select-none', children: [
+                    jsxs('label', { className: 'flex items-center gap-2 cursor-pointer', children: [
+                      jsx('input', {
+                        type: 'checkbox',
+                        checked: s.auto_stop?.system_audio_silence_secs != null,
+                        onChange: e => updateAutoStop({
+                          system_audio_silence_secs: e.target.checked ? Math.min(86400, Math.max(1, Number(autoStopSilenceSecs) || 60)) : null,
+                        }),
+                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
                       }),
-                      jsx('a', {
-                        href: `${API}/sessions/${s.id}/files/${encodeURIComponent(f)}`,
-                        target: '_blank',
-                        className: 'text-xs text-blue-600 dark:text-blue-400 hover:underline',
-                        children: 'download',
-                      }),
+                      jsx('span', { children: 'System audio is silent for' }),
                     ]}),
-                  ],
+                    jsx('input', {
+                      type: 'number',
+                      min: 1,
+                      max: 86400,
+                      value: autoStopSilenceSecs,
+                      disabled: s.auto_stop?.system_audio_silence_secs == null,
+                      onChange: e => setAutoStopSilenceSecs(e.target.value),
+                      onBlur: e => {
+                        const seconds = Math.min(86400, Math.max(1, Math.round(Number(e.target.value) || 60)));
+                        setAutoStopSilenceSecs(seconds);
+                        if (s.auto_stop?.system_audio_silence_secs != null) {
+                          updateAutoStop({ system_audio_silence_secs: seconds });
+                        }
+                      },
+                      onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur(); },
+                      className: 'w-20 rounded border border-red-200 dark:border-red-800 bg-white dark:bg-gray-900 px-2 py-1 text-xs disabled:opacity-50',
+                    }),
+                    jsx('span', { children: 'seconds' }),
+                  ]}),
+                  jsxs('label', {
+                    className: `flex min-h-7 items-center gap-2 select-none ${capabilities?.auto_stop_screen_lock === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
+                    title: capabilities?.auto_stop_screen_lock === false ? 'Not supported on this server' : 'Stop when the current macOS user locks the screen',
+                    children: [
+                      jsx('input', {
+                        type: 'checkbox',
+                        checked: s.auto_stop?.screen_lock || false,
+                        disabled: capabilities?.auto_stop_screen_lock === false,
+                        onChange: e => updateAutoStop({ screen_lock: e.target.checked }),
+                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
+                      }),
+                      jsx('span', { children: 'User locks the screen' }),
+                    ],
+                  }),
+                  jsxs('label', {
+                    className: `flex min-h-7 items-center gap-2 select-none ${capabilities?.auto_stop_system_sleep === false ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`,
+                    title: capabilities?.auto_stop_system_sleep === false ? 'Not supported on this server' : 'Stop and finalize audio before macOS sleeps',
+                    children: [
+                      jsx('input', {
+                        type: 'checkbox',
+                        checked: s.auto_stop?.system_sleep || false,
+                        disabled: capabilities?.auto_stop_system_sleep === false,
+                        onChange: e => updateAutoStop({ system_sleep: e.target.checked }),
+                        className: 'rounded border-red-300 text-red-600 focus:ring-red-500',
+                      }),
+                      jsx('span', { children: 'System is going to sleep' }),
+                    ],
+                  }),
+                ]}),
+              ]}),
+              s.files.length > 0 && jsx('div', { className: 'flex flex-wrap gap-1.5', children:
+                s.files.map(f => jsx('span', {
+                  key: f,
+                  className: 'inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 font-mono',
+                  children: jsxs(Fragment, { children: [
+                    f,
+                    s.file_sizes && s.file_sizes[f] != null && jsx('span', {
+                      className: 'text-red-400 dark:text-red-500',
+                      children: formatFileSize(s.file_sizes[f]),
+                    }),
+                  ]}),
                 })),
               }),
             ]}),
           }),
-
-          jsxs('p', {
-            className: 'text-[11px] text-gray-300 dark:text-gray-700 font-mono break-all',
-            children: ['ID: ', s.id],
-          }),
+        jsxs('details', { className:'context-card meeting-details', children:[
+          jsx('summary',{children:'Meeting details'}), metadataPanel,
+          jsx('button', { className:'delete-meeting', disabled:loading, onClick:() => { if (confirm('Delete this session and all its files? This cannot be undone.')) action(async () => { await api(`/sessions/${s.id}`, { method:'DELETE' }); onDeleted(); }); }, children:'Delete meeting' }),
         ]}),
-      }),
-      thinkingModal !== null && jsx('div', {
+      ]}),
+    ]}),
+    hasAudio && jsxs('footer', { className:'playback-dock', 'aria-label':'Meeting playback', children:[
+      jsxs('div', { className:'dock-heading', children:[
+        jsx('span',{className:'dock-mark',children:jsx(Glyph,{name:'sound',size:24})}),
+        jsxs('div',{children:[jsx('span',{className:'eyebrow',children:'LISTEN BACK'}),jsx('strong',{children:s.name || 'Meeting recording'})]}),
+        jsx('span',{className:'dock-hint',children:'Stay in the conversation.'}),
+      ]}),
+      jsx(SyncedPlayer, { key:s.id, ref:playerRef, sessionId:s.id, onTimeUpdate:setPlaybackTime, files:audioFiles.map(name => { const meta = (s.source_meta || []).find(src => src.filename === name); return { name, label:meta?.source_label || name.replace(/\.[^.]+$/, '').replace(/_/g,' '), sourceType:meta?.source_type || null }; }) }),
+    ]}),
+    thinkingModal !== null && jsx('div', {
         className: 'fixed inset-0 z-[20000] flex items-center justify-center bg-black/40 p-6',
         onClick: (e) => { if (e.target === e.currentTarget) setThinkingModal(null); },
         children: jsx('div', {
@@ -1422,6 +1333,5 @@ a{color:#4f46e5}code{background:#f3f4f6;padding:0.15em 0.3em;border-radius:3px;f
           ]}),
         }),
       }),
-    ]}),
-  });
+  ]});
 }

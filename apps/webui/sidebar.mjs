@@ -1,127 +1,279 @@
+import { useState } from 'react';
 import { track } from './analytics.mjs';
-import { jsx, jsxs, Fragment, PAGE_SIZE, CloseIcon, RecordIcon } from './utils.mjs';
-import { NewSessionPanel, SidebarItem } from './session.mjs';
+import {
+  jsx,
+  jsxs,
+  Fragment,
+  PAGE_SIZE,
+  RecordIcon,
+  PlayIcon,
+  formatDuration,
+  formatTime,
+} from './utils.mjs';
 import { PeopleSidebar } from './people.mjs';
 import { SettingsSidebar } from './settings.mjs';
+import { Glyph } from './workspace.mjs';
 
-export function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageChange, sources, fields, onCreated, showNew, setShowNew, currentView, onViewChange, people, selectedPersonId, setSelectedPersonId, refreshPeople, settingsCategory, setSettingsCategory }) {
-  const header = jsx('div', {
-    key: 'header',
-    className: 'flex-shrink-0 px-4 py-3 md:py-4 border-b border-gray-100 dark:border-gray-800',
-    children: jsxs('div', { className: 'flex flex-col gap-2', children: [
-      jsxs('div', { className: 'flex items-center justify-between', children: [
-        jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Meeting Notes' }),
-        jsx('button', {
-          onClick: () => {
-            const recording = sessions.find(s => s.state === 'recording');
-            if (recording && currentView !== 'sessions') {
-              onViewChange('sessions');
-              onSelect(recording.id);
-            } else {
-              if (currentView !== 'sessions') onViewChange('sessions');
-              if (!showNew) track('recording_form_opened');
-              setShowNew(!showNew);
-            }
-          },
-          className: showNew
-            ? 'w-7 h-7 flex items-center justify-center rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors'
-            : 'w-7 h-7 flex items-center justify-center rounded-full bg-red-500 hover:bg-red-600 text-white transition-colors',
-          title: showNew ? 'Close' : 'Record',
-          children: showNew
-            ? jsx(CloseIcon, {})
-            : jsx(RecordIcon, {}),
-        }),
-      ]}),
-      // Nav tabs
-      jsxs('div', { className: 'flex gap-1', children: [
-        jsx('button', {
-          onClick: () => onViewChange('sessions'),
-          className: `px-2 py-1 rounded text-[11px] font-medium transition-colors ${currentView === 'sessions' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
-          children: 'Sessions',
-        }),
-        jsx('button', {
-          onClick: () => onViewChange('people'),
-          className: `px-2 py-1 rounded text-[11px] font-medium transition-colors ${currentView === 'people' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
-          children: 'People',
-        }),
-        jsx('button', {
-          onClick: () => onViewChange('settings'),
-          className: `px-2 py-1 rounded text-[11px] font-medium transition-colors ${currentView === 'settings' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`,
-          children: 'Settings',
-        }),
-      ]}),
-    ]}),
+export function Sidebar({
+  sessions,
+  total,
+  offset,
+  selectedId,
+  onSelect,
+  onQuickPlay,
+  onPageChange,
+  setShowNew,
+  currentView,
+  onViewChange,
+  people,
+  selectedPersonId,
+  setSelectedPersonId,
+  refreshPeople,
+  settingsCategory,
+  setSettingsCategory,
+}) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
+  const recording = sessions.find((s) => s.state === 'recording');
+  const visible = sessions.filter((s) => {
+    const text = [s.name, ...(s.tags || [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return (
+      text.includes(query.toLowerCase()) &&
+      (filter !== 'audio' ||
+        s.files?.some((f) => /\.(mp3|wav|opus)$/i.test(f))) &&
+      (filter !== 'summaries' || s.summary_available)
+    );
   });
-
-  const sidebarChildren = [header];
-
-  if (currentView === 'sessions') {
-    if (showNew) {
-      sidebarChildren.push(jsx('div', {
-        key: 'new-form',
-        className: 'px-3 py-3 border-b border-gray-100 dark:border-gray-800',
-        children: jsx(NewSessionPanel, {
-          sources, fields,
-          onCreated: async () => { await onCreated(); },
-          onSelect: (id) => { setShowNew(false); onSelect(id); },
-        }),
-      }));
-    }
-
-    sidebarChildren.push(jsx('div', {
-      key: 'list',
-      className: 'flex-1 overflow-y-auto sidebar-scroll px-2 py-2 space-y-0.5',
-      children: sessions.length === 0
-        ? jsx('p', { className: 'text-xs text-gray-400 dark:text-gray-600 text-center py-8', children: 'No sessions yet' })
-        : sessions.map(s => jsx(SidebarItem, {
-            key: s.id, session: s,
-            selected: s.id === selectedId,
-            onClick: () => onSelect(s.id),
-          })),
-    }));
-
-    if (total > PAGE_SIZE) {
-      sidebarChildren.push(jsxs('div', {
-        key: 'pagination',
-        className: 'flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-100 dark:border-gray-800 text-[11px] text-gray-400 dark:text-gray-500',
+  return jsxs('aside', {
+    className: 'library-sidebar',
+    'aria-label': 'Workspace navigation',
+    children: [
+      jsxs('div', {
+        className: 'brand',
         children: [
-          jsx('button', {
-            disabled: offset === 0,
-            onClick: () => onPageChange(Math.max(0, offset - PAGE_SIZE)),
-            className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
-            children: 'Prev',
+          jsx('span', {
+            className: 'brand-symbol',
+            children: jsx(Glyph, { name: 'sound', size: 25 }),
           }),
-          jsx('span', { children: `${Math.floor(offset / PAGE_SIZE) + 1} / ${Math.ceil(total / PAGE_SIZE)}` }),
-          jsx('button', {
-            disabled: offset + PAGE_SIZE >= total,
-            onClick: () => onPageChange(offset + PAGE_SIZE),
-            className: 'hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 transition-colors',
-            children: 'Next',
+          jsxs('div', {
+            children: [
+              jsx('strong', { children: 'Meeting Notes' }),
+              jsx('span', { children: 'A little more presence.' }),
+            ],
           }),
         ],
-      }));
-    }
-  } else if (currentView === 'people') {
-    sidebarChildren.push(jsx('div', {
-      key: 'people-list',
-      className: 'flex-1 overflow-y-auto sidebar-scroll',
-      children: jsx(PeopleSidebar, {
-        selectedId: selectedPersonId,
-        onSelect: (id) => setSelectedPersonId(id),
-        people,
-        onRefresh: refreshPeople,
       }),
-    }));
-  } else if (currentView === 'settings') {
-    sidebarChildren.push(jsx('div', {
-      key: 'settings-nav',
-      className: 'flex-1 overflow-y-auto sidebar-scroll',
-      children: jsx(SettingsSidebar, { selected: settingsCategory, onSelect: setSettingsCategory }),
-    }));
-  }
-
-  return jsx('div', {
-    className: 'h-full flex flex-col bg-white dark:bg-gray-900 md:border-r border-gray-200 dark:border-gray-800',
-    children: sidebarChildren,
+      jsx('button', {
+        className: 'new-recording',
+        onClick: () => {
+          track('recording_form_opened');
+          setShowNew(true);
+        },
+        children: jsxs(Fragment, {
+          children: [
+            jsx(RecordIcon, {}),
+            'Record a meeting',
+            jsx('span', { children: '+' }),
+          ],
+        }),
+      }),
+      recording &&
+        jsx('button', {
+          className: 'live-recording-link',
+          onClick: () => {
+            onViewChange('sessions');
+            onSelect(recording.id);
+          },
+          children: '● Recording in progress →',
+        }),
+      jsx('nav', {
+        className: 'workspace-nav',
+        children: [
+          ['sessions', 'library', 'Library'],
+          ['people', 'people', 'People'],
+          ['settings', 'settings', 'Settings'],
+        ].map(([id, icon, label]) =>
+          jsxs('button', {
+            key: id,
+            className: currentView === id ? 'nav-active' : '',
+            onClick: () => onViewChange(id),
+            'aria-current': currentView === id ? 'page' : undefined,
+            children: [jsx(Glyph, { name: icon, size: 17 }), label],
+          }),
+        ),
+      }),
+      currentView === 'sessions' &&
+        jsxs(Fragment, {
+          children: [
+            jsxs('div', {
+              className: 'library-heading',
+              children: [
+                jsx('h2', { children: 'Your meetings' }),
+                jsx('span', { children: total }),
+              ],
+            }),
+            jsxs('label', {
+              className: 'library-search',
+              children: [
+                jsx(Glyph, { name: 'search', size: 16 }),
+                jsx('input', {
+                  value: query,
+                  onChange: (e) => setQuery(e.target.value),
+                  placeholder:
+                    total > PAGE_SIZE ? 'Search this page…' : 'Find a meeting…',
+                  'aria-label':
+                    total > PAGE_SIZE
+                      ? 'Search meetings on this page'
+                      : 'Search meetings',
+                }),
+              ],
+            }),
+            jsx('div', {
+              className: 'library-filters',
+              children: [
+                ['all', 'All'],
+                ['audio', 'With audio'],
+                ['summaries', 'Summarized'],
+              ].map(([id, label]) =>
+                jsx('button', {
+                  key: id,
+                  'aria-pressed': filter === id,
+                  onClick: () => {
+                    setFilter(id);
+                    track('library_filtered');
+                  },
+                  children: label,
+                }),
+              ),
+            }),
+            jsx('div', {
+              className: 'meeting-list',
+              children: visible.length
+                ? visible.map((s) =>
+                    jsxs('div', {
+                      key: s.id,
+                      className: `meeting-list-item ${selectedId === s.id ? 'is-selected' : ''}`,
+                      children: [
+                        jsx('button', {
+                          className: 'meeting-select',
+                          onClick: () => onSelect(s.id),
+                          'aria-current':
+                            selectedId === s.id ? 'true' : undefined,
+                          children: jsxs(Fragment, {
+                            children: [
+                              jsx('span', {
+                                className: 'meeting-list-date',
+                                children: formatTime(s.created_at),
+                              }),
+                              jsx('strong', {
+                                children: s.name || 'Untitled meeting',
+                              }),
+                              jsxs('span', {
+                                className: 'meeting-list-meta',
+                                children: [
+                                  jsx(Glyph, {
+                                    name:
+                                      s.state === 'recording'
+                                        ? 'sound'
+                                        : s.summary_available
+                                          ? 'spark'
+                                          : 'file',
+                                    size: 12,
+                                  }),
+                                  s.state === 'recording'
+                                    ? 'Recording'
+                                    : s.summary_available
+                                      ? 'Summary ready'
+                                      : s.transcript_available
+                                        ? 'Transcript ready'
+                                        : 'Audio session',
+                                  s.duration_secs != null &&
+                                    ` · ${formatDuration(s.duration_secs)}`,
+                                ],
+                              }),
+                              !!s.tags?.length &&
+                                jsx('span', {
+                                  className: 'meeting-list-tags',
+                                  children: s.tags
+                                    .slice(0, 2)
+                                    .map((t) =>
+                                      jsx('span', { key: t, children: t }),
+                                    ),
+                                }),
+                            ],
+                          }),
+                        }),
+                        s.state === 'stopped' &&
+                          s.files?.some((f) => /\.(mp3|wav|opus)$/i.test(f)) &&
+                          jsx('button', {
+                            className: 'quick-play',
+                            'aria-label': `Play ${s.name || 'meeting'}`,
+                            title: 'Play meeting',
+                            onClick: () => onQuickPlay(s.id),
+                            children: jsx(PlayIcon, {}),
+                          }),
+                      ],
+                    }),
+                  )
+                : jsx('div', {
+                    className: 'library-empty',
+                    children:
+                      query || filter !== 'all'
+                        ? 'No matching meetings. Try another search or filter.'
+                        : 'Your next good conversation starts here.',
+                  }),
+            }),
+            total > PAGE_SIZE &&
+              jsxs('div', {
+                className: 'library-pagination',
+                children: [
+                  jsx('button', {
+                    disabled: offset === 0,
+                    onClick: () =>
+                      onPageChange(Math.max(0, offset - PAGE_SIZE)),
+                    children: 'Previous',
+                  }),
+                  jsx('span', {
+                    children: `${Math.floor(offset / PAGE_SIZE) + 1} / ${Math.ceil(total / PAGE_SIZE)}`,
+                  }),
+                  jsx('button', {
+                    disabled: offset + PAGE_SIZE >= total,
+                    onClick: () => onPageChange(offset + PAGE_SIZE),
+                    children: 'Next',
+                  }),
+                ],
+              }),
+          ],
+        }),
+      currentView === 'people' &&
+        jsx('div', {
+          className: 'sidebar-secondary',
+          children: jsx(PeopleSidebar, {
+            selectedId: selectedPersonId,
+            onSelect: setSelectedPersonId,
+            people,
+            onRefresh: refreshPeople,
+          }),
+        }),
+      currentView === 'settings' &&
+        jsx('div', {
+          className: 'sidebar-secondary',
+          children: jsx(SettingsSidebar, {
+            selected: settingsCategory,
+            onSelect: setSettingsCategory,
+          }),
+        }),
+      jsxs('div', {
+        className: 'library-footer',
+        children: [
+          jsx('span', { className: 'local-dot' }),
+          jsx('span', { children: 'Your workspace. Your words.' }),
+          jsx('span', { children: '01' }),
+        ],
+      }),
+    ],
   });
 }

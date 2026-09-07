@@ -1,11 +1,12 @@
+import { RecordingDialog } from './workspace.mjs';
 import { initAnalytics, track } from './analytics.mjs';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { jsx, jsxs, Fragment, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
 import { parseRoute, buildPath } from './router.mjs';
 import { SessionDetail } from './session.mjs';
-import { PersonDetail } from './people.mjs';
-import { SettingsPage } from './settings.mjs';
+import { PersonDetail, PeopleSidebar } from './people.mjs';
+import { SettingsPage, SettingsSidebar } from './settings.mjs';
 import { Sidebar } from './sidebar.mjs';
 import { ChatBubble } from './chat.mjs';
 
@@ -210,13 +211,13 @@ function App() {
 
   // Auto-select first session only if URL didn't specify one
   useEffect(() => {
-    if (currentView === 'sessions' && sessions.length > 0 && !selectedId && !hadInitialId.current) {
+    if (!isMobile && currentView === 'sessions' && sessions.length > 0 && !selectedId && !hadInitialId.current) {
       const recording = sessions.find(s => s.state === 'recording');
       const autoId = recording ? recording.id : sessions[0].id;
       navigateTo(buildPath('sessions', autoId), true); // replaceState, not pushState
     }
     hadInitialId.current = false; // only suppress once
-  }, [sessions, currentView]);
+  }, [sessions, currentView, isMobile]);
 
   function handleSelect(id) {
     track('meeting_opened');
@@ -249,6 +250,7 @@ function App() {
     sessions, total, offset,
     selectedId,
     onSelect: handleSelect,
+    onQuickPlay: id => navigateTo(buildPath('sessions', id) + '?jump=0'),
     onPageChange: handlePageChange,
     sources, fields,
     onCreated: async () => { setOffset(0); await refresh(0); },
@@ -283,39 +285,23 @@ function App() {
       fields,
       capabilities,
       routeQuery,
+      onRecord: () => setShowNew(true),
     });
   }
 
-  const chatBubble = jsx(ChatBubble, {});
-
-  if (isMobile) {
-    if (currentView !== 'sessions') {
-      return jsxs(Fragment, { children: [
-        jsx('div', { className: 'h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
-        chatBubble,
-      ]});
-    }
-    if (mobileView === 'detail' && selectedSession) {
-      return jsxs(Fragment, { children: [
-        jsx('div', { className: 'h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
-        chatBubble,
-      ]});
-    }
-    return jsxs(Fragment, { children: [
-      jsx('div', { className: 'h-full', children: jsx(Sidebar, sidebarProps) }),
-      chatBubble,
-    ]});
-  }
-
+  const showSidebar = !isMobile || (currentView === 'sessions' && mobileView === 'list');
   return jsxs(Fragment, { children: [
-    jsxs('div', {
-      className: 'h-full flex',
-      children: [
-        jsx('div', { className: 'w-72 flex-shrink-0 h-full', children: jsx(Sidebar, sidebarProps) }),
-        jsx('div', { className: 'flex-1 h-full bg-gray-50 dark:bg-gray-950', children: mainContent() }),
-      ],
-    }),
-    chatBubble,
+    jsxs('div', { className:'app-shell', children:[
+      showSidebar && jsx('div', { key:'sidebar', className:'sidebar-column', children:jsx(Sidebar,sidebarProps) }),
+      (!isMobile || !showSidebar) && jsxs('div', { key:'main', className:'main-column', children:[
+        isMobile && currentView !== 'sessions' && jsx('button', { className:'mobile-library-back quiet-button', onClick:()=>navigateTo('/sessions'), children:'← Meeting library' }),
+        isMobile && currentView === 'settings' && jsx('div', { className:'mobile-settings-nav', children:jsx(SettingsSidebar,{selected:settingsCategory,onSelect:cat=>navigateTo(buildPath('settings',cat))}) }),
+        isMobile && currentView === 'people' && jsxs('details', { className:'mobile-people-nav', children:[jsx('summary',{children:'Choose a person'}),jsx(PeopleSidebar,{selectedId:selectedPersonId,onSelect:id=>navigateTo(buildPath('people',id)),people,onRefresh:refreshPeople})] }),
+        mainContent(),
+      ]}),
+    ]}),
+    showNew && jsx(RecordingDialog,{sources,fields,onCreated:async()=>{setOffset(0);await refresh(0);},onSelect:id=>{setShowNew(false);handleSelect(id);},onClose:()=>setShowNew(false)}),
+    jsx(ChatBubble, { reservePlaybackSpace: currentView === 'sessions' && selectedSession?.state === 'stopped' && selectedSession?.files?.some(f => /\.(mp3|wav|opus)$/i.test(f)) }),
   ]});
 }
 
