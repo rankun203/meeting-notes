@@ -1,6 +1,10 @@
 # Rust
 target/
 
+# Python
+__pycache__/
+*.py[cod]
+
 # IDE
 .idea/
 .codex/

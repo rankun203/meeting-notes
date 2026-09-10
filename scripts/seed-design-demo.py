@@ -4,7 +4,7 @@ Run: uv run --no-project scripts/seed-design-demo.py /tmp/meeting-notes-demo
 """
 import json
 import sys
-import wave
+from demo_audio import write_demo_audio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -85,12 +85,8 @@ for idx, (name, tags) in enumerate(meetings):
     write(folder / 'summary.json', {'content':summary})
     (folder / 'summary.md').write_text(summary)
     if idx in [0,1,3]:
-        # Silent placeholder audio: demo playback/seek only, no real meeting recording.
-        with wave.open(str(folder / 'recording.wav'), 'wb') as audio:
-            audio.setnchannels(1)
-            audio.setsampwidth(2)
-            audio.setframerate(8000)
-            for _ in range(480):
-                audio.writeframesraw(b'\x00' * 16000)
+        write_demo_audio(folder / 'recording.wav')
+        if idx == 0:
+            write_demo_audio(folder / 'microphone.wav', phase=1)
 print(f'Created {len(meetings)} fictional meetings in {root}. Analytics and automatic processing are disabled.')
 print(f'cargo run -- serve --web-ui --port 33490 --data-dir {root}')

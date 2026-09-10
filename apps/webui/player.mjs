@@ -1,117 +1,89 @@
 import { track } from './analytics.mjs';
-import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import { mergeWaveformPeaks } from './waveform.mjs';
+import { useState, useEffect, useMemo, useRef, useImperativeHandle, forwardRef } from 'react';
 import { jsx, jsxs, API, fmtTime } from './utils.mjs';
 import { PlayIcon, PauseIcon } from './icons.mjs';
 
-// ── Waveform Display ──
-
-function WaveformTrack({ sessionId, file, duration, currentTime, muted, onSeek }) {
+// One waveform and one native seek target for every audible source.
+function WaveformSeek({ sessionId, files, mutedTracks, duration, currentTime, onSeek }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
-  const [waveform, setWaveform] = useState(null);
+  const [waveforms, setWaveforms] = useState({});
+  const [loaded, setLoaded] = useState(false);
   const [width, setWidth] = useState(0);
+  const namesKey = JSON.stringify(files.map(file => file.name));
 
-  // Fetch waveform data
   useEffect(() => {
-    if (!sessionId || !file) return;
-    fetch(`${API}/sessions/${sessionId}/waveform/${encodeURIComponent(file.name)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setWaveform(data); })
-      .catch(() => {});
-  }, [sessionId, file.name]);
-
-  // Observe container width
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) setWidth(Math.floor(entry.contentRect.width));
+    const controller = new AbortController();
+    setWaveforms({});
+    setLoaded(false);
+    void Promise.all(JSON.parse(namesKey).map(async name => {
+      try {
+        const response = await fetch(`${API}/sessions/${sessionId}/waveform/${encodeURIComponent(name)}`, { signal: controller.signal });
+        return [name, response.ok ? await response.json() : null];
+      } catch { return [name, null]; }
+    })).then(entries => {
+      if (controller.signal.aborted) return;
+      setWaveforms(Object.fromEntries(entries));
+      setLoaded(true);
     });
-    ro.observe(el);
-    return () => ro.disconnect();
+    return () => controller.abort();
+  }, [sessionId, namesKey]);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(entries => setWidth(Math.floor(entries[0].contentRect.width)));
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
   }, []);
 
-  // Draw waveform
+  const peaks = useMemo(() => mergeWaveformPeaks(
+    JSON.parse(namesKey).filter((_, i) => !mutedTracks[i]).map(name => waveforms[name]),
+    duration, Math.ceil(width / 3),
+  ), [waveforms, namesKey, mutedTracks, duration, width]);
+  const state = !loaded ? 'loading' : !Object.values(waveforms).some(w => w?.data?.length) ? 'unavailable' : peaks.some(value => value !== 0) ? 'ready' : 'silent';
+
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !waveform || !width || !duration) return;
-
+    if (!canvas || !width) return;
     const dpr = window.devicePixelRatio || 1;
-    const height = 48;
+    const height = 38;
     canvas.width = width * dpr;
     canvas.height = height * dpr;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
-
-    const bins = waveform.data;
-    const numBins = bins.length / 2; // alternating min, max
-    const mid = height / 2;
-
-    // Map bins to pixels
-    const binsPerPx = numBins / width;
-
-    // Waveform color
-    const baseColor = muted ? 'rgba(156, 163, 175, 0.25)' : 'rgba(131, 172, 164, 0.55)';
-    const playedColor = muted ? 'rgba(156, 163, 175, 0.35)' : 'rgba(198, 244, 141, 0.95)';
-    const playedX = duration > 0 ? (currentTime / duration) * width : 0;
-
-    for (let px = 0; px < width; px++) {
-      const binStart = Math.floor(px * binsPerPx);
-      const binEnd = Math.min(Math.ceil((px + 1) * binsPerPx), numBins);
-
-      // Aggregate bins for this pixel: min of mins, max of maxes
-      let minVal = 0, maxVal = 0;
-      for (let b = binStart; b < binEnd; b++) {
-        const mn = bins[b * 2];
-        const mx = bins[b * 2 + 1];
-        if (mn < minVal) minVal = mn;
-        if (mx > maxVal) maxVal = mx;
-      }
-
-      // Scale to canvas height (values are -1..1)
-      const top = mid - maxVal * mid;
-      const bottom = mid - minVal * mid;
-      const barHeight = Math.max(bottom - top, 1);
-
-      ctx.fillStyle = px <= playedX ? playedColor : baseColor;
-      ctx.fillRect(px, top, 1, barHeight);
+    const playedX = Math.max(0, Math.min(width, duration ? currentTime / duration * width : 0));
+    const unplayed = '#7f9e90', played = '#d2ef9c';
+    // Silence and failed waveform requests still leave a useful single timeline.
+    ctx.fillStyle = unplayed;
+    ctx.fillRect(0, height / 2, width, 1);
+    ctx.fillStyle = played;
+    ctx.fillRect(0, height / 2, playedX, 1);
+    for (let col = 0; col < peaks.length / 2; col++) {
+      const x = col * 3;
+      const top = height / 2 - peaks[col * 2 + 1] * (height / 2 - 3);
+      const bottom = height / 2 - peaks[col * 2] * (height / 2 - 3);
+      ctx.fillStyle = x <= playedX ? played : unplayed;
+      ctx.fillRect(x, top, 2, Math.max(1, bottom - top));
     }
-
-    // Playhead line
-    if (currentTime > 0 && playedX > 0) {
-      ctx.fillStyle = muted ? 'rgba(156, 163, 175, 0.6)' : 'rgba(198, 244, 141, 1)';
-      ctx.fillRect(Math.round(playedX), 0, 1, height);
-    }
-  }, [waveform, width, duration, currentTime, muted]);
-
-  function handleClick(e) {
-    if (!duration || !containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const t = (x / rect.width) * duration;
-    if (onSeek) onSeek(Math.max(0, Math.min(t, duration)));
-  }
+    // The sole visible playhead belongs to the waveform, not a second progress bar.
+    ctx.fillStyle = played;
+    ctx.fillRect(Math.min(width - 2, playedX), 0, 2, height);
+  }, [peaks, width, duration, currentTime]);
 
   return jsxs('div', {
-    className: `cursor-pointer ${muted ? 'opacity-40' : ''}`,
+    ref: containerRef, className: 'waveform-seek', 'data-waveform-state': state,
+    title: state === 'loading' ? 'Loading waveform — seeking is available' : state === 'unavailable' ? 'Waveform unavailable — seeking is available' : state === 'silent' ? 'Silent or muted audio — seek to a position' : 'Combined audio waveform — drag to seek',
     children: [
-      jsx('span', {
-        className: `text-[10px] font-medium px-1 ${muted ? 'text-gray-400 dark:text-gray-600 line-through' : 'text-gray-500 dark:text-gray-400'}`,
-        children: file.label,
-      }),
-      jsx('div', {
-        ref: containerRef,
-        onClick: handleClick,
-        className: 'relative rounded overflow-hidden',
-        style: { height: '48px' },
-        children: jsx('canvas', {
-          ref: canvasRef,
-          className: 'absolute inset-0',
-        }),
+      jsx('canvas', { ref: canvasRef, 'aria-hidden': true }),
+      jsx('input', {
+        type: 'range', min: 0, max: duration || 1, step: 0.1,
+        value: Math.min(currentTime, duration || 1), disabled: !duration,
+        'aria-label': 'Playback position', 'aria-valuetext': `${fmtTime(currentTime)} of ${fmtTime(duration)}`,
+        onChange: e => onSeek(Number(e.target.value)),
+        onPointerUp: e => track('playback_seeked', { source: 'waveform', position_seconds: Number(e.currentTarget.value) }),
+        onKeyUp: e => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) track('playback_seeked', { source: 'waveform', position_seconds: Number(e.currentTarget.value) }); },
       }),
     ],
   });
@@ -127,7 +99,6 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
   const [mutedTracks, setMutedTracks] = useState({});
   const [speed, setSpeed] = useState(1);
   const [error, setError] = useState('');
-  const [overviewTrack, setOverviewTrack] = useState(0);
   const playingRef = useRef(false);
   const mountedRef = useRef(true);
   const lastUpdateRef = useRef(0);
@@ -224,7 +195,7 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
       key:f.name, ref:el => { audioRefs.current[i] = el; },
       src:`${API}/sessions/${sessionId}/files/${encodeURIComponent(f.name)}`,
       preload:'metadata', muted:!!mutedTracks[i],
-      onLoadedMetadata:() => { const max = Math.max(...getAudios().map(a => Number.isFinite(a.duration) ? a.duration : 0)); setDuration(max); setOverviewTrack(Math.max(0, audioRefs.current.indexOf(clockAudio()))); },
+      onLoadedMetadata:() => { const max = Math.max(...getAudios().map(a => Number.isFinite(a.duration) ? a.duration : 0)); setDuration(max); },
       onTimeUpdate:() => updateTime(), onEnded,
       onPause:() => { if (playingRef.current && getAudios().every(a => a.paused)) { playingRef.current = false; setPlaying(false); updateTime(true); } },
       className:'hidden',
@@ -235,12 +206,9 @@ export const SyncedPlayer = forwardRef(function SyncedPlayer({ files, sessionId,
       jsx('button', { className:'skip-button', onClick:() => skip(15), title:'Forward 15 seconds', 'aria-label':'Forward 15 seconds', children:'+15' }),
     ]}),
     jsxs('div', { className:'player-timeline', children:[
-      files[overviewTrack] && jsx(WaveformTrack, { sessionId, file:files[overviewTrack], duration, currentTime, muted:!!mutedTracks[overviewTrack], onSeek:t => { seekTo(t); track('playback_seeked',{source:'waveform',position_seconds:t}); } }),
-      jsxs('div', { className:'player-progress', children:[
-        jsx('span', { children:fmtTime(currentTime) }),
-        jsx('input', { type:'range', min:0, max:duration || 1, step:0.1, value:Math.min(currentTime,duration || 1), disabled:!duration, 'aria-label':'Playback position', 'aria-valuetext':`${fmtTime(currentTime)} of ${fmtTime(duration)}`, onChange:e => seekTo(Number(e.target.value)), onPointerUp:e => track('playback_seeked',{source:'player',position_seconds:Number(e.currentTarget.value)}), onKeyUp:e => { if (['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) track('playback_seeked',{source:'player',position_seconds:Number(e.currentTarget.value)}); } }),
-        jsx('span', { children:fmtTime(duration) }),
-      ]}),
+      jsx('span', { className:'player-time', children:fmtTime(currentTime) }),
+      jsx(WaveformSeek, { sessionId, files, mutedTracks, duration, currentTime, onSeek:seekTo }),
+      jsx('span', { className:'player-time', children:fmtTime(duration) }),
     ]}),
     jsxs('div', { className:'player-options', children:[
       jsx('select', { value:speed, 'aria-label':'Playback speed', onChange:e => { const rate=Number(e.target.value); setSpeed(rate); getAudios().forEach(a => {a.playbackRate=rate;}); track('playback_speed_changed',{speed:rate}); }, children:[0.75,1,1.25,1.5,2,4].map(rate => jsx('option',{key:rate,value:rate,children:`${rate}×`})) }),
