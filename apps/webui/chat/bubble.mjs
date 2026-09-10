@@ -61,8 +61,9 @@ export function ChatBubble() {
   useEffect(() => { chatBackendRef.current = chatBackend; }, [chatBackend]);
 
   const fileRevision = useFileRevision('conversations');
-  const peopleRevision = useFileRevision('people');
+  const peopleRevision = useFileRevision('people_catalog');
   const tagsRevision = useFileRevision('tags');
+  const sessionsRevision = useFileRevision('session_catalog');
   const loadRequest = useRef(0);
   const refreshConvList = useCallback(async () => {
     try {
@@ -91,7 +92,8 @@ export function ChatBubble() {
     } catch { if (request === loadRequest.current) setActiveConv(null); }
   }, []);
 
-  // Load mention data when panel opens
+  // Refresh each resource only when it changes; a chat save does not change
+  // people, tags, sessions, or settings.
   useEffect(() => {
     if (!panelOpen) return;
     api('/settings').then(s => {
@@ -99,20 +101,33 @@ export function ChatBubble() {
       const backend = s.chat_backend || 'openrouter';
       setChatBackend(backend);
       chatBackendRef.current = backend;
-      refreshConvList();
-    }).catch(() => { refreshConvList(); });
-    Promise.all([
-      api('/tags').catch(() => ({ tags: [] })),
-      api('/people').catch(() => ({ people: [] })),
-      api('/sessions?limit=100&offset=0').catch(() => ({ sessions: [] })),
-    ]).then(([tags, people, sessions]) => {
-      setMentionData({
-        tags: tags.tags || [],
-        people: people.people || [],
-        sessions: sessions.sessions || [],
-      });
-    });
-  }, [panelOpen, fileRevision, peopleRevision, tagsRevision]);
+    }).catch(() => {});
+  }, [panelOpen]);
+
+  useEffect(() => {
+    if (panelOpen) refreshConvList();
+  }, [panelOpen, fileRevision, chatBackend]);
+
+  useEffect(() => {
+    if (!panelOpen) return;
+    let cancelled = false;
+    api('/tags').then(d => { if (!cancelled) setMentionData(v => ({ ...v, tags: d.tags || [] })); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [panelOpen, tagsRevision]);
+
+  useEffect(() => {
+    if (!panelOpen) return;
+    let cancelled = false;
+    api('/people').then(d => { if (!cancelled) setMentionData(v => ({ ...v, people: d.people || [] })); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [panelOpen, peopleRevision]);
+
+  useEffect(() => {
+    if (!panelOpen) return;
+    let cancelled = false;
+    api('/sessions?limit=100&offset=0').then(d => { if (!cancelled) setMentionData(v => ({ ...v, sessions: d.sessions || [] })); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [panelOpen, sessionsRevision]);
 
   useEffect(() => {
     if (panelOpen && activeId && !streaming) loadConversation(activeId);
@@ -573,6 +588,7 @@ export function ChatBubble() {
     }),
 
     jsx('button', {
+      'aria-label': panelOpen ? 'Close chat' : 'Open chat',
       onPointerDown,
       onMouseEnter: () => setHovering(true),
       onMouseLeave: () => setHovering(false),

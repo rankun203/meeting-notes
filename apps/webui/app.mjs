@@ -1,7 +1,7 @@
 import { initAnalytics, track } from './analytics.mjs';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { jsx, jsxs, Fragment, api, PAGE_SIZE, useIsMobile, useWebSocket } from './utils.mjs';
+import { jsx, jsxs, Fragment, api, PAGE_SIZE, useIsMobile, useWebSocket, useFileRevision } from './utils.mjs';
 import { parseRoute, buildPath } from './router.mjs';
 import { SessionDetail } from './session.mjs';
 import { PersonDetail } from './people.mjs';
@@ -16,6 +16,7 @@ function App() {
   const [sessions, setSessions] = useState([]);
   const [selectedDetail, setSelectedDetail] = useState(null);
   const [catalogRevision, setCatalogRevision] = useState(0);
+  const peopleRevision = useFileRevision('people_catalog');
   const refreshRequest = useRef(0);
   function updateVisibleSessions(update) {
     setSessions(update);
@@ -85,7 +86,7 @@ function App() {
         window.dispatchEvent(new CustomEvent('meeting-files-changed', { detail: { all: true } }));
         break;
       case 'files_changed':
-        setCatalogRevision(r => r + 1);
+        if (event.data.sessions?.length || event.data.tags) setCatalogRevision(r => r + 1);
         window.dispatchEvent(new CustomEvent('meeting-files-changed', { detail: event.data }));
         break;
       case 'session_created':
@@ -208,7 +209,7 @@ function App() {
 
   useEffect(() => {
     if (currentView === 'people') refreshPeople();
-  }, [currentView, catalogRevision]);
+  }, [currentView, peopleRevision]);
 
   const refresh = useCallback(async (currentOffset) => {
     const request = ++refreshRequest.current;

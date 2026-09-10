@@ -124,6 +124,8 @@ export function useFileRevision(section, id) {
       const change = event?.detail;
       if (!change || change.all || (section === 'sessions' && change.sessions?.includes(id))
           || (section === 'people' && (change.people || change.sessions?.length))
+          || (section === 'people_catalog' && change.people)
+          || (section === 'session_catalog' && (change.sessions?.length || change.tags))
           || (section === 'conversations' && change.conversations)
           || (section === 'tags' && change.tags)) {
         clearTimeout(timer);

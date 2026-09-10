@@ -14,6 +14,13 @@ compatible; there is no database migration and no persistent cache to repair.
 - People list information and voice centroids/sample statistics. Full profiles
   and embedding samples are read for the operations that need them.
 
+Since v0.2.1, people list and recognition requests validate per-file revisions
+instead of rebuilding the entire people catalog. Only changed profiles or
+embedding summaries are parsed, on a bounded blocking worker. Reconciliation is
+serialized with daemon mutations. Speaker pickers fetch people when opened;
+ordinary session navigation makes no people-list requests. Chat refreshes each
+mention resource only when that resource changes.
+
 Startup does not read transcripts or conversations. Existing recordings/index.md
 is reused; creating a missing index uses metadata without opening summaries.
 Session listing filters/sorts before constructing details for the requested page.
@@ -91,6 +98,9 @@ The browser suite uses installed Google Chrome and an isolated local mock AI
 provider. It creates temporary data and never reads production credentials or
 opens audio devices. Native recording lifecycle tests use synthetic PCM through
 the real WAV/MP3/Opus writers and session stop/reconciliation code.
+People regression tests count actual projection reads across warm/concurrent
+requests and external edits. Browser assertions count people-list requests and
+verify that conversation changes do not refetch unrelated mention resources.
 
 Benchmark a disposable JSON-only copy of a real library:
 

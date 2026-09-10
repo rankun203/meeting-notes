@@ -12,7 +12,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Person {
@@ -101,6 +101,11 @@ pub struct PeopleManager {
     people_dir: PathBuf,
     people: Arc<RwLock<HashMap<String, Person>>>,
     embeddings: Arc<RwLock<HashMap<String, EmbeddingSummary>>>,
+    // Serializes reconciliation against mutations so an old scan cannot replace
+    // a just-written projection.
+    revisions: Arc<tokio::sync::Mutex<HashMap<PathBuf, crate::storage::Revision>>>,
+    #[cfg(test)]
+    content_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl PeopleManager {
@@ -110,64 +115,60 @@ impl PeopleManager {
             people_dir,
             people: Arc::new(RwLock::new(HashMap::new())),
             embeddings: Arc::new(RwLock::new(HashMap::new())),
+            revisions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            #[cfg(test)]
+            content_reads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
-    /// Load all people and their embeddings from disk.
+    /// Reconcile compact projections; unchanged files require only metadata checks.
     pub async fn load_from_disk(&self) {
-        if !self.people_dir.exists() {
-            return;
-        }
-
-        let entries = match std::fs::read_dir(&self.people_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!("Failed to read people dir: {}", e);
-                return;
-            }
-        };
-
-        let mut people = self.people.write().await;
-        let mut embeddings = self.embeddings.write().await;
-        people.clear();
-        embeddings.clear();
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let profile_path = path.join("profile.json");
-            if !profile_path.exists() {
-                continue;
-            }
-
-            let mut person: Person = match read_json(&profile_path) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("Failed to read {}: {}", profile_path.display(), e);
-                    continue;
-                }
+        let mut revisions = self.revisions.lock().await;
+        let root = self.people_dir.clone();
+        let mut next_revisions = revisions.clone();
+        let mut people = self.people.read().await.clone();
+        let mut embeddings = self.embeddings.read().await.clone();
+        let scanned = crate::storage::blocking(move || {
+            let entries = match std::fs::read_dir(&root) {
+                Ok(entries) => entries.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(e.to_string()),
             };
-
-            let emb_path = path.join("embeddings.json");
-            if emb_path.exists() {
-                match read_json::<EmbeddingSummary>(&emb_path) {
-                    Ok(store) => {
-                        embeddings.insert(person.id.clone(), store);
-                    }
-                    Err(e) => {
-                        warn!("Failed to read {}: {}", emb_path.display(), e);
-                    }
-                }
+            let mut present = std::collections::HashSet::new();
+            let mut reads = 0;
+            for entry in entries {
+                if !entry.file_type().map_err(|e| e.to_string())?.is_dir() { continue; }
+                let id = entry.file_name().to_string_lossy().to_string();
+                let profile = entry.path().join("profile.json");
+                if !profile.exists() { continue; }
+                present.insert(id.clone());
+                refresh_projection(&profile, &id, &mut people, &mut next_revisions, &mut reads, || {
+                    let mut person: Person = read_json(&profile)?;
+                    if person.id != id { return Err("person ID does not match directory".into()); }
+                    person.notes = None;
+                    Ok(person)
+                });
+                let path = entry.path().join("embeddings.json");
+                refresh_projection(&path, &id, &mut embeddings, &mut next_revisions, &mut reads,
+                    || read_json::<EmbeddingSummary>(&path));
             }
-
-            person.notes = None; // list/recognition catalog; detail reads notes from disk
-            people.insert(person.id.clone(), person);
+            people.retain(|id, _| present.contains(id));
+            embeddings.retain(|id, _| present.contains(id));
+            next_revisions.retain(|path, _| path.parent().and_then(|p| p.file_name())
+                .is_some_and(|id| present.contains(id.to_string_lossy().as_ref())));
+            Ok((people, embeddings, next_revisions, reads))
+        }).await;
+        match scanned {
+            Ok((people, embeddings, next_revisions, reads)) => {
+                if reads > 0 { debug!("Refreshed people projections from {} changed files", reads); }
+                #[cfg(test)]
+                self.content_reads.fetch_add(reads, std::sync::atomic::Ordering::Relaxed);
+                *self.people.write().await = people;
+                *self.embeddings.write().await = embeddings;
+                *revisions = next_revisions;
+            }
+            Err(error) => warn!("Failed to reconcile people directory: {}", error),
         }
-
-        info!("Loaded {} people from disk", people.len());
     }
 
     pub async fn list_people(&self) -> Vec<PersonIndexEntry> {
@@ -199,6 +200,7 @@ impl PeopleManager {
     }
 
     pub async fn create_person(&self, name: String, notes: Option<String>) -> Result<Person, String> {
+        let _reconcile = self.revisions.lock().await;
         let id = generate_person_id();
         let now = Utc::now();
         let person = Person {
@@ -224,6 +226,7 @@ impl PeopleManager {
         notes: Option<Option<String>>,
         starred: Option<bool>,
     ) -> Result<Person, String> {
+        let _reconcile = self.revisions.lock().await;
         let path = self.people_dir.join(id).join("profile.json");
         let original: serde_json::Value = crate::storage::read_json(&path)?;
         let mut updated = original.clone();
@@ -240,6 +243,7 @@ impl PeopleManager {
     }
 
     pub async fn delete_person(&self, id: &str) -> Result<(), String> {
+        let _reconcile = self.revisions.lock().await;
         self.people.write().await.remove(id)
             .ok_or_else(|| "person not found".to_string())?;
         self.embeddings.write().await.remove(id);
@@ -268,6 +272,7 @@ impl PeopleManager {
         session_id: &str,
         duration_secs: Option<f64>,
     ) -> Result<(), String> {
+        let _reconcile = self.revisions.lock().await;
         {
             let people = self.people.read().await;
             if !people.contains_key(person_id) {
@@ -422,6 +427,35 @@ impl PeopleManager {
     }
 }
 
+// Parse only a changed file. Never stamp a result from a concurrent editor save
+// as current. Failed parses are retried on the next reconciliation.
+fn refresh_projection<T>(
+    path: &Path, id: &str, values: &mut HashMap<String, T>,
+    revisions: &mut HashMap<PathBuf, crate::storage::Revision>, reads: &mut usize,
+    read: impl FnOnce() -> Result<T, String>,
+) {
+    let Some(before) = crate::storage::revision(path) else {
+        values.remove(id);
+        revisions.remove(path);
+        return;
+    };
+    if revisions.get(path) == Some(&before) { return; }
+    *reads += 1;
+    let result = read();
+    if crate::storage::revision(path).as_ref() != Some(&before) { return; }
+    match result {
+        Ok(value) => {
+            values.insert(id.to_owned(), value);
+            revisions.insert(path.to_path_buf(), before);
+        }
+        Err(error) => {
+            values.remove(id);
+            revisions.remove(path);
+            warn!("Failed to read {}: {}", path.display(), error);
+        }
+    }
+}
+
 fn recompute_centroid(store: &mut EmbeddingStore) {
     if store.samples.is_empty() {
         store.centroid = vec![];
@@ -489,4 +523,82 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     crate::storage::write_json(path, value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[tokio::test]
+    async fn repeated_queries_read_only_changed_people_files() {
+        let root = std::env::temp_dir().join(format!("mn-people-{}", uuid::Uuid::new_v4()));
+        let manager = PeopleManager::new(&root);
+        let first = manager.create_person("First".into(), Some("private notes".into())).await.unwrap();
+        let second = manager.create_person("Second".into(), None).await.unwrap();
+        manager.add_embedding(&first.id, vec![1.0, 0.0], "session", None).await.unwrap();
+        manager.add_embedding(&second.id, vec![0.0, 1.0], "session", None).await.unwrap();
+        assert_eq!(manager.list_people().await.len(), 2);
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 4);
+        let speakers = HashMap::from([("speaker".into(), vec![1.0, 0.0])]);
+        for _ in 0..20 {
+            assert_eq!(manager.list_people().await.len(), 2);
+            assert_eq!(manager.match_speakers(&speakers, 0.9).await[0].person_id.as_deref(), Some(first.id.as_str()));
+        }
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 4, "warm list/matching must not reread content");
+        assert!(manager.people.read().await.values().all(|person| person.notes.is_none()));
+
+        // An editor's atomic replacement must be read exactly once, even when
+        // several API requests and the background reconciler arrive together.
+        let profile_path = manager.people_dir.join(&first.id).join("profile.json");
+        let mut external = first.clone();
+        external.name = "Other".into(); // same length as First
+        write_json(&profile_path, &external).unwrap();
+        let mut requests = Vec::new();
+        for _ in 0..12 {
+            let manager = manager.clone();
+            requests.push(tokio::spawn(async move { manager.list_people().await }));
+        }
+        for request in requests {
+            assert!(request.await.unwrap().iter().any(|p| p.name == "Other"));
+        }
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 5);
+
+        let embedding_path = manager.people_dir.join(&first.id).join("embeddings.json");
+        let mut store: EmbeddingStore = read_json(&embedding_path).unwrap();
+        store.centroid = vec![-1.0, 0.0];
+        store.samples.push(store.samples[0].clone());
+        write_json(&embedding_path, &store).unwrap();
+        assert_eq!(manager.list_people().await.iter().find(|p| p.id == first.id).unwrap().embedding_count, 2);
+        assert!(manager.match_speakers(&speakers, 0.9).await[0].person_id.is_none());
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 6);
+
+        // Imports and deletes update the catalog without rereading other people.
+        let imported_dir = manager.people_dir.join("imported");
+        std::fs::create_dir_all(&imported_dir).unwrap();
+        external.id = "imported".into();
+        write_json(&imported_dir.join("profile.json"), &external).unwrap();
+        assert_eq!(manager.list_people().await.len(), 3);
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 7);
+        std::fs::remove_dir_all(imported_dir).unwrap();
+        std::fs::remove_file(embedding_path).unwrap();
+        assert_eq!(manager.list_people().await.len(), 2);
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 7);
+        assert_eq!(manager.list_people().await.iter().find(|p| p.id == first.id).unwrap().embedding_count, 0);
+
+        std::fs::write(&profile_path, "{partial").unwrap();
+        assert_eq!(manager.list_people().await.len(), 1);
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 8);
+        write_json(&profile_path, &first).unwrap();
+        assert_eq!(manager.list_people().await.len(), 2);
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 9);
+        manager.update_person(&first.id, Some("Daemon edit".into()), None, None).await.unwrap();
+        assert!(manager.list_people().await.iter().any(|p| p.name == "Daemon edit"));
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 10);
+        manager.delete_person(&first.id).await.unwrap();
+        assert_eq!(manager.list_people().await.len(), 1);
+        assert_eq!(manager.content_reads.load(Ordering::Relaxed), 10);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(manager.list_people().await.is_empty());
+    }
 }

@@ -3,6 +3,20 @@ import { jsx, jsxs, Fragment, api, useFileRevision, speakerColor, fmtTimestamp }
 import { SourceIcon } from './icons.mjs';
 import { SearchableList } from './searchable-list.mjs';
 
+// Names used by assignment pickers are needed only while a picker is open.
+function usePickerPeople(open) {
+  const revision = useFileRevision('people_catalog');
+  const [people, setPeople] = useState([]);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setPeople([]);
+    api('/people').then(d => { if (!cancelled) setPeople(d.people || []); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [open, revision]);
+  return people;
+}
+
 // ── Transcript Viewer ──
 
 export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTime }) {
@@ -10,8 +24,8 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
   const [transcript, setTranscript] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [people, setPeople] = useState([]);
   const [speakerPicker, setSpeakerPicker] = useState(null); // { anchorPoint, speaker }
+  const people = usePickerPeople(!!speakerPicker);
   const [hiddenSpeakers, setHiddenSpeakers] = useState({});
   const containerRef = useRef(null);
   const activeRef = useRef(null);
@@ -22,7 +36,6 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     api(`/sessions/${sessionId}/transcript`)
       .then(data => { setTranscript(data); })
       .catch(() => {});
-    api('/people').then(d => setPeople(d.people || [])).catch(() => {});
   }
 
   useEffect(() => {
@@ -30,13 +43,9 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
     setTranscript(null);
     setLoading(true);
     setError(null);
-    Promise.all([
-      api(`/sessions/${sessionId}/transcript`),
-      api('/people'),
-    ]).then(([t, p]) => {
+    api(`/sessions/${sessionId}/transcript`).then(t => {
       if (cancelled) return;
       setTranscript(t);
-      setPeople(p.people || []);
       setLoading(false);
     }).catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
     return () => { cancelled = true; };
@@ -271,13 +280,9 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
 // ── Speaker Attribution Panel ──
 
 export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPerson }) {
-  const [people, setPeople] = useState([]);
   const [busy, setBusy] = useState({});
   const [picker, setPicker] = useState(null); // { anchorPoint, speaker }
-
-  useEffect(() => {
-    api('/people').then(d => setPeople(d.people || [])).catch(() => {});
-  }, []);
+  const people = usePickerPeople(!!picker);
 
   if (!transcript || !transcript.speaker_embeddings) return null;
   const speakers = Object.entries(transcript.speaker_embeddings);
@@ -292,7 +297,6 @@ export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPe
         body: JSON.stringify({ attributions: [{ speaker, action, person_id: personId, name }] }),
       });
       if (onUpdate) onUpdate();
-      api('/people').then(d => setPeople(d.people || [])).catch(() => {});
     } catch (e) {
       alert(`Attribution failed: ${e.message}`);
     } finally {

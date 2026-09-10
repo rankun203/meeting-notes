@@ -236,12 +236,28 @@ def main():
                 })();""")
                 page = context.new_page()
                 errors = []
+                requests = []
                 page.on('pageerror', lambda error: errors.append(str(error)))
+                page.on('request', lambda request: requests.append(request.url.removeprefix(origin)))
                 navigation = time.monotonic()
                 page.goto(origin + '/sessions/session000', wait_until='networkidle')
                 page.get_by_text('Externally revised transcript', exact=True).wait_for()
                 browser_load_ms = (time.monotonic() - navigation) * 1000
                 page.screenshot(path=str(artifacts / 'session-desktop.png'), full_page=True)
+                page.wait_for_timeout(2200)  # Include init and multiple poll ticks.
+                assert requests.count('/api/people') == 0, 'Session display eagerly loaded people'
+                with page.expect_response(lambda response: response.url == origin + '/api/people'):
+                    page.get_by_role('button', name='Reassign', exact=True).first.click()
+                page.locator('div.fixed.z-50').get_by_text('Test Person', exact=True).wait_for()
+                assert requests.count('/api/people') == 1
+                profile_path = root / 'people/person1/profile.json'
+                profile = json.loads(profile_path.read_text())
+                profile['name'] = 'Changed person in open picker'
+                write(profile_path, profile)
+                page.locator('div.fixed.z-50').get_by_text(profile['name'], exact=True).wait_for(timeout=10000)
+                assert requests.count('/api/people') == 2, 'One person edit should refresh the open picker once'
+                page.get_by_placeholder('Search or create person...').press('Escape')
+                print('PASS: zero eager people requests, one picker request, live picker refresh', flush=True)
                 transcript['segments'][0]['text'] = 'Browser observed disk change'
                 write(directory / 'transcript.json', transcript)
                 page.get_by_text('Browser observed disk change', exact=True).wait_for(timeout=10000)
@@ -270,13 +286,28 @@ def main():
                 page.goto(origin + '/sessions/session001')
                 page.goto(origin + '/sessions/session002', wait_until='networkidle')
                 page.get_by_text('Transcript 002', exact=True).wait_for()
+                assert requests.count('/api/people') == 2, 'Navigation or session edits reloaded people'
                 page.set_viewport_size({'width': 390, 'height': 844})
                 page.screenshot(path=str(artifacts / 'session-mobile.png'), full_page=True)
+                page.set_viewport_size({'width': 1280, 'height': 900})
+                with page.expect_response(lambda response: response.url == origin + '/api/people'):
+                    page.get_by_role('button', name='Open chat', exact=True).click()
+                page.wait_for_timeout(1500)
+                independent = ['/api/people', '/api/tags', '/api/settings', '/api/sessions?limit=100&offset=0']
+                before = {path: requests.count(path) for path in independent}
+                stored = json.loads(conv_path.read_text())
+                stored['title'] = 'Conversation refresh without mention reload'
+                with page.expect_response(lambda response: response.url == origin + '/api/conversations'):
+                    write(conv_path, stored)
+                page.wait_for_timeout(500)
+                assert {path: requests.count(path) for path in independent} == before, 'Conversation edit refetched unrelated resources'
+                print('PASS: navigation avoids people requests; conversation changes do not refetch mention data or settings', flush=True)
                 assert not errors, errors
                 browser.close()
             print('PASS: real Chrome desktop/mobile, off-page deep links, live transcript/summary refresh, no JS errors', flush=True)
 
             result = {'startup_ms': round(startup_ms, 1), 'browser_load_ms': round(browser_load_ms, 1),
+                      'browser_people_requests': requests.count('/api/people'),
                       'api_max_ms': round(max(ms for _, ms in elapsed), 1),
                       'api_samples': [{'path': path, 'ms': round(ms, 1)} for path, ms in elapsed]}
             (artifacts / 'results.json').write_text(json.dumps(result, indent=2))
