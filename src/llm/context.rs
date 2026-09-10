@@ -18,11 +18,12 @@ pub async fn retrieve_context(
     session_manager: &SessionManager,
     tags_manager: &TagsManager,
     people_manager: &PeopleManager,
-) -> Vec<ContextChunk> {
+) -> Result<Vec<ContextChunk>, String> {
     if criteria.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
+    session_manager.reconcile().await;
     let mut chunks: Vec<ContextChunk> = Vec::new();
 
     // ── Collect notes from tags ──
@@ -86,7 +87,7 @@ pub async fn retrieve_context(
             .map(|s| s.as_str())
             .unwrap_or("summary")
             .to_string();
-        for sid in files_db.get_person_session_ids(pid).await {
+        for sid in files_db.person_session_ids(pid).await? {
             session_modes.entry(sid).or_insert_with(|| person_mode.clone());
         }
     }
@@ -97,7 +98,7 @@ pub async fn retrieve_context(
 
     for (session_id, mode) in &session_modes {
         let (session_name, session_created_at, session_notes) = session_manager
-            .get_session(session_id)
+            .get_session_cached(session_id)
             .await
             .map(|info| (info.name, info.created_at, info.notes))
             .unwrap_or((None, chrono::Utc::now(), None));
@@ -148,10 +149,9 @@ pub async fn retrieve_context(
 
         // Transcript segments
         if include_transcript {
-            let transcript = match files_db.get_transcript(session_id).await {
-                Some(t) => t,
-                None => continue,
-            };
+            if !files_db.has_transcript(session_id).await { continue; }
+            let path = files_db.recordings_dir().join(session_id).join("transcript.json");
+            let transcript = crate::storage::blocking(move || crate::storage::read_without_words(&path)).await?;
 
             let segments = match transcript.get("segments").and_then(|s| s.as_array()) {
                 Some(segs) => segs,
@@ -202,7 +202,7 @@ pub async fn retrieve_context(
         a_start.partial_cmp(&b_start).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    chunks
+    Ok(chunks)
 }
 
 /// Collect notes for a list of tags. Returns `(tag_name, notes)` pairs.

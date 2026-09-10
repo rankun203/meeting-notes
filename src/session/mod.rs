@@ -27,6 +27,7 @@ use crate::audio::system_audio::SystemAudioSource;
 #[serde(tag = "type", content = "data")]
 #[serde(rename_all = "snake_case")]
 pub enum ServerEvent {
+    FilesChanged { sessions: Vec<String>, people: bool, tags: bool, conversations: bool },
     SessionCreated(SessionInfo),
     SessionUpdated(SessionInfo),
     SessionDeleted { id: String },
@@ -126,11 +127,17 @@ impl AutoStopTrigger {
     }
 }
 
+struct RuntimeTransition(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for RuntimeTransition {
+    fn drop(&mut self) { self.0.store(false, std::sync::atomic::Ordering::SeqCst); }
+}
+
 #[derive(Clone)]
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     output_dir: PathBuf,
     event_tx: broadcast::Sender<ServerEvent>,
+    disk_revisions: Arc<tokio::sync::Mutex<HashMap<String, (Option<crate::storage::Revision>, Vec<String>)>>>,
 }
 
 impl SessionManager {
@@ -140,6 +147,7 @@ impl SessionManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             output_dir,
             event_tx,
+            disk_revisions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -147,7 +155,7 @@ impl SessionManager {
         self.event_tx.subscribe()
     }
 
-    fn emit(&self, event: ServerEvent) {
+    pub(crate) fn emit(&self, event: ServerEvent) {
         let _ = self.event_tx.send(event);
     }
 
@@ -156,15 +164,36 @@ impl SessionManager {
             .map_err(|e| format!("failed to create session dir: {}", e))?;
         let meta = session.to_metadata();
         let path = session.config.output_dir.join("metadata.json");
-        let json = serde_json::to_string_pretty(&meta)
-            .map_err(|e| format!("failed to serialize metadata: {}", e))?;
-        std::fs::write(&path, &json)
-            .map_err(|e| format!("failed to write metadata: {}", e))?;
-
-        // Write metadata.md with YAML frontmatter
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
-            crate::markdown::write_metadata_md(&session.config.output_dir, &val);
+        let mut baseline = session.persisted_metadata.lock().unwrap();
+        let mut updated = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+        let _file_lock = crate::storage::write_lock(&path);
+        let revision = crate::storage::revision(&path);
+        let mut latest: Value = if revision.is_some() { crate::storage::read_json(&path)? }
+            else if baseline.is_null() { Value::Null }
+            else { return Err("metadata deleted externally; reload and retry".into()); };
+        // Normalize known legacy/default fields for comparison, while retaining
+        // unknown fields in the actual source document.
+        let mut known_latest = if latest.is_null() { Value::Null } else {
+            serde_json::to_value(serde_json::from_value::<SessionMetadata>(latest.clone())
+                .map_err(|e| e.to_string())?).map_err(|e| e.to_string())?
+        };
+        if !session.notes_loaded {
+            if let Some(value) = updated.as_object_mut() { value.remove("notes"); }
+            if let Some(value) = known_latest.as_object_mut() { value.remove("notes"); }
         }
+        let merged = crate::storage::merge_document(&baseline, &updated, &known_latest)?;
+        if let (Some(raw), Some(known)) = (latest.as_object_mut(), merged.as_object()) {
+            for key in known_latest.as_object().into_iter().flat_map(|v| v.keys()) {
+                if !known.contains_key(key) { raw.remove(key); }
+            }
+            raw.extend(known.clone());
+        } else { latest = merged.clone(); }
+        if crate::storage::revision(&path) != revision {
+            return Err("metadata changed during update; reload and retry".into());
+        }
+        crate::storage::write_json(&path, &latest)?;
+        *baseline = merged;
+        crate::markdown::write_metadata_md(&session.config.output_dir, &latest);
 
         Ok(())
     }
@@ -450,54 +479,83 @@ impl SessionManager {
         });
     }
 
-    /// Scan recordings/ for existing session folders and load their metadata.
-    pub async fn load_from_disk(&self) {
-        let entries = match std::fs::read_dir(&self.output_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!("Failed to read recordings dir: {}", e);
-                return;
+    /// Roll back an unsuccessful user edit without disturbing live operations.
+    fn persist_user_edit(session: &mut Session) -> Result<(), String> {
+        if let Err(error) = Self::write_metadata(session) {
+            let baseline = session.persisted_metadata.lock().unwrap().clone();
+            if let Ok(meta) = serde_json::from_value::<SessionMetadata>(baseline) {
+                session.name = meta.name;
+                session.notes = meta.notes;
+                session.tags = meta.tags;
+                session.auto_stop = meta.auto_stop;
+                session.config.language = meta.language;
+                session.updated_at = meta.updated_at;
             }
-        };
-
-        let mut sessions = self.sessions.write().await;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let meta_path = path.join("metadata.json");
-            if !meta_path.exists() {
-                continue;
-            }
-            let json = match std::fs::read_to_string(&meta_path) {
-                Ok(j) => j,
-                Err(e) => {
-                    warn!("Failed to read {}: {}", meta_path.display(), e);
-                    continue;
-                }
-            };
-            let metadata: SessionMetadata = match serde_json::from_str(&json) {
-                Ok(m) => m,
-                Err(e) => {
-                    warn!("Failed to parse {}: {}", meta_path.display(), e);
-                    continue;
-                }
-            };
-
-            // Collect all filenames from the folder
-            let files: Vec<String> = std::fs::read_dir(&path)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|name| !name.starts_with('.'))
-                .collect();
-
-            let session = Session::from_metadata(&metadata, &self.output_dir, files);
-            sessions.insert(session.id.clone(), session);
+            return Err(error);
         }
-        info!("Loaded {} sessions from disk", sessions.len());
+        Ok(())
+    }
+
+    /// Reconcile small metadata documents and directory listings. Content files
+    /// are never parsed here. Live recorder/job state survives reconciliation.
+    pub async fn load_from_disk(&self) {
+        self.reconcile().await;
+    }
+
+    pub async fn reconcile(&self) {
+        let mut revisions = self.disk_revisions.lock().await;
+        let root = self.output_dir.clone();
+        let old = revisions.clone();
+        let scanned = crate::storage::blocking(move || {
+            let mut entries = Vec::new();
+            for dir in crate::storage::session_dirs(&root) {
+                let Some(id) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else { continue; };
+                let path = dir.join("metadata.json");
+                let rev = crate::storage::revision(&path);
+                if rev.is_none() { continue; }
+                let mut files: Vec<String> = std::fs::read_dir(&dir).into_iter().flatten().flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| !n.starts_with('.')).collect();
+                files.sort();
+                let stamp = (rev, files.clone());
+                let meta = if old.get(&id) != Some(&stamp) {
+                    match crate::storage::read_json::<SessionMetadata>(&path) {
+                        Ok(meta) if meta.session_id == id => Some(meta),
+                        Ok(_) => { warn!("Session ID does not match directory {}", id); continue; }
+                        Err(e) => { warn!("{}", e); entries.push((id, None, None)); continue; }
+                    }
+                } else { None };
+                entries.push((id, Some(stamp), meta));
+            }
+            entries
+        }).await;
+        let mut sessions = self.sessions.write().await;
+        let present: std::collections::HashSet<_> = scanned.iter().map(|(id, _, _)| id.clone()).collect();
+        sessions.retain(|id, s| present.contains(id) || !revisions.contains_key(id) || s.state == SessionState::Recording || s.recorder.is_some() || s.transitioning.load(std::sync::atomic::Ordering::SeqCst));
+        revisions.retain(|id, _| present.contains(id));
+        for (id, stamp, meta) in scanned {
+            let Some(stamp) = stamp else { continue; };
+            if let Some(meta) = meta {
+                if crate::storage::revision(&self.output_dir.join(&id).join("metadata.json")) != stamp.0 { continue; }
+                if let Some(active) = sessions.get(&id) {
+                    if active.state == SessionState::Recording || active.recorder.is_some() || active.transitioning.load(std::sync::atomic::Ordering::SeqCst) {
+                        // Revisit on the next reconciliation after recording stops.
+                        continue;
+                    }
+                }
+                let mut session = Session::from_metadata(&meta, &self.output_dir, stamp.1.clone());
+                if let Some(previous) = sessions.remove(&id) {
+                    session.notices = previous.notices;
+                    session.dismissed_notice_keys = previous.dismissed_notice_keys;
+                    session.processing_state = previous.processing_state;
+                    session.summary_started_at = previous.summary_started_at;
+                    session.config.summarization_instruction = previous.config.summarization_instruction;
+                    session.config.sources = previous.config.sources;
+                }
+                sessions.insert(id.clone(), session);
+            }
+            revisions.insert(id, stamp);
+        }
     }
 
     pub fn output_dir(&self) -> &PathBuf {
@@ -517,10 +575,11 @@ impl SessionManager {
         let id = format_base36(nanos);
         let session_dir = self.session_dir(&id);
         config.output_dir = session_dir;
-        let session = Session::new(id.clone(), config);
+        let mut session = Session::new(id.clone(), config);
         if let Err(e) = Self::write_metadata(&session) {
             warn!("Failed to write metadata on create: {}", e);
         }
+        session.release_notes();
         let info = session.info();
         self.sessions.write().await.insert(id, session);
         self.emit(ServerEvent::SessionCreated(info.clone()));
@@ -528,6 +587,12 @@ impl SessionManager {
     }
 
     pub async fn get_session(&self, id: &str) -> Option<SessionInfo> {
+        self.reconcile().await;
+        self.get_session_cached(id).await
+    }
+
+    /// For batch operations that already reconciled once at their boundary.
+    pub(crate) async fn get_session_cached(&self, id: &str) -> Option<SessionInfo> {
         self.sessions.read().await.get(id).map(|s| s.info())
     }
 
@@ -687,20 +752,15 @@ impl SessionManager {
         offset: usize,
         hidden_tags: &std::collections::HashSet<String>,
     ) -> (Vec<SessionInfo>, usize) {
+        self.reconcile().await;
         let sessions = self.sessions.read().await;
-        let mut infos: Vec<SessionInfo> = sessions.values()
-            .filter(|s| {
-                // Hide session if it has tags AND all of them are hidden
-                if hidden_tags.is_empty() || s.tags.is_empty() {
-                    return true;
-                }
-                !s.tags.iter().all(|t| hidden_tags.contains(t))
-            })
-            .map(|s| s.info())
+        let mut selected: Vec<&Session> = sessions.values()
+            .filter(|s| hidden_tags.is_empty() || s.tags.is_empty()
+                || !s.tags.iter().all(|t| hidden_tags.contains(t)))
             .collect();
-        let total = infos.len();
-        infos.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        let page = infos.into_iter().skip(offset).take(limit).collect();
+        selected.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)));
+        let total = selected.len();
+        let page = selected.into_iter().skip(offset).take(limit).map(Session::info).collect();
         (page, total)
     }
 
@@ -709,9 +769,7 @@ impl SessionManager {
         let session = sessions.get_mut(id).ok_or("session not found")?;
         session.name = if name.trim().is_empty() { None } else { Some(name.trim().to_string()) };
         session.touch();
-        if let Err(e) = Self::write_metadata(session) {
-            warn!("Failed to write metadata on rename: {}", e);
-        }
+        Self::persist_user_edit(session)?;
         let info = session.info();
         self.emit(ServerEvent::SessionUpdated(info.clone()));
         Ok(info)
@@ -740,9 +798,7 @@ impl SessionManager {
         }
         info!("Auto-stop settings updated for session {}: {:?}", id, session.auto_stop);
         session.touch();
-        if let Err(e) = Self::write_metadata(session) {
-            warn!("Failed to write metadata on auto_stop update: {}", e);
-        }
+        Self::persist_user_edit(session)?;
         let info = session.info();
         self.emit(ServerEvent::SessionUpdated(info.clone()));
         Ok(info)
@@ -753,9 +809,7 @@ impl SessionManager {
         let session = sessions.get_mut(id).ok_or("session not found")?;
         session.config.language = language;
         session.touch();
-        if let Err(e) = Self::write_metadata(session) {
-            warn!("Failed to write metadata on language update: {}", e);
-        }
+        Self::persist_user_edit(session)?;
         let info = session.info();
         self.emit(ServerEvent::SessionUpdated(info.clone()));
         Ok(info)
@@ -804,6 +858,11 @@ impl SessionManager {
         if session.state == SessionState::Recording {
             return Err("session is already recording".to_string());
         }
+
+        if session.transitioning.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err("recording operation already in progress".into());
+        }
+        let _transition = RuntimeTransition(session.transitioning.clone());
 
         // Resolve source IDs to (descriptor, AudioSource) pairs
         let source_ids = session
@@ -900,13 +959,18 @@ impl SessionManager {
         // recovery), force-stop: mark Stopped anyway so the user is unstuck.
         // Whatever audio writers are still alive will be cleaned up on
         // process exit.
-        let recorder = {
+        let (recorder, _transition) = {
             let mut sessions = self.sessions.write().await;
             let session = sessions.get_mut(id).ok_or("session not found")?;
 
             if session.state != SessionState::Recording {
                 return Err("session is not recording".to_string());
             }
+
+            if session.transitioning.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Err("recording operation already in progress".into());
+            }
+            let transition = RuntimeTransition(session.transitioning.clone());
 
             let recorder = session.recorder.take();
 
@@ -916,7 +980,7 @@ impl SessionManager {
             // Emit early update so UI sees "stopped" state immediately
             self.emit(ServerEvent::SessionUpdated(session.info()));
 
-            recorder
+            (recorder, transition)
         };
         // Write lock released here
 
@@ -1170,9 +1234,7 @@ impl SessionManager {
         let session = sessions.get_mut(id).ok_or("session not found")?;
         session.tags = tags;
         session.touch();
-        if let Err(e) = Self::write_metadata(session) {
-            warn!("Failed to write metadata on tag update: {}", e);
-        }
+        Self::persist_user_edit(session)?;
         let info = session.info();
         self.emit(ServerEvent::SessionUpdated(info.clone()));
         Ok(info)
@@ -1181,11 +1243,14 @@ impl SessionManager {
     pub async fn update_session_notes(&self, id: &str, notes: Option<String>) -> Result<SessionInfo, String> {
         let mut sessions = self.sessions.write().await;
         let session = sessions.get_mut(id).ok_or("session not found")?;
+        let current = session.current_notes();
+        session.persisted_metadata.lock().unwrap()["notes"] = serde_json::json!(current);
+        session.notes_loaded = true;
         session.notes = notes;
         session.touch();
-        if let Err(e) = Self::write_metadata(session) {
-            warn!("Failed to write metadata on notes update: {}", e);
-        }
+        let result = Self::persist_user_edit(session);
+        session.release_notes();
+        result?;
         let info = session.info();
         self.emit(ServerEvent::SessionUpdated(info.clone()));
         Ok(info)
@@ -1645,4 +1710,87 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
     }
+    #[tokio::test]
+    async fn reconciliation_preserves_live_recorder_and_stop_merges_external_metadata() {
+        use crate::audio::source::{AudioChunk, AudioError};
+        struct SyntheticAudio;
+        impl AudioSource for SyntheticAudio {
+            fn start(&mut self, tx: crossbeam_channel::Sender<AudioChunk>) -> Result<(), AudioError> {
+                tx.send(AudioChunk { samples: vec![0.25; 4800], channels: 1, sample_rate: 48000, timestamp_us: 0 }).unwrap();
+                Ok(())
+            }
+            fn stop(&mut self) -> Result<(), AudioError> { Ok(()) }
+            fn name(&self) -> &str { "Synthetic" }
+        }
+        for format in [AudioFormat::Wav, AudioFormat::Mp3, AudioFormat::Opus] {
+            let root = std::env::temp_dir().join(format!("mn-lifecycle-{}", uuid::Uuid::new_v4()));
+            let manager = SessionManager::new(root.clone());
+            let created = manager.create_session(SessionConfig { format, ..Default::default() }).await;
+            let dir = manager.session_dir(&created.id);
+            let mut recorder = Recorder::new(created.id.clone(), dir.clone(), 48000, format,
+                Default::default(), Default::default(), vec![(SourceDescriptor {
+                    id: "synthetic".into(), source_type: SourceType::Mic, label: "Synthetic".into(), device_name: None,
+                }, Box::new(SyntheticAudio))]);
+            recorder.start().unwrap();
+            {
+                let mut sessions = manager.sessions.write().await;
+                let session = sessions.get_mut(&created.id).unwrap();
+                session.recorder = Some(recorder);
+                session.state = SessionState::Recording;
+                session.files = vec![format!("synthetic.{}", format.extension()), "metadata.json".into()];
+                session.capture_source_meta();
+                SessionManager::write_metadata(session).unwrap();
+            }
+            let path = dir.join("metadata.json");
+            let mut external: Value = crate::storage::read_json(&path).unwrap();
+            external["notes"] = serde_json::json!("External notes during recording");
+            external["extension"] = serde_json::json!({"keep":true});
+            crate::storage::write_json(&path, &external).unwrap();
+            manager.reconcile().await;
+            assert_eq!(manager.get_session(&created.id).await.unwrap().state, SessionState::Recording);
+            assert!(manager.sessions.read().await[&created.id].recorder.is_some());
+            manager.stop_recording(&created.id).await.unwrap();
+            let filename = format!("synthetic.{}", format.extension());
+            assert!(std::fs::metadata(dir.join(&filename)).unwrap().len() > 0);
+            if format == AudioFormat::Wav {
+                let wav = hound::WavReader::open(dir.join(&filename)).unwrap();
+                assert_eq!(wav.duration(), 4800);
+            }
+            assert!(Session::compute_duration(&dir, &[filename], 128).unwrap() > 0.0);
+            let saved: Value = crate::storage::read_json(&path).unwrap();
+            assert_eq!(saved["state"], "stopped");
+            assert_eq!(saved["notes"], "External notes during recording");
+            assert_eq!(saved["extension"], serde_json::json!({"keep":true}));
+            manager.shutdown().await;
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn notes_are_not_retained_and_selected_sources_survive_reconciliation() {
+        let root = std::env::temp_dir().join(format!("mn-catalog-{}", uuid::Uuid::new_v4()));
+        let manager = SessionManager::new(root.clone());
+        let created = manager.create_session(SessionConfig { sources: Some(vec!["test-source".into()]), ..Default::default() }).await;
+        let path = manager.session_dir(&created.id).join("metadata.json");
+        let mut metadata: Value = crate::storage::read_json(&path).unwrap();
+        let notes = "large note ".repeat(10000);
+        metadata["notes"] = serde_json::json!(notes);
+        crate::storage::write_json(&path, &metadata).unwrap();
+        manager.reconcile().await;
+        {
+            let sessions = manager.sessions.read().await;
+            let session = &sessions[&created.id];
+            assert!(session.notes.is_none());
+            assert!(!session.persisted_metadata.lock().unwrap().as_object().unwrap().contains_key("notes"));
+            assert_eq!(session.config.sources.as_ref().unwrap(), &["test-source"]);
+        }
+        assert_eq!(manager.get_session(&created.id).await.unwrap().notes.as_deref(), Some(notes.as_str()));
+        manager.rename_session(&created.id, "Renamed".into()).await.unwrap();
+        assert_eq!(crate::storage::read_json::<Value>(&path).unwrap()["notes"], notes);
+        manager.update_session_notes(&created.id, Some("Updated".into())).await.unwrap();
+        assert!(manager.sessions.read().await[&created.id].notes.is_none());
+        assert_eq!(manager.get_session(&created.id).await.unwrap().notes.as_deref(), Some("Updated"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 }

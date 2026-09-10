@@ -51,7 +51,7 @@ fn default_data_dir() -> PathBuf {
 }
 
 #[derive(Parser)]
-#[command(name = "meeting-notes-daemon")]
+#[command(name = "meeting-notes-daemon", version)]
 #[command(about = "System-level audio recorder and meeting notes processor")]
 struct Cli {
     #[command(subcommand)]
@@ -158,9 +158,8 @@ async fn main() {
             people_manager.load_from_disk().await;
 
             let tags_manager = TagsManager::new(&data_dir);
-            tags_manager.load_from_disk().await;
 
-            let files_db = FilesDb::load_from_disk(&recordings_dir).await;
+            let files_db = FilesDb::new(recordings_dir.clone());
 
             let settings = AppSettings::load_or_create(&data_dir);
             let shared_settings = std::sync::Arc::new(tokio::sync::RwLock::new(settings));
@@ -183,7 +182,9 @@ async fn main() {
                 let rec_dir = recordings_dir.clone();
                 let (rec_index_bytes, people_index_bytes) =
                     tokio::task::spawn_blocking(move || {
-                        let r = markdown::write_recordings_index(&rec_dir, &mut sessions);
+                        let r = if rec_dir.join("index.md").exists() {
+                            std::fs::metadata(rec_dir.join("index.md")).map(|m| m.len() as usize).unwrap_or(0)
+                        } else { markdown::write_recordings_catalog(&rec_dir, &mut sessions, false) };
                         let p = markdown::write_people_index(&people_dir, &mut people);
                         (r, p)
                     }).await.unwrap();

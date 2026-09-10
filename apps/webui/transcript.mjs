@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { jsx, jsxs, Fragment, api, speakerColor, fmtTimestamp } from './utils.mjs';
+import { jsx, jsxs, Fragment, api, useFileRevision, speakerColor, fmtTimestamp } from './utils.mjs';
 import { SourceIcon } from './icons.mjs';
 import { SearchableList } from './searchable-list.mjs';
 
 // ── Transcript Viewer ──
 
 export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTime }) {
+  const revision = useFileRevision('sessions', sessionId);
   const [transcript, setTranscript] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,17 +26,21 @@ export function TranscriptViewer({ sessionId, onSeek, onSpeakerUpdate, currentTi
   }
 
   useEffect(() => {
+    let cancelled = false;
+    setTranscript(null);
     setLoading(true);
     setError(null);
     Promise.all([
       api(`/sessions/${sessionId}/transcript`),
       api('/people'),
     ]).then(([t, p]) => {
+      if (cancelled) return;
       setTranscript(t);
       setPeople(p.people || []);
       setLoading(false);
-    }).catch(e => { setError(e.message); setLoading(false); });
-  }, [sessionId]);
+    }).catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [sessionId, revision]);
 
   async function assignSpeaker(speaker, action, personId, name) {
     try {
@@ -373,12 +378,16 @@ export function SpeakerAttribution({ sessionId, transcript, onUpdate, onSelectPe
 // ── Speaker Attribution Wrapper ──
 
 export function SpeakerAttributionWrapper({ sessionId, onUpdate, onSelectPerson }) {
+  const revision = useFileRevision('sessions', sessionId);
   const [transcript, setTranscript] = useState(null);
   useEffect(() => {
+    let cancelled = false;
+    setTranscript(null);
     api(`/sessions/${sessionId}/transcript`)
-      .then(data => setTranscript(data))
+      .then(data => { if (!cancelled) setTranscript(data); })
       .catch(() => {});
-  }, [sessionId]);
+    return () => { cancelled = true; };
+  }, [sessionId, revision]);
 
   function handleUpdate() {
     api(`/sessions/${sessionId}/transcript`)

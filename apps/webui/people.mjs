@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { jsx, jsxs, api, INPUT_CLS, autoResize, stripMd, formatTime, formatDuration } from './utils.mjs';
+import { jsx, jsxs, api, useFileRevision, INPUT_CLS, autoResize, stripMd, formatTime, formatDuration } from './utils.mjs';
 
 // ── People sidebar list ──
 
@@ -64,6 +64,8 @@ export function PeopleSidebar({ selectedId, onSelect, people, onRefresh }) {
 // ── Person detail panel ──
 
 export function PersonDetail({ person, onRefresh, onSelectSession }) {
+  const revision = useFileRevision('people');
+  const notesDirty = useRef(false);
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [notes, setNotes] = useState('');
@@ -75,13 +77,18 @@ export function PersonDetail({ person, onRefresh, onSelectSession }) {
   // Fetch full person detail (list endpoint doesn't include notes)
   useEffect(() => {
     if (!person) return;
+    let cancelled = false;
     api(`/people/${person.id}`)
-      .then(d => setNotes(d.notes || ''))
+      .then(d => { if (!cancelled && !notesDirty.current) setNotes(d.notes || ''); })
       .catch(() => {});
-  }, [person?.id]);
+    return () => { cancelled = true; };
+  }, [person?.id, revision]);
+
+  useEffect(() => () => { clearTimeout(notesTimer.current); notesDirty.current = false; }, [person?.id]);
 
   function handleNotesChange(e) {
     const val = e.target.value;
+    notesDirty.current = true;
     setNotes(val);
     clearTimeout(notesTimer.current);
     notesTimer.current = setTimeout(async () => {
@@ -92,23 +99,28 @@ export function PersonDetail({ person, onRefresh, onSelectSession }) {
           body: JSON.stringify({ notes: val || null }),
         });
       } catch {}
+      notesDirty.current = false;
       setNotesSaving(false);
     }, 800);
   }
 
   useEffect(() => {
     if (!person) { setSessions([]); setTodos([]); return; }
+    let cancelled = false;
+    setSessions([]);
+    setTodos([]);
     setLoadingSessions(true);
     setLoadingTodos(true);
     api(`/people/${person.id}/sessions`)
-      .then(d => setSessions(d.sessions || []))
-      .catch(() => setSessions([]))
-      .finally(() => setLoadingSessions(false));
+      .then(d => { if (!cancelled) setSessions(d.sessions || []); })
+      .catch(() => { if (!cancelled) setSessions([]); })
+      .finally(() => { if (!cancelled) setLoadingSessions(false); });
     api(`/people/${person.id}/todos`)
-      .then(d => setTodos(d.todos || []))
-      .catch(() => setTodos([]))
-      .finally(() => setLoadingTodos(false));
-  }, [person?.id]);
+      .then(d => { if (!cancelled) setTodos(d.todos || []); })
+      .catch(() => { if (!cancelled) setTodos([]); })
+      .finally(() => { if (!cancelled) setLoadingTodos(false); });
+    return () => { cancelled = true; };
+  }, [person?.id, revision]);
 
   if (!person) {
     return jsx('div', {

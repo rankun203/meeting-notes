@@ -5,6 +5,7 @@ import { jsx, jsxs, Fragment, api, API, INPUT_CLS, LABEL_CLS, PROCESSING_LABELS,
          ChevronIcon, PlayIcon, StopIcon, StateBadge, BackIcon,
          RecordIcon, UploadIcon, TranscriptIcon, TagIcon, PlusIcon, CloseIcon } from './utils.mjs';
 import { SyncedPlayer } from './player.mjs';
+import { useFileRevision } from './utils.mjs';
 import { TranscriptViewer, SpeakerAttributionWrapper } from './transcript.mjs';
 import { SearchableList } from './searchable-list.mjs';
 
@@ -305,6 +306,11 @@ function convertCitations(content, sessionId) {
 }
 
 export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile, fields, capabilities, onSelectPerson, routeQuery }) {
+  const fileRevision = useFileRevision('sessions', session?.id);
+  const notesDirty = useRef(false);
+  const notesBase = useRef(session?.notes || null);
+  const notesDraft = useRef(session?.notes || '');
+  const pendingNotesSave = useRef(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [renaming, setRenaming] = useState(false);
@@ -364,8 +370,10 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
     setActiveTab('transcript');
   }, [session?.id]);
 
+  useEffect(() => () => { clearTimeout(notesTimer.current); pendingNotesSave.current?.(); pendingNotesSave.current = null; }, [session?.id]);
+
   // Sync notes when updated externally
-  useEffect(() => { setNotes(session?.notes || ''); }, [session?.notes]);
+  useEffect(() => { if (!notesDirty.current) { notesBase.current = session?.notes || null; setNotes(session?.notes || ''); } }, [session?.notes]);
   useEffect(() => {
     setAutoStopSilenceSecs(session?.auto_stop?.system_audio_silence_secs ?? 60);
   }, [session?.id, session?.auto_stop?.system_audio_silence_secs]);
@@ -428,7 +436,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
       setSummary(null);
       return;
     }
-    if (summary) return; // Already have it (from WebSocket push or previous fetch)
+    // Refetch after external changes even if this panel already has a summary.
     let cancelled = false;
     if (!session?.summary_streaming) {
       setSummaryLoading(true);
@@ -440,7 +448,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
       if (!cancelled) { setSummaryError(e.message); setSummaryLoading(false); }
     });
     return () => { cancelled = true; };
-  }, [activeTab, session?.id, session?.summary_available]);
+  }, [activeTab, session?.id, session?.summary_available, fileRevision]);
 
   // Ensure marked is loaded when summary tab is shown
   const [markedReady, setMarkedReady] = useState(!!markedModule);
@@ -542,19 +550,25 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
 
   function handleNotesChange(e) {
     const val = e.target.value;
+    notesDirty.current = true;
+    notesDraft.current = val;
     setNotes(val);
     // Auto-save after 800ms of inactivity
     clearTimeout(notesTimer.current);
-    notesTimer.current = setTimeout(async () => {
+    const save = async () => {
       setNotesSaving(true);
       try {
-        await api(`/sessions/${session.id}`, {
+        const saved = await api(`/sessions/${session.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ notes: val || null }),
+          body: JSON.stringify({ notes: val || null, previous_notes: notesBase.current }),
         });
-      } catch {}
+        notesBase.current = saved.notes || null;
+      } catch (error) { setError(error.message); setNotesSaving(false); return; }
+      if (notesDraft.current === val) notesDirty.current = false;
       setNotesSaving(false);
-    }, 800);
+    };
+    pendingNotesSave.current = save;
+    notesTimer.current = setTimeout(() => { pendingNotesSave.current = null; void save(); }, 800);
   }
 
   // Close export dropdown on outside click

@@ -58,6 +58,34 @@ pub struct EmbeddingSample {
     pub confirmed_at: DateTime<Utc>,
 }
 
+// Retain only recognition centroids and list statistics, never sample vectors.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct EmbeddingSummary {
+    #[serde(default)]
+    centroid: Vec<f64>,
+    #[serde(default, deserialize_with = "sample_stats")]
+    samples: SampleStats,
+}
+#[derive(Debug, Clone, Default)]
+struct SampleStats { count: usize, last_seen: Option<DateTime<Utc>> }
+fn sample_stats<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SampleStats, D::Error> {
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = SampleStats;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str("embedding samples") }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            #[derive(Deserialize)] struct Sample { confirmed_at: DateTime<Utc> }
+            let mut stats = SampleStats::default();
+            while let Some(sample) = seq.next_element::<Sample>()? {
+                stats.count += 1;
+                stats.last_seen = Some(sample.confirmed_at);
+            }
+            Ok(stats)
+        }
+    }
+    d.deserialize_seq(Visitor)
+}
+
 /// Result of matching a speaker embedding against the people library.
 #[derive(Debug, Clone, Serialize)]
 pub struct Attribution {
@@ -72,7 +100,7 @@ pub struct Attribution {
 pub struct PeopleManager {
     people_dir: PathBuf,
     people: Arc<RwLock<HashMap<String, Person>>>,
-    embeddings: Arc<RwLock<HashMap<String, EmbeddingStore>>>,
+    embeddings: Arc<RwLock<HashMap<String, EmbeddingSummary>>>,
 }
 
 impl PeopleManager {
@@ -101,6 +129,8 @@ impl PeopleManager {
 
         let mut people = self.people.write().await;
         let mut embeddings = self.embeddings.write().await;
+        people.clear();
+        embeddings.clear();
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -113,7 +143,7 @@ impl PeopleManager {
                 continue;
             }
 
-            let person: Person = match read_json(&profile_path) {
+            let mut person: Person = match read_json(&profile_path) {
                 Ok(p) => p,
                 Err(e) => {
                     warn!("Failed to read {}: {}", profile_path.display(), e);
@@ -123,7 +153,7 @@ impl PeopleManager {
 
             let emb_path = path.join("embeddings.json");
             if emb_path.exists() {
-                match read_json::<EmbeddingStore>(&emb_path) {
+                match read_json::<EmbeddingSummary>(&emb_path) {
                     Ok(store) => {
                         embeddings.insert(person.id.clone(), store);
                     }
@@ -133,6 +163,7 @@ impl PeopleManager {
                 }
             }
 
+            person.notes = None; // list/recognition catalog; detail reads notes from disk
             people.insert(person.id.clone(), person);
         }
 
@@ -140,6 +171,7 @@ impl PeopleManager {
     }
 
     pub async fn list_people(&self) -> Vec<PersonIndexEntry> {
+        self.load_from_disk().await;
         let people = self.people.read().await;
         let embeddings = self.embeddings.read().await;
         let mut entries: Vec<PersonIndexEntry> = people
@@ -150,8 +182,8 @@ impl PeopleManager {
                     id: p.id.clone(),
                     name: p.name.clone(),
                     starred: p.starred,
-                    embedding_count: store.map_or(0, |s| s.samples.len()),
-                    last_seen: store.and_then(|s| s.samples.last().map(|e| e.confirmed_at)),
+                    embedding_count: store.map_or(0, |s| s.samples.count),
+                    last_seen: store.and_then(|s| s.samples.last_seen),
                 }
             })
             .collect();
@@ -163,7 +195,7 @@ impl PeopleManager {
     }
 
     pub async fn get_person(&self, id: &str) -> Option<Person> {
-        self.people.read().await.get(id).cloned()
+        read_json(&self.people_dir.join(id).join("profile.json")).ok()
     }
 
     pub async fn create_person(&self, name: String, notes: Option<String>) -> Result<Person, String> {
@@ -179,7 +211,9 @@ impl PeopleManager {
         };
 
         self.write_person(&person)?;
-        self.people.write().await.insert(id, person.clone());
+        let mut catalog = person.clone();
+        catalog.notes = None;
+        self.people.write().await.insert(id, catalog);
         Ok(person)
     }
 
@@ -190,22 +224,19 @@ impl PeopleManager {
         notes: Option<Option<String>>,
         starred: Option<bool>,
     ) -> Result<Person, String> {
-        let mut people = self.people.write().await;
-        let person = people.get_mut(id).ok_or("person not found")?;
-
-        if let Some(name) = name {
-            person.name = name;
-        }
-        if let Some(notes) = notes {
-            person.notes = notes;
-        }
-        if let Some(starred) = starred {
-            person.starred = starred;
-        }
-        person.updated_at = Utc::now();
-
-        self.write_person(person)?;
-        Ok(person.clone())
+        let path = self.people_dir.join(id).join("profile.json");
+        let original: serde_json::Value = crate::storage::read_json(&path)?;
+        let mut updated = original.clone();
+        if let Some(name) = name { updated["name"] = name.into(); }
+        if let Some(notes) = notes { updated["notes"] = serde_json::json!(notes); }
+        if let Some(starred) = starred { updated["starred"] = starred.into(); }
+        updated["updated_at"] = serde_json::json!(Utc::now());
+        let merged = crate::storage::update_json(&path, &original, &updated)?;
+        let person: Person = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        let mut catalog = person.clone();
+        catalog.notes = None;
+        self.people.write().await.insert(id.to_string(), catalog);
+        Ok(person)
     }
 
     pub async fn delete_person(&self, id: &str) -> Result<(), String> {
@@ -248,23 +279,21 @@ impl PeopleManager {
             return Ok(());
         }
 
-        let mut stores = self.embeddings.write().await;
-        let store = stores.entry(person_id.to_string()).or_insert_with(|| EmbeddingStore {
-            centroid: vec![],
-            samples: vec![],
-        });
-
+        let path = self.people_dir.join(person_id).join("embeddings.json");
+        let _lock = crate::storage::write_lock(&path);
+        let mut store = if path.exists() { read_json::<EmbeddingStore>(&path)? }
+            else { EmbeddingStore { centroid: vec![], samples: vec![] } };
         store.samples.push(EmbeddingSample {
-            embedding,
-            session_id: session_id.to_string(),
-            duration_secs,
-            confirmed_at: Utc::now(),
+            embedding, session_id: session_id.to_string(), duration_secs, confirmed_at: Utc::now(),
+        });
+        recompute_centroid(&mut store);
+        self.write_embeddings(person_id, &store)?;
+        drop(_lock);
+        self.embeddings.write().await.insert(person_id.to_string(), EmbeddingSummary {
+            centroid: store.centroid,
+            samples: SampleStats { count: store.samples.len(), last_seen: store.samples.last().map(|s| s.confirmed_at) },
         });
 
-        // Recompute centroid as mean of all sample embeddings
-        recompute_centroid(store);
-
-        self.write_embeddings(person_id, store)?;
         Ok(())
     }
 
@@ -275,6 +304,7 @@ impl PeopleManager {
         speaker_embeddings: &HashMap<String, Vec<f64>>,
         threshold: f64,
     ) -> Vec<Attribution> {
+        self.load_from_disk().await;
         let people = self.people.read().await;
         let stores = self.embeddings.read().await;
 
@@ -454,15 +484,9 @@ fn format_base36(mut n: u64) -> String {
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let json = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
-    serde_json::from_str(&json)
-        .map_err(|e| format!("parse {}: {e}", path.display()))
+    crate::storage::read_json(path)
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(path, json)
-        .map_err(|e| format!("write {}: {e}", path.display()))
+    crate::storage::write_json(path, value)
 }

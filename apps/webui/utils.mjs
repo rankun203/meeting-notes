@@ -115,6 +115,32 @@ export function useIsMobile() {
   return mobile;
 }
 
+// Invalidation carries identifiers only. Each mounted view reloads its own data.
+export function useFileRevision(section, id) {
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let timer;
+    const refresh = (event) => {
+      const change = event?.detail;
+      if (!change || change.all || (section === 'sessions' && change.sessions?.includes(id))
+          || (section === 'people' && (change.people || change.sessions?.length))
+          || (section === 'conversations' && change.conversations)
+          || (section === 'tags' && change.tags)) {
+        clearTimeout(timer);
+        timer = setTimeout(() => setRevision(r => r + 1), 100);
+      }
+    };
+    window.addEventListener('meeting-files-changed', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('meeting-files-changed', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [section, id]);
+  return revision;
+}
+
 export function useWebSocket(onEvent) {
   const wsRef = useRef(null);
   const reconnectRef = useRef(null);
@@ -122,7 +148,9 @@ export function useWebSocket(onEvent) {
   onEventRef.current = onEvent;
 
   useEffect(() => {
+    let disposed = false;
     function connect() {
+      if (disposed) return;
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${location.host}/api/ws`);
       wsRef.current = ws;
@@ -130,12 +158,13 @@ export function useWebSocket(onEvent) {
         try { onEventRef.current(JSON.parse(e.data)); } catch {}
       };
       ws.onclose = () => {
-        reconnectRef.current = setTimeout(connect, 2000);
+        if (!disposed) reconnectRef.current = setTimeout(connect, 2000);
       };
       ws.onerror = () => ws.close();
     }
     connect();
     return () => {
+      disposed = true;
       if (wsRef.current) wsRef.current.close();
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
     };

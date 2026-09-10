@@ -91,6 +91,8 @@ where
 }
 
 pub struct Session {
+    pub transitioning: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub persisted_metadata: std::sync::Mutex<serde_json::Value>,
     pub id: String,
     pub name: Option<String>,
     pub config: SessionConfig,
@@ -115,6 +117,7 @@ pub struct Session {
     pub tags: Vec<String>,
     /// User notes for this session.
     pub notes: Option<String>,
+    pub notes_loaded: bool,
     pub auto_stop: AutoStopSettings,
     /// When summary generation started (in-memory only, not persisted).
     pub summary_started_at: Option<DateTime<Utc>>,
@@ -238,6 +241,8 @@ impl Session {
     pub fn new(id: String, config: SessionConfig) -> Self {
         let now = Utc::now();
         Self {
+            transitioning: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            persisted_metadata: std::sync::Mutex::new(serde_json::Value::Null),
             id,
             name: None,
             config,
@@ -254,6 +259,7 @@ impl Session {
             audio_extraction: None,
             tags: Vec::new(),
             notes: None,
+            notes_loaded: true,
             auto_stop: AutoStopSettings::default(),
             summary_started_at: None,
             duration_secs: None,
@@ -282,6 +288,12 @@ impl Session {
             output_dir: recordings_dir.join(&meta.session_id),
         };
         Self {
+            transitioning: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            persisted_metadata: std::sync::Mutex::new({
+                let mut value = serde_json::to_value(meta).unwrap();
+                value.as_object_mut().unwrap().remove("notes");
+                value
+            }),
             id: meta.session_id.clone(),
             name: meta.name.clone(),
             config,
@@ -301,11 +313,27 @@ impl Session {
             },
             audio_extraction: meta.audio_extraction.clone(),
             tags: meta.tags.clone(),
-            notes: meta.notes.clone(),
+            notes: None,
+            notes_loaded: false,
             auto_stop: meta.auto_stop,
             summary_started_at: None,
             duration_secs: meta.duration_secs,
         }
+    }
+
+    /// Notes are document content, not catalog state. Keep them only during an
+    /// explicit edit; ordinary reads load the current field from metadata.json.
+    pub fn current_notes(&self) -> Option<String> {
+        if self.notes_loaded { return self.notes.clone(); }
+        #[derive(Deserialize)] struct Notes { notes: Option<String> }
+        crate::storage::read_json::<Notes>(&self.config.output_dir.join("metadata.json"))
+            .ok().and_then(|v| v.notes)
+    }
+
+    pub fn release_notes(&mut self) {
+        self.notes = None;
+        self.notes_loaded = false;
+        if let Some(base) = self.persisted_metadata.lock().unwrap().as_object_mut() { base.remove("notes"); }
     }
 
     pub fn touch(&mut self) {
@@ -330,7 +358,7 @@ impl Session {
             sources: self.source_meta.clone(),
             audio_extraction: self.audio_extraction.clone(),
             tags: self.tags.clone(),
-            notes: self.notes.clone(),
+            notes: self.current_notes(),
             auto_stop: self.auto_stop,
         }
     }
@@ -393,7 +421,7 @@ impl Session {
             unconfirmed_speakers,
             source_meta: self.source_meta.clone(),
             tags: self.tags.clone(),
-            notes: self.notes.clone(),
+            notes: self.current_notes(),
             auto_stop: self.auto_stop,
         }
     }

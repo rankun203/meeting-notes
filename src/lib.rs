@@ -7,6 +7,7 @@ pub mod people;
 pub mod server;
 pub mod session;
 pub mod settings;
+pub mod storage;
 #[cfg(target_os = "macos")]
 pub mod system_events;
 pub mod tags;

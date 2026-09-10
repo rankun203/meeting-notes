@@ -1,146 +1,105 @@
-# FilesDb: In-Memory Cache for Session Data
+# Filesystem-first storage (v0.2)
 
-## Principle: User folder is the single source of truth
+The user directory is the source of truth. Existing JSON files and paths remain
+compatible; there is no database migration and no persistent cache to repair.
 
-All session data lives as plain files in the user's data directory:
+## What stays in memory
 
-```
-~/.local/share/org.rankun.meeting-notes/recordings/
-  {session_id}/
-    metadata.json           # session config, state, sources
-    system_audio.opus       # recorded audio track
-    system_microphone.opus  # recorded audio track
-    transcript.json         # transcription result + speaker attributions
-    extraction_raw.json     # raw extraction service response
-    *.waveform.json         # generated waveform data (per track)
-```
+- A typed session catalog with IDs, names, dates, tags, recording configuration,
+  file names and pending-job metadata. Session notes are read on demand.
+- Active recorder handles, transitions, notices and processing state. Disk
+  reconciliation must not replace an active or transitioning recorder.
+- Small speaker projections: speaker labels, person IDs, confidence and counts.
+  Never transcript segments, word timings or voice vectors.
+- People list information and voice centroids/sample statistics. Full profiles
+  and embedding samples are read for the operations that need them.
 
-These files are human-readable, portable, and can be edited externally. The daemon never stores authoritative data anywhere else. If the cache is lost (process restart), it's rebuilt by scanning the files.
+Startup does not read transcripts or conversations. Existing recordings/index.md
+is reused; creating a missing index uses metadata without opening summaries.
+Session listing filters/sorts before constructing details for the requested page.
 
-## What FilesDb does
+## On-demand reads
 
-`FilesDb` (`src/filesdb.rs`) is a **read cache with write-through** for transcript data. It exists purely for performance — to avoid reading and parsing `transcript.json` from disk on every API request.
+`FilesDb` retains its name as an internal compatibility boundary but is no longer
+an in-memory transcript database. Transcript GET validates JSON without creating
+its object graph and sends the current file bytes. Operations needing structured
+content parse a single file on a bounded blocking worker. Chat context and display
+projections skip word arrays while parsing.
 
-### What it caches
+The first person lookup builds missing speaker projections by scanning transcripts
+one at a time with a selective JSON deserializer. Ignored fields still require
+reading source bytes, but do not allocate segment/word object trees. Later reads
+validate file revisions and reuse only unchanged projections. Indexing errors are
+returned rather than presenting incomplete person results as a successful query.
 
-- **Transcript data**: The full parsed `serde_json::Value` of each session's `transcript.json`, keyed by session ID.
-- **Derived indexes**: A `person_id → Set<session_id>` reverse index, built from `speaker_embeddings` in each transcript.
-- **Derived counts**: Per-session count of unconfirmed speakers (speakers without a `person_id`).
+Conversation lists deserialize message previews/counts while skipping context
+payloads. Opening a conversation loads only that conversation. Historical context
+snapshots remain readable. Each new turn resolves remembered criteria against the
+current source files; changed content is not discarded by timestamp deduplication.
 
-### What it does NOT cache
+## External edits and UI refresh
 
-- Session metadata (managed by `SessionManager` which has its own in-memory state)
-- Audio files (served directly from disk via `tower_http::ServeFile`)
-- Waveform data (has its own file-level caching in `waveform.rs`)
-- People data (managed by `PeopleManager`)
+Direct content reads open the current path. Revision fingerprints include size,
+modification time and, on Unix, device/inode/change time. Same-size replacements
+and editor atomic saves invalidate derived projections.
 
-## Data flow
+A portable one-second poll inspects JSON file metadata in recordings, people,
+conversations and tags. It reads no content bodies. Changed paths reconcile the
+session catalog and trigger a `files_changed` WebSocket event:
 
-### Startup (cold cache)
-
-```
-Daemon starts
-  → SessionManager.load_from_disk()    # loads metadata.json for each session
-  → FilesDb.load_from_disk()           # scans for transcript.json in each session dir
-    → For each transcript.json found:
-      1. Read file from disk
-      2. Parse JSON
-      3. Extract speaker_embeddings → build person_id index
-      4. Count unconfirmed speakers
-      5. Store in memory
-```
-
-After startup, the cache is warm. All transcript reads are served from memory.
-
-### Read path
-
-```
-GET /api/sessions/{id}/transcript
-  → FilesDb.get_transcript(id)
-  → Return cloned Value from HashMap (no disk I/O)
-
-GET /api/people/{id}/sessions
-  → FilesDb.get_person_session_ids(person_id)
-  → Return Vec<session_id> from index (no disk I/O, no file scanning)
-
-GET /api/sessions (list)
-  → SessionManager.list_sessions()           # session metadata from memory
-  → FilesDb.unconfirmed_speakers(id)         # per-session count from cache
+```json
+{"type":"files_changed","data":{"sessions":["session-id"],"people":false,"tags":false,"conversations":false}}
 ```
 
-### Write path (write-through)
+The web UI refetches visible resources, guards against late responses after
+navigation, and preserves notes drafts. Reconnect and focus also reconcile views.
+The `init` WebSocket event is now an invalidation signal, not a dump of 1,000
+sessions: clients fetch their page from `GET /api/sessions`. HTTP response shapes
+remain compatible. Reload an already-open browser tab after upgrading the daemon.
 
-Every write goes to **disk first, then cache**. If the disk write fails, the cache is not updated. This ensures the files always reflect the latest state.
+## Writes and conflicts
 
+JSON writes use a temporary file in the same directory, flush it, and atomically
+replace the source. Fixed lock stripes serialize daemon writes without retaining
+an unbounded lock map. Failed temporary writes leave the source intact.
+
+Metadata edits merge changed fields into the latest source, preserving unrelated
+external edits and unknown fields. Attribution updates use the same merge path.
+Conversation writes check source revisions and preserve top-level/per-message
+extensions. Summary generation checks revisions captured before generation.
+Notes API updates may supply `previous_notes`; the bundled UI uses this to reject
+stale drafts with HTTP 409 instead of overwriting external changes.
+
+These are per-file guarantees, not transactions across files. External tools do
+not participate in daemon locks: revision checks detect observed conflicts but
+cannot eliminate the final check/replace race against an uncooperative writer.
+Markdown files remain derived exports regenerated by daemon writes, not a second
+authoritative store or a bidirectional Markdown/JSON editing interface.
+
+## Validation and release
+
+Run the Rust/JavaScript checks and the isolated API/browser suite:
+
+```sh
+cargo test --locked
+node --test tests/analytics.test.mjs
+cargo build --release --locked
+uv run --no-project tests/filesystem_e2e.py
 ```
-Transcription completes (run_transcription_pipeline):
-  → FilesDb.put_transcript(session_id, data)
-    1. serde_json::to_string_pretty(data) → write to transcript.json on disk
-    2. Parse speaker_embeddings → rebuild person_id index for this session
-    3. Store parsed Value in cache
 
-Speaker attribution updated (update_attribution):
-  → FilesDb.get_transcript(id)               # read current from cache
-  → Mutate the Value (update person_id, person_name, etc.)
-  → FilesDb.put_transcript(id, mutated_data) # write-through to disk + cache
+The browser suite uses installed Google Chrome and an isolated local mock AI
+provider. It creates temporary data and never reads production credentials or
+opens audio devices. Native recording lifecycle tests use synthetic PCM through
+the real WAV/MP3/Opus writers and session stop/reconciliation code.
 
-Transcript deleted (delete_transcript):
-  → FilesDb.remove_transcript(id)            # remove from cache + index
-  → fs::remove_file(transcript.json)         # remove from disk
+Benchmark a disposable JSON-only copy of a real library:
 
-Session deleted (delete_session):
-  → FilesDb.remove_transcript(id)            # clean cache first
-  → SessionManager.delete_session(id)        # removes entire session directory
+```sh
+uv run --no-project tests/filesystem_benchmark.py --source /path/to/data
+uv run --no-project tests/filesystem_benchmark.py --source /path/to/data --scale 10 --cycles 1 --artifacts target/filesystem-benchmark-scale10
 ```
 
-### Write ordering guarantee
-
-```
-put_transcript:
-  1. Write to disk    ← if this fails, error returned, cache unchanged
-  2. Update cache     ← only happens after successful disk write
-  3. Update indexes   ← derived from the same data just cached
-```
-
-If the process crashes between step 1 and 2, the file is on disk but the cache is stale. On next startup, `load_from_disk()` rebuilds the cache from the files — no data loss.
-
-## Cache invalidation
-
-The cache uses **explicit invalidation** — no file watchers, no TTLs, no polling.
-
-This works because all writes to `transcript.json` go through the daemon:
-- Transcription pipeline → `put_transcript`
-- Attribution updates → `get_transcript` + mutate + `put_transcript`
-- Deletion → `remove_transcript`
-
-No external process is expected to modify these files while the daemon is running. If a user manually edits a `transcript.json` while the daemon is running, the cache will be stale until restart. This is an acceptable trade-off for the simplicity of not running a file watcher.
-
-## Memory usage
-
-Each `transcript.json` is stored as a parsed `serde_json::Value`. For a typical meeting (1-2 hours, 100-500 transcript segments), this is roughly 200KB-2MB per session.
-
-| Sessions | Estimated memory |
-|----------|-----------------|
-| 10       | 2-20 MB         |
-| 100      | 20-200 MB       |
-| 1000     | 200 MB - 2 GB   |
-
-For a desktop app with dozens to low hundreds of sessions, this is well within acceptable bounds. If it becomes a concern, a future optimization could cache only the indexes and serve transcript content from disk on demand.
-
-## Concurrency
-
-- Uses `tokio::sync::RwLock` — multiple concurrent reads don't block each other
-- Writes acquire an exclusive lock briefly (just a HashMap insert)
-- The transcription pipeline writes once per session; attribution updates are infrequent
-- No contention in practice since reads vastly outnumber writes
-
-## What happens if files are modified externally
-
-| Scenario | Behavior |
-|----------|----------|
-| File edited while daemon running | Cache is stale until restart |
-| File deleted while daemon running | Cache returns stale data; disk 404 on file serve |
-| New file added while daemon running | Not visible until restart |
-| Daemon restart | Full cache rebuild from disk — all changes picked up |
-
-The files on disk are always the source of truth. The cache is a performance optimization that is rebuilt from scratch on every daemon start.
+The macOS benchmark records physical footprint (including compressed memory),
+latency and source hashes. It omits credentials and disables copied pending jobs.
+See the [implementation worklog](worklogs/2026-09-10-filesystem-first.md) for measured
+results and remaining design tradeoffs.

@@ -147,6 +147,11 @@ pub struct PersonEntry {
 
 /// Generate `recordings/index.md` listing all sessions. Returns bytes written.
 pub fn write_recordings_index(recordings_dir: &Path, sessions: &mut [SessionEntry]) -> usize {
+    write_recordings_catalog(recordings_dir, sessions, true)
+}
+
+/// Startup can create a navigation index without opening summary content.
+pub fn write_recordings_catalog(recordings_dir: &Path, sessions: &mut [SessionEntry], descriptions: bool) -> usize {
     // Sort by created_at descending (newest first)
     sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
@@ -160,10 +165,10 @@ pub fn write_recordings_index(recordings_dir: &Path, sessions: &mut [SessionEntr
 
         // Try to read description from summary
         let summary_path = recordings_dir.join(&s.id).join("summary.json");
-        let desc = std::fs::read_to_string(&summary_path).ok()
+        let desc = if descriptions { std::fs::read_to_string(&summary_path).ok()
             .and_then(|content| serde_json::from_str::<Value>(&content).ok())
             .and_then(|v| v.get("content")?.as_str().map(|s| s.to_string()))
-            .and_then(|content| extract_description(&content));
+            .and_then(|content| extract_description(&content)) } else { None };
 
         // Compact line: name | date | duration | tags
         let tags_str = if s.tags.is_empty() {

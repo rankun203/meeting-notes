@@ -14,6 +14,13 @@ function App() {
   const initialRoute = parseRoute(window.location.pathname, window.location.search);
 
   const [sessions, setSessions] = useState([]);
+  const [selectedDetail, setSelectedDetail] = useState(null);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const refreshRequest = useRef(0);
+  function updateVisibleSessions(update) {
+    setSessions(update);
+    setSelectedDetail(previous => previous ? update([previous]).find(s => s.id === previous.id) || null : null);
+  }
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [sources, setSources] = useState([]);
@@ -74,23 +81,26 @@ function App() {
   function handleWsEvent(event) {
     switch (event.type) {
       case 'init':
-        setSessions(event.data.sessions || []);
-        setTotal(event.data.total || 0);
+        setCatalogRevision(r => r + 1);
+        window.dispatchEvent(new CustomEvent('meeting-files-changed', { detail: { all: true } }));
+        break;
+      case 'files_changed':
+        setCatalogRevision(r => r + 1);
+        window.dispatchEvent(new CustomEvent('meeting-files-changed', { detail: event.data }));
         break;
       case 'session_created':
-        setSessions(prev => [event.data, ...prev]);
-        setTotal(prev => prev + 1);
+        setCatalogRevision(r => r + 1);
         break;
       case 'session_updated':
-        setSessions(prev => prev.map(s => s.id === event.data.id ? { ...s, ...event.data } : s));
+        updateVisibleSessions(prev => prev.map(s => s.id === event.data.id ? { ...s, ...event.data } : s));
         break;
       case 'session_deleted':
-        setSessions(prev => prev.filter(s => s.id !== event.data.id));
-        setTotal(prev => Math.max(0, prev - 1));
+        updateVisibleSessions(prev => prev.filter(s => s.id !== event.data.id));
+        setCatalogRevision(r => r + 1);
         if (selectedIdRef.current === event.data.id) navigateTo('/sessions');
         break;
       case 'file_sizes':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id ? { ...s, file_sizes: event.data.file_sizes, auto_stop_remaining_secs: event.data.auto_stop_remaining_secs ?? null } : s
         ));
         break;
@@ -99,7 +109,7 @@ function App() {
         const sessionId = event.data.id;
         const noticeId = `${Date.now()}_${Math.random()}`;
         notice._id = noticeId;
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === sessionId
             ? { ...s, notices: [...(s.notices || []), notice] }
             : s
@@ -107,7 +117,7 @@ function App() {
         // Auto-dismiss info notices after 5 seconds
         if (notice.level === 'info') {
           setTimeout(() => {
-            setSessions(prev => prev.map(s =>
+            updateVisibleSessions(prev => prev.map(s =>
               s.id === sessionId
                 ? { ...s, notices: (s.notices || []).filter(n => n._id !== noticeId) }
                 : s
@@ -117,63 +127,63 @@ function App() {
         break;
       }
       case 'session_notices':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, notices: event.data.notices }
             : s
         ));
         break;
       case 'transcription_progress':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, processing_state: event.data.status }
             : s
         ));
         break;
       case 'transcription_completed':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, processing_state: null, transcript_available: true, unconfirmed_speakers: event.data.unconfirmed_speakers }
             : s
         ));
         break;
       case 'transcription_failed':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, processing_state: null }
             : s
         ));
         break;
       case 'summary_progress':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, summary_processing: event.data.status || true, summary_streaming: '', summary_thinking: '', summary_started_at: event.data.started_at }
             : s
         ));
         break;
       case 'summary_thinking':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, summary_thinking: (s.summary_thinking || '') + event.data.delta }
             : s
         ));
         break;
       case 'summary_delta':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, summary_streaming: (s.summary_streaming || '') + event.data.delta }
             : s
         ));
         break;
       case 'summary_completed':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, summary_available: true, summary_processing: false, summary_streaming: null, _summary: event.data.summary || null, _todos: event.data.todos || null }
             : s
         ));
         break;
       case 'summary_failed':
-        setSessions(prev => prev.map(s =>
+        updateVisibleSessions(prev => prev.map(s =>
           s.id === event.data.id
             ? { ...s, summary_processing: false, summary_streaming: null }
             : s
@@ -198,15 +208,32 @@ function App() {
 
   useEffect(() => {
     if (currentView === 'people') refreshPeople();
-  }, [currentView]);
+  }, [currentView, catalogRevision]);
 
   const refresh = useCallback(async (currentOffset) => {
+    const request = ++refreshRequest.current;
     try {
       const data = await api(`/sessions?limit=${PAGE_SIZE}&offset=${currentOffset ?? offset}`);
+      if (request !== refreshRequest.current) return;
       setSessions(data.sessions);
       setTotal(data.total);
     } catch (e) { /* ignore */ }
   }, [offset]);
+
+  useEffect(() => { refresh(); }, [offset, catalogRevision]);
+  useEffect(() => {
+    const refreshOnFocus = () => setCatalogRevision(r => r + 1);
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedId) { setSelectedDetail(null); return; }
+    api(`/sessions/${selectedId}`).then(detail => {
+      if (!cancelled) setSelectedDetail(detail);
+    }).catch(() => { if (!cancelled) setSelectedDetail(null); });
+    return () => { cancelled = true; };
+  }, [selectedId, catalogRevision]);
 
   // Auto-select first session only if URL didn't specify one
   useEffect(() => {
@@ -229,7 +256,6 @@ function App() {
 
   function handlePageChange(newOffset) {
     setOffset(newOffset);
-    refresh(newOffset);
   }
 
   function handleDeleted() {
@@ -243,7 +269,7 @@ function App() {
     prevViewRef.current = currentView;
   }, [currentView]);
 
-  const selectedSession = sessions.find(s => s.id === selectedId) || null;
+  const selectedSession = (selectedDetail?.id === selectedId ? selectedDetail : null) || sessions.find(s => s.id === selectedId) || null;
 
   const sidebarProps = {
     sessions, total, offset,
@@ -268,14 +294,16 @@ function App() {
     if (currentView === 'people') {
       const selectedPerson = people.find(p => p.id === selectedPersonId) || people[0] || null;
       return jsx(PersonDetail, {
+        key: selectedPersonId,
         person: selectedPerson,
         onRefresh: () => { refreshPeople(); navigateTo(buildPath('people')); },
         onSelectSession: (id) => navigateTo(buildPath('sessions', id)),
       });
     }
     return jsx(SessionDetail, {
+      key: selectedSession?.id,
       session: selectedSession,
-      onRefresh: refresh,
+      onRefresh: () => { refresh(); setCatalogRevision(r => r + 1); },
       onDeleted: handleDeleted,
       onBack: handleBack,
       isMobile: isMobile,

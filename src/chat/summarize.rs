@@ -313,16 +313,16 @@ pub async fn run_summarization(
     session_manager: &SessionManager,
     provider_sort: Option<&str>,
 ) -> Result<(), String> {
+    let summary_revision = crate::storage::revision(&session_dir.join("summary.json"));
+    let todos_revision = crate::storage::revision(&session_dir.join("todos.json"));
     let language = session_info
         .map(|s| s.language.as_str())
         .unwrap_or("en");
 
     // Read and format transcript
     let transcript_path = session_dir.join("transcript.json");
-    let transcript_str = std::fs::read_to_string(&transcript_path)
-        .map_err(|e| format!("Failed to read transcript: {e}"))?;
-    let transcript: Value = serde_json::from_str(&transcript_str)
-        .map_err(|e| format!("Failed to parse transcript: {e}"))?;
+    let transcript_path = transcript_path.to_path_buf();
+    let transcript = crate::storage::blocking(move || crate::storage::read_without_words(&transcript_path)).await?;
 
     // Collect notes from tags and participants
     let session_tags = session_info.map(|s| s.tags.as_slice()).unwrap_or(&[]);
@@ -452,9 +452,7 @@ pub async fn run_summarization(
     }
 
     let summary_path = session_dir.join("summary.json");
-    let json_str = serde_json::to_string_pretty(&summary)
-        .map_err(|e| format!("Failed to serialize summary: {e}"))?;
-    std::fs::write(&summary_path, json_str)
+    crate::storage::replace_json(&summary_path, summary_revision, &summary)
         .map_err(|e| format!("Failed to write summary: {e}"))?;
 
     let md_path = session_dir.join("summary.md");
@@ -466,9 +464,7 @@ pub async fn run_summarization(
     if !todos.is_empty() {
         let todos_value = json!({"items": todos});
         let todos_path = session_dir.join("todos.json");
-        let todos_json = serde_json::to_string_pretty(&todos_value)
-            .map_err(|e| format!("Failed to serialize todos: {e}"))?;
-        std::fs::write(&todos_path, todos_json)
+        crate::storage::replace_json(&todos_path, todos_revision, &todos_value)
             .map_err(|e| format!("Failed to write todos.json: {e}"))?;
         info!("[{}] Extracted {} TODOs", session_id, todos.len());
     }

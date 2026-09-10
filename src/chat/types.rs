@@ -5,6 +5,8 @@ use serde_json::Value;
 /// A conversation stored on disk as `{conversations_dir}/{id}.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
+    #[serde(skip)]
+    pub(crate) revision: Option<crate::storage::Revision>,
     pub id: String,
     pub title: String,
     pub created_at: DateTime<Utc>,
@@ -132,7 +134,7 @@ impl ContextCriteria {
             if !self.session_ids.contains(s) { self.session_ids.push(s.clone()); }
         }
         for (k, v) in &other.session_context_modes {
-            self.session_context_modes.entry(k.clone()).or_insert_with(|| v.clone());
+            self.session_context_modes.insert(k.clone(), v.clone());
         }
     }
 

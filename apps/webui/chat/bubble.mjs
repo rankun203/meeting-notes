@@ -1,6 +1,6 @@
 import { track } from '../analytics.mjs';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { jsx, jsxs, Fragment, api, API, useIsMobile } from '../utils.mjs';
+import { jsx, jsxs, Fragment, api, API, useIsMobile, useFileRevision } from '../utils.mjs';
 import { ChatIcon, CloseIcon } from '../icons.mjs';
 import { BUBBLE_SNAP_KEY, BUBBLE_SIZE, BUBBLE_SIZE_MOBILE, getSnapPoints, nearestSnap, loadSnap } from './constants.mjs';
 import { ChatPanel } from './panel.mjs';
@@ -60,6 +60,10 @@ export function ChatBubble() {
   const chatBackendRef = useRef(chatBackend);
   useEffect(() => { chatBackendRef.current = chatBackend; }, [chatBackend]);
 
+  const fileRevision = useFileRevision('conversations');
+  const peopleRevision = useFileRevision('people');
+  const tagsRevision = useFileRevision('tags');
+  const loadRequest = useRef(0);
   const refreshConvList = useCallback(async () => {
     try {
       const data = await api('/conversations');
@@ -75,14 +79,16 @@ export function ChatBubble() {
   }, []);
 
   const loadConversation = useCallback(async (id) => {
+    const request = ++loadRequest.current;
     if (!id) { setActiveConv(null); return; }
     try {
       const conv = await api(`/conversations/${id}`);
+      if (request !== loadRequest.current) return;
       setActiveConv(conv);
       if (conv.claude_session_id) {
         setClaudeSessionId(conv.claude_session_id);
       }
-    } catch { setActiveConv(null); }
+    } catch { if (request === loadRequest.current) setActiveConv(null); }
   }, []);
 
   // Load mention data when panel opens
@@ -106,11 +112,11 @@ export function ChatBubble() {
         sessions: sessions.sessions || [],
       });
     });
-  }, [panelOpen]);
+  }, [panelOpen, fileRevision, peopleRevision, tagsRevision]);
 
   useEffect(() => {
-    if (activeId && !streaming) loadConversation(activeId);
-  }, [activeId]);
+    if (panelOpen && activeId && !streaming) loadConversation(activeId);
+  }, [activeId, panelOpen, streaming, fileRevision]);
 
   useEffect(() => {
     localStorage.setItem(BUBBLE_SNAP_KEY, JSON.stringify(snapIndex));

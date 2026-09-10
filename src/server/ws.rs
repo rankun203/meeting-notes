@@ -18,32 +18,21 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state.session_manager, state.tags_manager))
+    ws.on_upgrade(move |socket| handle_socket(socket, state.session_manager))
 }
 
 async fn handle_socket(
     socket: WebSocket,
     manager: crate::session::SessionManager,
-    tags_manager: crate::tags::TagsManager,
 ) {
     info!("WebSocket client connected");
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // Send initial state
-    let hidden_tags = tags_manager.hidden_tag_names().await;
-    let (sessions, total) = manager.list_sessions(1000, 0, &hidden_tags).await;
-    let init_msg = serde_json::to_string(&json!({
-        "type": "init",
-        "data": { "sessions": sessions, "total": total }
-    }))
-    .unwrap();
-    if ws_tx.send(Message::Text(init_msg.into())).await.is_err() {
-        return;
-    }
-
-    // Subscribe to broadcast events
+    // Subscribe before sending init so changes cannot be lost during bootstrap.
     let mut event_rx = manager.subscribe();
+    let init_msg = json!({"type": "init", "data": {}}).to_string();
+    if ws_tx.send(Message::Text(init_msg.into())).await.is_err() { return; }
 
     // Forward broadcast events to WebSocket
     let mut send_task = tokio::spawn(async move {
@@ -57,6 +46,9 @@ async fn handle_socket(
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     warn!("WebSocket client lagged, skipped {} events", n);
+                    if ws_tx.send(Message::Text(json!({"type": "init", "data": {}}).to_string().into())).await.is_err() {
+                        break;
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }

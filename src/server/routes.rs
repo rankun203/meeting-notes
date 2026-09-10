@@ -136,7 +136,7 @@ async fn list_sessions(
     let offset = params.offset.unwrap_or(0);
     let hidden_tags = state.tags_manager.hidden_tag_names().await;
     let (mut sessions, total) = state.session_manager.list_sessions(limit, offset, &hidden_tags).await;
-    // Enrich with unconfirmed speaker counts from cache
+    // Load only compact speaker counts for the requested page.
     for s in &mut sessions {
         s.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&s.id).await;
     }
@@ -165,6 +165,14 @@ async fn rename_session(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
+    state.session_manager.reconcile().await;
+    if let Some(expected) = body.get("previous_notes") {
+        let current = state.session_manager.get_session(&id).await
+            .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
+        if *expected != json!(current.notes) {
+            return Err((StatusCode::CONFLICT, Json(json!({"error": "Notes changed on disk. Your draft is preserved; reload before saving."}))));
+        }
+    }
     if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
         state.session_manager
             .rename_session(&id, name.to_string())
@@ -809,11 +817,18 @@ async fn get_config() -> Json<Value> {
 async fn get_transcript(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match state.files_db.get_transcript(&id).await {
-        Some(data) => Ok(Json(data)),
-        None => Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"})))),
+) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    let path = state.files_db.recordings_dir().join(&id).join("transcript.json");
+    if !path.is_file() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))));
     }
+    let bytes = crate::storage::blocking(move || {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(bytes)
+    }).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/json"),
+         (axum::http::header::CACHE_CONTROL, "no-cache")], bytes).into_response())
 }
 
 async fn delete_transcript(
@@ -870,9 +885,11 @@ async fn update_attribution(
     Path(id): Path<String>,
     Json(body): Json<AttributionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Read transcript from cache
+    // Read the current source document; merge only this operation's changes.
     let mut transcript = state.files_db.get_transcript(&id).await
         .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))))?;
+
+    let original_transcript = transcript.clone();
 
     for action in &body.attributions {
         // Get the speaker's embedding from the transcript
@@ -948,8 +965,8 @@ async fn update_attribution(
         }
     }
 
-    // Write through cache (updates memory + disk + indexes)
-    state.files_db.put_transcript(&id, transcript).await
+    // Merge against current disk content and invalidate the derived projection.
+    state.files_db.update_transcript(&id, original_transcript, transcript).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
     Ok(Json(json!({"status": "ok"})))
@@ -1062,27 +1079,17 @@ async fn delete_person(
 async fn get_person_sessions(
     State(state): State<AppState>,
     Path(person_id): Path<String>,
-) -> Json<Value> {
-    // Instant index lookup — no file I/O
-    let session_ids = state.files_db.get_person_session_ids(&person_id).await;
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state.session_manager.reconcile().await;
+    // Revalidate compact speaker projections; never load transcript content.
+    let session_ids = state.files_db.person_session_ids(&person_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
     let mut result: Vec<Value> = Vec::new();
     for sid in &session_ids {
-        if let Some(info) = state.session_manager.get_session(sid).await {
-            // Find which speakers in this session matched this person
-            let mut matched_speakers: Vec<Value> = Vec::new();
-            if let Some(transcript) = state.files_db.get_transcript(sid).await {
-                if let Some(embs) = transcript.get("speaker_embeddings").and_then(|v| v.as_object()) {
-                    for (speaker_key, entry) in embs {
-                        if entry.get("person_id").and_then(|v| v.as_str()) == Some(&person_id) {
-                            matched_speakers.push(json!({
-                                "speaker": speaker_key,
-                                "confidence": entry.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                            }));
-                        }
-                    }
-                }
-            }
+        if let Some(info) = state.session_manager.get_session_cached(sid).await {
+            let matched_speakers = state.files_db.matched_speakers(sid, &person_id).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
             result.push(json!({
                 "id": info.id,
@@ -1102,7 +1109,7 @@ async fn get_person_sessions(
         b_t.cmp(a_t)
     });
 
-    Json(json!({ "sessions": result }))
+    Ok(Json(json!({ "sessions": result })))
 }
 
 // --- Settings routes ---
@@ -1633,6 +1640,8 @@ async fn update_summary(
         return Err((StatusCode::NOT_FOUND, Json(json!({"error": "summary not found"}))));
     }
 
+    let _lock = crate::storage::write_lock(&json_path);
+    let source_revision = crate::storage::revision(&json_path);
     // Read existing summary, update content
     let existing = std::fs::read_to_string(&json_path)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
@@ -1642,7 +1651,10 @@ async fn update_summary(
 
     let json_str = serde_json::to_string_pretty(&summary)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    std::fs::write(&json_path, json_str)
+    if crate::storage::revision(&json_path) != source_revision {
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "summary changed during update; reload and retry"}))));
+    }
+    crate::storage::atomic_write(&json_path, json_str.as_bytes())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
 
     // Also update .md file
@@ -1691,6 +1703,8 @@ async fn toggle_todo(
     if !todos_path.exists() {
         return Err((StatusCode::NOT_FOUND, Json(json!({"error": "no todos"}))));
     }
+    let _lock = crate::storage::write_lock(&todos_path);
+    let source_revision = crate::storage::revision(&todos_path);
     let content = std::fs::read_to_string(&todos_path)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
     let mut todos: Value = serde_json::from_str(&content)
@@ -1710,12 +1724,17 @@ async fn toggle_todo(
 
     let json_str = serde_json::to_string_pretty(&todos)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
-    std::fs::write(&todos_path, json_str)
+    if crate::storage::revision(&todos_path) != source_revision {
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "todos changed during update; reload and retry"}))));
+    }
+    crate::storage::atomic_write(&todos_path, json_str.as_bytes())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
 
+    drop(_lock);
     // Also update the summary.md and summary.json checkbox states
     let summary_json_path = dir.join("summary.json");
     if summary_json_path.exists() {
+        let _summary_lock = crate::storage::write_lock(&summary_json_path);
         if let Ok(s) = std::fs::read_to_string(&summary_json_path) {
             if let Ok(mut sj) = serde_json::from_str::<Value>(&s) {
                 if let Some(md) = sj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
@@ -1731,7 +1750,7 @@ async fn toggle_todo(
                             result.to_string()
                         }).to_string();
                     sj["content"] = json!(new_md);
-                    let _ = std::fs::write(&summary_json_path, serde_json::to_string_pretty(&sj).unwrap_or_default());
+                    let _ = crate::storage::write_json(&summary_json_path, &sj);
                     let _ = std::fs::write(dir.join("summary.md"), &new_md);
                 }
             }
@@ -1745,8 +1764,10 @@ async fn get_person_todos(
     State(state): State<AppState>,
     Path(person_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state.session_manager.reconcile().await;
     // Get all sessions this person appears in
-    let session_ids = state.files_db.get_person_session_ids(&person_id).await;
+    let session_ids = state.files_db.person_session_ids(&person_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
 
     let mut result: Vec<Value> = Vec::new();
     for sid in &session_ids {
@@ -1766,7 +1787,7 @@ async fn get_person_todos(
         };
 
         // Get session info for display
-        let session_info = state.session_manager.get_session(sid).await;
+        let session_info = state.session_manager.get_session_cached(sid).await;
         let session_name = session_info.as_ref().and_then(|s| s.name.clone()).unwrap_or_else(|| sid.clone());
         let session_created = session_info.as_ref().map(|s| s.created_at.to_rfc3339());
 
@@ -2066,7 +2087,8 @@ pub fn conversation_routes() -> Router<AppState> {
 async fn list_conversations(
     State(state): State<AppState>,
 ) -> Json<Value> {
-    let summaries = state.conversation_manager.list(10);
+    let manager = state.conversation_manager;
+    let summaries = crate::storage::blocking(move || manager.list(10)).await;
     Json(json!({ "conversations": summaries }))
 }
 
@@ -2090,7 +2112,8 @@ async fn get_conversation(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conv = state.conversation_manager.get_transformed(&id)
+    let manager = state.conversation_manager;
+    let conv = crate::storage::blocking(move || manager.get_transformed(&id)).await
         .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
     Ok(Json(conv))
 }
@@ -2136,93 +2159,29 @@ async fn send_message(
         conv.title = body.content.chars().take(60).collect();
     }
 
-    // Build context: fetch only new chunks, dedupe against existing context
-    let new_criteria = ContextCriteria::from_mentions(&body.mentions);
-
-    // Get existing context from the most recent context_result
-    let existing_context: Vec<crate::chat::types::ContextChunk> = conv.messages.iter().rev()
-        .find_map(|m| {
-            if let Message::ContextResult { chunks, .. } = m { Some(chunks.clone()) }
-            else { None }
-        })
-        .unwrap_or_default();
-
-    let context_chunks = if !new_criteria.is_empty() {
-        // Retrieve only for the new criteria
-        let new_chunks = crate::llm::context::retrieve_context(
-            &new_criteria,
-            &state.files_db,
-            &state.session_manager,
-            &state.tags_manager,
-            &state.people_manager,
-        ).await;
-
-        // Dedupe: build a set of (kind, source_id, start_time_or_note_hash) from existing chunks
-        let chunk_key = |c: &crate::chat::types::ContextChunk| -> (String, String, u64) {
-            if c.kind == "note" {
-                let hash = c.note.as_deref().unwrap_or("").len() as u64;
-                (c.kind.clone(), c.source_id.clone(), hash)
-            } else {
-                let start_bits = c.segment.as_ref()
-                    .and_then(|s| s.get("start")).and_then(|v| v.as_f64())
-                    .unwrap_or(0.0).to_bits();
-                (c.kind.clone(), c.source_id.clone(), start_bits)
-            }
-        };
-
-        let existing_keys: std::collections::HashSet<_> = existing_context.iter()
-            .map(chunk_key)
-            .collect();
-
-        let delta: Vec<_> = new_chunks.into_iter()
-            .filter(|c| !existing_keys.contains(&chunk_key(c)))
-            .collect();
-
-        // Merge: existing + new unique chunks
-        let mut combined = existing_context;
-        combined.extend(delta.clone());
-
-        // Re-sort: notes first, then by time
-        combined.sort_by(|a, b| {
-            let a_note = a.kind == "note";
-            let b_note = b.kind == "note";
-            if a_note != b_note {
-                return if a_note { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
-            }
-            a.created_at.cmp(&b.created_at)
-                .then_with(|| {
-                    let as_ = a.segment.as_ref().and_then(|s| s.get("start")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let bs = b.segment.as_ref().and_then(|s| s.get("start")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    as_.partial_cmp(&bs).unwrap_or(std::cmp::Ordering::Equal)
-                })
+    // Resolve all remembered source criteria against current files on every
+    // turn. Historical snapshots are retained for display, never used as truth.
+    let mut criteria = ContextCriteria::default();
+    for message in &conv.messages {
+        if let Message::ContextResult { criteria: previous, .. } = message { criteria.merge(previous); }
+    }
+    criteria.merge(&ContextCriteria::from_mentions(&body.mentions));
+    let context_chunks = crate::llm::context::retrieve_context(
+        &criteria, &state.files_db, &state.session_manager, &state.tags_manager, &state.people_manager,
+    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    let previous = conv.messages.iter().rev().find_map(|message| {
+        if let Message::ContextResult { chunks, .. } = message { Some(chunks) } else { None }
+    });
+    let changed = previous.map(|chunks| serde_json::to_value(chunks).ok())
+        != Some(serde_json::to_value(&context_chunks).ok());
+    if changed && (!context_chunks.is_empty() || previous.is_some()) {
+        conv.messages.push(Message::ContextResult {
+            id: format!("ctx_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+            criteria,
+            chunks: context_chunks.clone(),
+            timestamp: chrono::Utc::now(),
         });
-
-        // Build merged criteria for storage
-        let mut merged_criteria = ContextCriteria::default();
-        for msg in &conv.messages {
-            if let Message::ContextResult { criteria: prev, .. } = msg {
-                merged_criteria.merge(prev);
-            }
-        }
-        merged_criteria.merge(&new_criteria);
-
-        if !combined.is_empty() {
-            let ctx_msg_id = format!("ctx_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
-            conv.messages.push(Message::ContextResult {
-                id: ctx_msg_id,
-                criteria: merged_criteria,
-                chunks: combined.clone(),
-                timestamp: chrono::Utc::now(),
-            });
-        }
-
-        combined
-    } else if !existing_context.is_empty() {
-        // No new mentions — reuse existing context
-        existing_context
-    } else {
-        Vec::new()
-    };
+    }
 
     conv.updated_at = chrono::Utc::now();
 

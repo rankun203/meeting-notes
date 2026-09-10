@@ -1,9 +1,7 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
+use crate::storage;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
-use tracing::{info, warn};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
@@ -14,15 +12,9 @@ pub struct Tag {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TagsFile {
-    tags: Vec<Tag>,
-}
-
 #[derive(Clone)]
 pub struct TagsManager {
     tags_path: PathBuf,
-    tags: Arc<RwLock<Vec<Tag>>>,
 }
 
 /// Normalize a string to snake_case tag name: lowercase a-z0-9_ only.
@@ -30,7 +22,13 @@ pub fn normalize_tag_name(input: &str) -> String {
     let s: String = input
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     // Collapse multiple underscores and trim edges
     let mut result = String::new();
@@ -57,41 +55,28 @@ impl TagsManager {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             tags_path: data_dir.join("tags.json"),
-            tags: Arc::new(RwLock::new(Vec::new())),
-        }
-    }
-
-    pub async fn load_from_disk(&self) {
-        if !self.tags_path.exists() {
-            return;
-        }
-        match std::fs::read_to_string(&self.tags_path) {
-            Ok(json) => match serde_json::from_str::<TagsFile>(&json) {
-                Ok(file) => {
-                    let count = file.tags.len();
-                    *self.tags.write().await = file.tags;
-                    info!("Loaded {} tags from disk", count);
-                }
-                Err(e) => warn!("Failed to parse tags.json: {}", e),
-            },
-            Err(e) => warn!("Failed to read tags.json: {}", e),
-        }
-    }
-
-    fn save_to_disk(&self, tags: &[Tag]) {
-        let file = TagsFile { tags: tags.to_vec() };
-        match serde_json::to_string_pretty(&file) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&self.tags_path, json) {
-                    warn!("Failed to write tags.json: {}", e);
-                }
-            }
-            Err(e) => warn!("Failed to serialize tags: {}", e),
         }
     }
 
     pub async fn list_tags(&self) -> Vec<Tag> {
-        self.tags.read().await.clone()
+        let path = self.tags_path.clone();
+        storage::blocking(move || {
+            #[derive(Deserialize)]
+            struct Tags {
+                tags: Vec<Tag>,
+            }
+            if !path.exists() {
+                return Vec::new();
+            }
+            match storage::read_json::<Tags>(&path) {
+                Ok(file) => file.tags,
+                Err(e) => {
+                    tracing::warn!("{}", e);
+                    Vec::new()
+                }
+            }
+        })
+        .await
     }
 
     pub async fn create_tag(&self, raw_name: &str) -> Result<Tag, String> {
@@ -99,79 +84,151 @@ impl TagsManager {
         if name.is_empty() {
             return Err("Tag name cannot be empty".into());
         }
-
-        let mut tags = self.tags.write().await;
-        if tags.iter().any(|t| t.name == name) {
-            return Err(format!("Tag '{}' already exists", name));
-        }
-
-        let tag = Tag { name, hidden: false, notes: None };
-        tags.push(tag.clone());
-        self.save_to_disk(&tags);
-        info!("Created tag: {}", tag.name);
-        Ok(tag)
+        let path = self.tags_path.clone();
+        storage::blocking(move || {
+            mutate(&path, |tags| {
+                if tags.iter().any(|v| v["name"].as_str() == Some(&name)) {
+                    return Err(format!("Tag '{name}' already exists"));
+                }
+                let tag = Tag {
+                    name,
+                    hidden: false,
+                    notes: None,
+                };
+                tags.push(serde_json::to_value(&tag).map_err(|e| e.to_string())?);
+                Ok(tag)
+            })
+        })
+        .await
     }
 
-    pub async fn update_tag(&self, name: &str, new_name: Option<&str>, hidden: Option<bool>, notes: Option<Option<String>>) -> Result<(Tag, Option<String>), String> {
-        let mut tags = self.tags.write().await;
-        let idx = tags.iter().position(|t| t.name == name)
-            .ok_or_else(|| format!("Tag '{}' not found", name))?;
-
-        let mut old_name: Option<String> = None;
-
-        if let Some(raw) = new_name {
-            let normalized = normalize_tag_name(raw);
-            if normalized.is_empty() {
-                return Err("Tag name cannot be empty".into());
-            }
-            if normalized != name {
-                if tags.iter().any(|t| t.name == normalized) {
-                    return Err(format!("Tag '{}' already exists", normalized));
+    pub async fn update_tag(
+        &self,
+        name: &str,
+        new_name: Option<&str>,
+        hidden: Option<bool>,
+        notes: Option<Option<String>>,
+    ) -> Result<(Tag, Option<String>), String> {
+        let name = name.to_string();
+        let new_name = new_name.map(normalize_tag_name);
+        if new_name.as_deref() == Some("") {
+            return Err("Tag name cannot be empty".into());
+        }
+        let path = self.tags_path.clone();
+        storage::blocking(move || {
+            mutate(&path, |tags| {
+                let idx = tags
+                    .iter()
+                    .position(|v| v["name"].as_str() == Some(&name))
+                    .ok_or_else(|| format!("Tag '{name}' not found"))?;
+                let mut old_name = None;
+                if let Some(new_name) = new_name.filter(|n| *n != name) {
+                    if tags.iter().any(|v| v["name"].as_str() == Some(&new_name)) {
+                        return Err(format!("Tag '{new_name}' already exists"));
+                    }
+                    old_name = Some(name);
+                    tags[idx]["name"] = new_name.into();
                 }
-                old_name = Some(name.to_string());
-                tags[idx].name = normalized;
-            }
-        }
-        if let Some(h) = hidden {
-            tags[idx].hidden = h;
-        }
-        if let Some(n) = notes {
-            tags[idx].notes = n;
-        }
-
-        let result = tags[idx].clone();
-        self.save_to_disk(&tags);
-        if let Some(ref old) = old_name {
-            info!("Renamed tag '{}' -> '{}'", old, result.name);
-        }
-        Ok((result, old_name))
+                if let Some(hidden) = hidden {
+                    tags[idx]["hidden"] = hidden.into();
+                }
+                if let Some(notes) = notes {
+                    tags[idx]["notes"] = json!(notes);
+                }
+                let tag = serde_json::from_value(tags[idx].clone()).map_err(|e| e.to_string())?;
+                Ok((tag, old_name))
+            })
+        })
+        .await
     }
 
     pub async fn delete_tag(&self, name: &str) -> Result<(), String> {
-        let mut tags = self.tags.write().await;
-        let before = tags.len();
-        tags.retain(|t| t.name != name);
-        if tags.len() == before {
-            return Err(format!("Tag '{}' not found", name));
-        }
-        self.save_to_disk(&tags);
-        info!("Deleted tag: {}", name);
-        Ok(())
+        let name = name.to_string();
+        let path = self.tags_path.clone();
+        storage::blocking(move || {
+            mutate(&path, |tags| {
+                let before = tags.len();
+                tags.retain(|v| v["name"].as_str() != Some(&name));
+                if tags.len() == before {
+                    return Err(format!("Tag '{name}' not found"));
+                }
+                Ok(())
+            })
+        })
+        .await
     }
 
     pub async fn get_tag(&self, name: &str) -> Option<Tag> {
-        self.tags.read().await.iter().find(|t| t.name == name).cloned()
+        self.list_tags().await.into_iter().find(|t| t.name == name)
     }
 
     pub async fn tag_exists(&self, name: &str) -> bool {
-        self.tags.read().await.iter().any(|t| t.name == name)
+        self.get_tag(name).await.is_some()
     }
 
-    /// Return the set of hidden tag names.
     pub async fn hidden_tag_names(&self) -> std::collections::HashSet<String> {
-        self.tags.read().await.iter()
+        self.list_tags()
+            .await
+            .into_iter()
             .filter(|t| t.hidden)
-            .map(|t| t.name.clone())
+            .map(|t| t.name)
             .collect()
+    }
+}
+
+fn mutate<T>(
+    path: &Path,
+    edit: impl FnOnce(&mut Vec<Value>) -> Result<T, String>,
+) -> Result<T, String> {
+    let _lock = storage::write_lock(path);
+    let before = storage::revision(path);
+    let mut document: Value = if before.is_some() {
+        storage::read_json(path)?
+    } else {
+        json!({"tags":[]})
+    };
+    let tags = document
+        .get_mut("tags")
+        .and_then(Value::as_array_mut)
+        .ok_or("invalid tags document")?;
+    // Reject malformed entries before any edit instead of silently overwriting them.
+    for tag in tags.iter() {
+        serde_json::from_value::<Tag>(tag.clone()).map_err(|e| e.to_string())?;
+    }
+    let result = edit(tags)?;
+    if storage::revision(path) != before {
+        return Err("tags changed during update; reload and retry".into());
+    }
+    storage::write_json(path, &document)?;
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn concurrent_tag_edits_and_extensions_survive() {
+        let dir = std::env::temp_dir().join(format!("mn-tags-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        storage::write_json(
+            &dir.join("tags.json"),
+            &json!({"extension":true,"tags":[{"name":"old","extra":42}]}),
+        )
+        .unwrap();
+        let tags = TagsManager::new(&dir);
+        let (a, b) = tokio::join!(tags.create_tag("one"), tags.create_tag("two"));
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(tags.list_tags().await.len(), 3);
+        tags.update_tag("old", Some("renamed"), Some(true), None)
+            .await
+            .unwrap();
+        let saved: Value = storage::read_json(&dir.join("tags.json")).unwrap();
+        assert_eq!(saved["extension"], true);
+        assert_eq!(saved["tags"][0]["extra"], 42);
+        assert!(tags.hidden_tag_names().await.contains("renamed"));
+        std::fs::remove_file(dir.join("tags.json")).unwrap();
+        assert!(tags.list_tags().await.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

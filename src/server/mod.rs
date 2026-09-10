@@ -1,4 +1,5 @@
 pub mod analytics;
+mod changes;
 pub mod routes;
 pub mod web_ui;
 pub mod ws;
@@ -39,6 +40,8 @@ pub fn create_router(
         llm_secrets,
         claude_runner,
     };
+
+    changes::start(state.clone());
 
     // All API routes (REST + WebSocket) under /api
     let api_routes = Router::new()
