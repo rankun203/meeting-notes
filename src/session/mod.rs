@@ -1206,14 +1206,22 @@ impl SessionManager {
 
     /// Set the audio extraction job info and persist to metadata.json.
     pub async fn set_audio_extraction(&self, id: &str, job: Option<session::AudioExtractionJob>) {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.get_mut(id) {
-            session.audio_extraction = job;
-            session.touch();
-            if let Err(e) = Self::write_metadata(session) {
-                tracing::warn!("Failed to write metadata for {}: {}", id, e);
-            }
+        if let Err(e) = self.persist_audio_extraction(id, job).await {
+            tracing::warn!("Failed to write extraction metadata for {}: {}", id, e);
         }
+    }
+
+    /// Persist recovery information before handing work to an external worker.
+    pub async fn persist_audio_extraction(&self, id: &str, job: Option<session::AudioExtractionJob>) -> Result<(), String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions.get_mut(id).ok_or_else(|| "session not found".to_string())?;
+        let previous = std::mem::replace(&mut session.audio_extraction, job);
+        session.touch();
+        if let Err(e) = Self::write_metadata(session) {
+            session.audio_extraction = previous;
+            return Err(format!("Failed to persist extraction recovery metadata: {e}"));
+        }
+        Ok(())
     }
 
     /// Get all sessions with in-progress extraction jobs (for resume on startup).

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "file-drop")]
-#[command(about = "Temporary file parking server — upload once, download once, auto-expire")]
+#[command(about = "Temporary file parking server — upload once, retry downloads until expiry")]
 struct Cli {
     /// API key required for uploads
     #[arg(long)]
@@ -47,8 +47,8 @@ struct Cli {
     #[arg(long, default_value = "mp3,opus")]
     ext: String,
 
-    /// File expiry time in seconds (default: 600 = 10min)
-    #[arg(long, default_value = "600")]
+    /// File expiry time in seconds (default: 86400 = 24h)
+    #[arg(long, default_value = "86400")]
     expiry_secs: u64,
 }
 
@@ -66,7 +66,6 @@ struct FileEntry {
     path: PathBuf,
     size: u64,
     created: Instant,
-    downloaded: bool,
 }
 
 type FileStore = Arc<RwLock<HashMap<String, FileEntry>>>;
@@ -315,7 +314,6 @@ async fn handle_upload(
             path: file_path,
             size: total_bytes,
             created: Instant::now(),
-            downloaded: false,
         });
         info!(
             "Parked: {} ({}) -> {} (expires in {}s)",
@@ -344,20 +342,10 @@ async fn handle_download(
     // Strip extension if present (e.g., "uuid.opus" -> "uuid")
     let id = id_with_ext.split('.').next().unwrap_or(&id_with_ext).to_string();
     let (path, original_name) = {
-        let mut files = state.files.write().await;
-        let entry = files.get_mut(&id).ok_or_else(|| {
-            (StatusCode::NOT_FOUND, Json(json!({"error": "File not found or already downloaded"})))
-        })?;
+        let files = state.files.read().await;
+        let entry = files.get(&id).filter(|entry| entry.created.elapsed() < state.config.expiry)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "File not found or expired"}))))?;
 
-        if entry.downloaded {
-            // Already downloaded — remove and return 404
-            let path = entry.path.clone();
-            files.remove(&id);
-            let _ = fs::remove_file(&path).await;
-            return Err((StatusCode::NOT_FOUND, Json(json!({"error": "File already downloaded"}))));
-        }
-
-        entry.downloaded = true;
         (entry.path.clone(), entry.original_name.clone())
     };
 
@@ -369,21 +357,9 @@ async fn handle_download(
 
     let size = bytes.len();
 
-    // Schedule cleanup
-    let files = state.files.clone();
-    let id_clone = id.clone();
-    tokio::spawn(async move {
-        let mut files = files.write().await;
-        if let Some(entry) = files.remove(&id_clone) {
-            let _ = fs::remove_file(&entry.path).await;
-        }
-    });
-
-    info!("Downloaded: {} ({}) -> removed", original_name, format_size(size as u64));
-    {
-        let files = state.files.read().await;
-        print_storage_info(&state.config, &files);
-    }
+    // Creating a response does not mean the remote peer received every byte.
+    // Retain the source for retries until the normal expiry task removes it.
+    info!("Downloaded: {} ({})", original_name, format_size(size as u64));
 
     // Determine content type
     let content_type = if original_name.ends_with(".opus") {
@@ -501,4 +477,40 @@ async fn main() {
     info!("Expiry: {}s", cli.expiry_secs);
 
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn downloads_can_retry_until_expiry() {
+        let directory = std::env::temp_dir().join(format!("file-drop-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).await.unwrap();
+        let path = directory.join("audio.opus");
+        fs::write(&path, b"audio bytes").await.unwrap();
+        let state = AppState {
+            config: AppConfig {
+                api_key: "test".into(), storage_dir: directory.clone(), max_size: 100,
+                allowed_ext: vec!["opus".into()], expiry: Duration::from_secs(60),
+            },
+            files: Arc::new(RwLock::new(HashMap::from([("test".into(), FileEntry {
+                original_name: "audio.opus".into(), path: path.clone(), size: 11,
+                created: Instant::now(),
+            })]))),
+        };
+        for _ in 0..2 {
+            let response = handle_download(State(state.clone()), Path("test.opus".into()))
+                .await.unwrap().into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 100).await.unwrap();
+            assert_eq!(body.as_ref(), b"audio bytes");
+        }
+        assert!(path.exists());
+        state.files.write().await.get_mut("test").unwrap().created =
+            Instant::now() - Duration::from_secs(61);
+        let result = handle_download(State(state), Path("test.opus".into())).await;
+        assert!(matches!(result, Err((StatusCode::NOT_FOUND, _))));
+        fs::remove_dir_all(directory).await.unwrap();
+    }
 }

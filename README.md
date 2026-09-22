@@ -35,6 +35,10 @@ meeting-notes-daemon serve --port 8080 --data-dir ~/my-recordings --web-ui
 
 Open `http://127.0.0.1:33487` in your browser.
 
+For durable transcription results and a shared recordings admin, connect
+[GdayMeetings](https://github.com/rankun203/gday-meetings). See the
+[setup and migration guide](docs/gday-meetings.md).
+
 ### macOS recording permissions
 
 When running from this repository, use the macOS launcher:

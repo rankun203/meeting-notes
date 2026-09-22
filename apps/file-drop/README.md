@@ -1,6 +1,6 @@
 # file-drop
 
-Temporary file parking server. Upload once, download once, auto-expire.
+Temporary file parking server. Upload once, download until expiry, auto-expire.
 
 Designed for ephemeral file transfer between services — e.g., parking audio files for a GPU worker to download.
 
@@ -44,7 +44,7 @@ API key can also be passed as a query parameter: `?api_key=YOUR_SECRET_KEY`
 curl -o meeting.opus http://localhost:8199/d/ec4ae724-9201-42ee-8447-0c84cb1efed2
 ```
 
-No API key required for downloads. File is **deleted immediately** after one successful download.
+No API key required for downloads. Files remain available until expiry so interrupted transfers can retry.
 
 ### Storage info
 
@@ -81,7 +81,7 @@ curl http://localhost:8199/health
 |--------|------|
 | 400 | Bad extension, file too large, empty file, missing filename |
 | 401 | Missing or invalid API key |
-| 404 | File not found or already downloaded |
+| 404 | File not found or expired |
 
 Example:
 ```json
@@ -98,11 +98,11 @@ Example:
 | `--storage-dir` | `./storage` | Directory for parked files |
 | `--max-size` | `104857600` (100MB) | Max file size in bytes |
 | `--ext` | `mp3,opus` | Allowed extensions (comma-separated) |
-| `--expiry-secs` | `600` (10min) | Auto-delete after this many seconds |
+| `--expiry-secs` | `86400` (24h) | Auto-delete after this many seconds |
 
 ## Behavior
 
-- Files are deleted after **one download** or after **expiry** (default 10 min), whichever comes first
+- Files are deleted after **expiry** (default 24 hours); repeated downloads are allowed until then
 - Uploads stream to disk — large files don't consume RAM
 - Size limit enforced both via `Content-Length` header (early reject) and mid-stream (kills upload if exceeded)
-- Storage info printed to logs after every upload/download/expiry
+- Storage info printed to logs after every upload/expiry

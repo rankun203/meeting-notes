@@ -30,6 +30,7 @@ use crate::session::session::SessionInfo;
 use crate::settings::SharedSettings;
 use crate::tags::TagsManager;
 use crate::understanding::{ExtractionClient, ExtractionOutput, TrackInput};
+use super::platform::PlatformClient;
 
 /// Shared state for routes.
 #[derive(Clone)]
@@ -1383,9 +1384,10 @@ async fn run_transcription_pipeline(
         .set_processing_state(session_id, Some("uploading".to_string()))
         .await;
 
+    let platform = PlatformClient::new(file_drop_url, file_drop_api_key);
+    let durable_tasks = platform.available().await?;
     let http = reqwest::Client::new();
     let mut tracks: Vec<TrackInput> = Vec::new();
-    let mut drop_urls: Vec<String> = Vec::new(); // for cleanup on error
 
     for meta in source_meta.iter().filter(|m| !m.filename.is_empty()) {
         let file_path = session_dir.join(&meta.filename);
@@ -1399,11 +1401,10 @@ async fn run_transcription_pipeline(
             .map_err(|e| format!("Failed to read {}: {e}", meta.filename))?;
         let file_size = bytes.len();
 
-        let upload_url = format!(
-            "{}/upload?filename={}", file_drop_url, meta.filename
-        );
+        let upload_url = format!("{}/upload", file_drop_url.trim_end_matches('/'));
         let resp = http
             .post(&upload_url)
+            .query(&[("filename", &meta.filename)])
             .header("Authorization", format!("Bearer {}", file_drop_api_key))
             .body(bytes)
             .send()
@@ -1424,8 +1425,9 @@ async fn run_transcription_pipeline(
         let download_path = upload_result["url"]
             .as_str()
             .ok_or_else(|| "file-drop response missing 'url' field".to_string())?;
-        let download_url = format!("{}{}", file_drop_url, download_path);
-        drop_urls.push(download_url.clone());
+        let download_url = reqwest::Url::parse(&format!("{}/", file_drop_url.trim_end_matches('/')))
+            .and_then(|base| base.join(download_path))
+            .map_err(|e| format!("Invalid audio download URL: {e}"))?.to_string();
 
         let source_type = match meta.source_type {
             crate::audio::source::SourceType::Mic => "mic",
@@ -1434,8 +1436,8 @@ async fn run_transcription_pipeline(
         };
 
         info!(
-            "[{}] Uploaded {} ({} bytes) -> {}",
-            session_id, meta.filename, file_size, download_url
+            "[{}] Uploaded {} ({} bytes)",
+            session_id, meta.filename, file_size
         );
 
         tracks.push(TrackInput {
@@ -1459,24 +1461,54 @@ async fn run_transcription_pipeline(
 
     let client = ExtractionClient::new(extraction_url.to_string(), extraction_key.to_string());
 
+    let (platform_task, result_sink) = if durable_tasks {
+        let title = session_manager.get_session(session_id).await
+            .and_then(|session| session.name).unwrap_or_else(|| session_id.to_owned());
+        let (task, sink) = platform.create_task(session_id, &title, &tracks).await?;
+        (Some(task), Some(sink))
+    } else {
+        (None, None)
+    };
+
+    // Save the task before /run: a lost submission response must not orphan a
+    // worker result. An empty job ID means only the durable task can be polled.
+    if platform_task.is_some() {
+        session_manager.persist_audio_extraction(session_id, Some(
+            crate::session::session::AudioExtractionJob {
+                job_id: String::new(), status: "in_progress".to_string(),
+                submitted_at: Some(chrono::Utc::now()),
+                extraction_url: Some(extraction_url.to_string()),
+                platform_task: platform_task.clone(),
+            }
+        )).await?;
+    }
+
     let job_id = client
-        .submit_job(tracks, language, diarize, None, None)
+        .submit_job_with_result_sink(tracks, language, diarize, None, None, result_sink)
         .await?;
 
     info!("[{}] RunPod job submitted: {}", session_id, job_id);
 
     // Persist job info so it can be resumed if daemon restarts
-    session_manager.set_audio_extraction(session_id, Some(
+    session_manager.persist_audio_extraction(session_id, Some(
         crate::session::session::AudioExtractionJob {
             job_id: job_id.clone(),
             status: "in_progress".to_string(),
             submitted_at: Some(chrono::Utc::now()),
             extraction_url: Some(extraction_url.to_string()),
+            platform_task: platform_task.clone(),
         }
-    )).await;
+    )).await?;
+
+    if let Some(task) = &platform_task {
+        if let Err(e) = platform.update_task(&task.task_id, json!({"runpodJobId": job_id})).await {
+            warn!("[{}] {}", session_id, e);
+        }
+    }
 
     // Poll until completion — no timeout, keep checking forever
-    let output = poll_extraction_job(&client, &job_id, session_id, session_manager).await?;
+    let durable = platform_task.as_ref().map(|task| (&platform, task.task_id.as_str()));
+    let output = poll_extraction_job(Some(&client), &job_id, session_id, session_manager, durable).await?;
 
     info!("[{}] Extraction complete, {} tracks returned", session_id, output.tracks.len());
 
@@ -1935,10 +1967,11 @@ async fn maybe_auto_summarize(
 
 /// Poll an extraction job until completion. No timeout — keeps polling forever.
 async fn poll_extraction_job(
-    client: &ExtractionClient,
+    client: Option<&ExtractionClient>,
     job_id: &str,
     session_id: &str,
     session_manager: &SessionManager,
+    durable: Option<(&PlatformClient, &str)>,
 ) -> Result<ExtractionOutput, String> {
     let mut delay = std::time::Duration::from_secs(2);
     let max_delay = std::time::Duration::from_secs(15);
@@ -1946,7 +1979,44 @@ async fn poll_extraction_job(
     loop {
         tokio::time::sleep(delay).await;
 
-        match client.poll_status(job_id).await? {
+        // The worker persists here before returning to RunPod. This also works
+        // after RunPod has expired the response while the computer was asleep.
+        if let Some((platform, task_id)) = durable {
+            match platform.output(task_id).await {
+                Ok(Some(output)) => return Ok(output),
+                Ok(None) => {},
+                Err(e) => warn!("[{}] Durable result lookup failed: {}", session_id, e),
+            }
+        }
+
+        if (job_id.is_empty() || client.is_none()) && durable.is_some() {
+            session_manager.emit_transcription_progress(session_id, "extracting");
+            delay = (delay * 2).min(max_delay);
+            continue;
+        }
+
+        let client = client.ok_or("No extraction client or durable task available")?;
+        let status = match client.poll_status_detailed(job_id).await {
+            Ok(status) => status,
+            Err(error) => {
+                // A callback may have arrived during the RunPod request.
+                if let Some((platform, task_id)) = durable {
+                    if let Ok(Some(output)) = platform.output(task_id).await {
+                        return Ok(output);
+                    }
+                    if error.terminal {
+                        // Store a bounded category, not RunPod's potentially sensitive traceback.
+                        if let Err(e) = platform.update_task(task_id, json!({
+                            "status": "FAILED", "error": "RunPod extraction ended without a transcript"
+                        })).await {
+                            warn!("[{}] {}", session_id, e);
+                        }
+                    }
+                }
+                return Err(error.message);
+            }
+        };
+        match status {
             Some(output) => return Ok(output),
             None => {
                 session_manager.emit_transcription_progress(session_id, "extracting");
@@ -1972,31 +2042,16 @@ pub async fn resume_pending_extractions(
     info!("Resuming {} pending extraction job(s)...", pending.len());
 
     for (session_id, job) in pending {
-        let extraction_url = match &job.extraction_url {
-            Some(url) => url.clone(),
-            None => {
-                // Fall back to current settings
-                let s = settings.read().await;
-                match &s.audio_extraction_url {
-                    Some(url) => url.clone(),
-                    None => {
-                        warn!("No extraction URL for pending job {} (session {})", job.job_id, session_id);
-                        continue;
-                    }
-                }
-            }
-        };
-
-        let extraction_key = {
-            let s = settings.read().await;
-            match &s.audio_extraction_api_key {
-                Some(key) => key.clone(),
-                None => {
-                    warn!("No extraction API key for pending job {} (session {})", job.job_id, session_id);
-                    continue;
-                }
-            }
-        };
+        let s = settings.read().await;
+        let extraction_url = job.extraction_url.clone().or_else(|| s.audio_extraction_url.clone());
+        let extraction_key = s.audio_extraction_api_key.clone();
+        drop(s);
+        let client = extraction_url.zip(extraction_key)
+            .map(|(url, key)| ExtractionClient::new(url, key));
+        if client.is_none() && job.platform_task.is_none() {
+            warn!("No extraction credentials or durable task for session {}", session_id);
+            continue;
+        }
 
         let sm = session_manager.clone();
         let pm = people_manager.clone();
@@ -2008,10 +2063,14 @@ pub async fn resume_pending_extractions(
         info!("Resuming extraction job {} for session {}", job.job_id, session_id);
 
         tokio::spawn(async move {
-            let client = ExtractionClient::new(extraction_url, extraction_key);
+            let platform_key = stg.read().await.file_drop_api_key.clone();
+            let platform = job.platform_task.as_ref()
+                .map(|task| PlatformClient::new(&task.base_url, &platform_key));
+            let durable = platform.as_ref().zip(job.platform_task.as_ref())
+                .map(|(platform, task)| (platform, task.task_id.as_str()));
 
             // Resume polling
-            let result = poll_extraction_job(&client, &job.job_id, &session_id, &sm).await;
+            let result = poll_extraction_job(client.as_ref(), &job.job_id, &session_id, &sm, durable).await;
 
             match result {
                 Ok(output) => {
@@ -2025,7 +2084,9 @@ pub async fn resume_pending_extractions(
                         Ok(info) => info,
                         Err(e) => {
                             error!("[{}] Failed to get session info for resumed job: {}", session_id, e);
-                            sm.set_audio_extraction(&session_id, None).await;
+                            if job.platform_task.is_none() {
+                                sm.set_audio_extraction(&session_id, None).await;
+                            }
                             return;
                         }
                     };
@@ -2054,7 +2115,9 @@ pub async fn resume_pending_extractions(
                             error!("[{}] Resumed transcription post-processing failed: {}", session_id, e);
                             sm.set_processing_state(&session_id, None).await;
                             sm.emit_transcription_failed(&session_id, &e);
-                            sm.set_audio_extraction(&session_id, None).await;
+                            if job.platform_task.is_none() {
+                                sm.set_audio_extraction(&session_id, None).await;
+                            }
                         }
                     }
                 }
@@ -2062,7 +2125,11 @@ pub async fn resume_pending_extractions(
                     error!("[{}] Resumed extraction job failed: {}", session_id, e);
                     sm.set_processing_state(&session_id, None).await;
                     sm.emit_transcription_failed(&session_id, &e);
-                    sm.set_audio_extraction(&session_id, None).await;
+                    // Keep the durable location when either service is unavailable.
+                    // A later restart can still recover an expired RunPod response.
+                    if job.platform_task.is_none() {
+                        sm.set_audio_extraction(&session_id, None).await;
+                    }
                 }
             }
         });
@@ -2600,6 +2667,26 @@ async fn list_models(
 #[cfg(test)]
 mod upload_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn durable_result_recovers_without_runpod_credentials_or_submission_response() {
+        let app = Router::new().route("/api/platform/tasks/task", get(|| async {
+            Json(json!({"outputs":[{"type":"TRANSCRIPT_OUTPUT","body":{
+                "tracks":{},"language":"en","model":"durable"
+            }}]}))
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let dir = std::env::temp_dir().join(format!("gday-recovery-test-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(dir.clone());
+        let platform = PlatformClient::new(&url, "test-key");
+        let output = poll_extraction_job(None, "", "session", &manager, Some((&platform, "task")))
+            .await.unwrap();
+        assert_eq!(output.model, "durable");
+        server.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn media_upload_extensions_are_allowlisted_case_insensitively() {

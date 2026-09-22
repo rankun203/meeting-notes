@@ -1,5 +1,6 @@
 pub mod analytics;
 mod changes;
+mod platform;
 pub mod routes;
 pub mod web_ui;
 pub mod ws;

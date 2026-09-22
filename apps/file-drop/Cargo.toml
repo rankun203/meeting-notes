@@ -2,7 +2,7 @@
 name = "file-drop"
 version = "0.1.0"
 edition = "2021"
-description = "Temporary file parking server — upload once, download once, auto-expire"
+description = "Temporary file parking server — upload once, retry downloads until expiry"
 
 [dependencies]
 axum = "0.8"

@@ -19,3 +19,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/audio_extraction"]
+
+[dependency-groups]
+transfer-test = ["requests>=2.31.0"]

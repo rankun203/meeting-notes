@@ -179,6 +179,15 @@ pub struct AudioExtractionJob {
     pub submitted_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub extraction_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_task: Option<PlatformTask>,
+}
+
+/// Durable result location; credentials remain in settings, never session metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformTask {
+    pub base_url: String,
+    pub task_id: String,
 }
 
 /// Written to metadata.json in the session folder.

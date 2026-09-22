@@ -12,12 +12,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-import requests
 import whisperx
 
 from opencc import OpenCC
 
 from audio_extraction.pipeline import TranscriptionPipeline
+from audio_extraction.transfer import download_audio, persist_output
 
 logger = logging.getLogger(__name__)
 
@@ -66,24 +66,6 @@ def get_pipeline() -> TranscriptionPipeline:
     return _pipeline
 
 
-def download_audio(url: str, suffix: str = ".audio") -> str:
-    """Download audio from URL to a temporary file. Returns the file path."""
-    logger.info("Downloading %s", url)
-    t0 = time.time()
-    resp = requests.get(url, timeout=300, stream=True)
-    resp.raise_for_status()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    size = 0
-    for chunk in resp.iter_content(chunk_size=8192):
-        tmp.write(chunk)
-        size += len(chunk)
-    tmp.close()
-    elapsed = time.time() - t0
-    logger.info("Downloaded %.1f MB in %.1fs (%.1f MB/s) -> %s",
-                size / 1e6, elapsed, size / 1e6 / max(elapsed, 0.001), tmp.name)
-    return tmp.name
-
-
 def right_trim_silence(audio: np.ndarray, sr: int = 16000, threshold: float = 0.001, tail: float = 0.5) -> np.ndarray:
     """Remove trailing silence from audio array. Keep `tail` seconds after last non-silent sample."""
     indices = np.nonzero(np.abs(audio) > threshold)[0]
@@ -93,7 +75,7 @@ def right_trim_silence(audio: np.ndarray, sr: int = 16000, threshold: float = 0.
     return audio[:end]
 
 
-def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
+def _download_and_decode(track: dict, directory: str) -> tuple[str, str, str, any, float]:
     """Download and decode audio for a track (CPU-bound). Returns (track_name, source_type, audio_path, audio_array, duration)."""
     audio_url = track["audio_url"]
     track_name = track["track_name"]
@@ -103,7 +85,7 @@ def _download_and_decode(track: dict) -> tuple[str, str, str, any, float]:
     if "." not in path.rsplit("/", 1)[-1]:
         raise ValueError(f"Cannot determine file extension from URL: {audio_url}")
     suffix = "." + path.rsplit(".", 1)[-1]
-    audio_path = download_audio(audio_url, suffix=suffix)
+    audio_path = download_audio(audio_url, suffix=suffix, directory=directory)
 
     # Pre-decode audio (CPU-bound ffmpeg work) so it's ready for GPU
     logger.info("Decoding %s", track_name)
@@ -136,7 +118,7 @@ def _truncate_for_log(obj, max_str_len=128, max_list_len=2):
 
 def handler(event: dict) -> dict:
     """RunPod serverless handler."""
-    logger.info("Request body:\n%s", json.dumps(_truncate_for_log(event), ensure_ascii=False))
+    logger.info("Received extraction request")
 
     inp = event["input"]
     tracks = inp["tracks"]
@@ -158,18 +140,16 @@ def handler(event: dict) -> dict:
 
     pipeline = get_pipeline()
     results = {}
-    downloaded_files = []
     track_timings: list[dict] = []
 
-    try:
+    with tempfile.TemporaryDirectory(prefix="audio-extraction-") as directory:
         # Download and decode all tracks in parallel (CPU-bound) while
         # overlapping with GPU processing of earlier tracks.
-        with ThreadPoolExecutor(max_workers=len(tracks)) as pool:
-            futures = [pool.submit(_download_and_decode, t) for t in tracks]
+        with ThreadPoolExecutor(max_workers=min(4, max(1, len(tracks)))) as pool:
+            futures = [pool.submit(_download_and_decode, t, directory) for t in tracks]
 
             for idx, future in enumerate(futures):
                 track_name, source_type, audio_path, audio, duration = future.result()
-                downloaded_files.append(audio_path)
 
                 logger.info("Track %d/%d: \"%s\" (%s, %.1fs)",
                             idx + 1, len(tracks), track_name, source_type, duration)
@@ -211,13 +191,6 @@ def handler(event: dict) -> dict:
                     "source_type": source_type,
                     **result,
                 }
-    finally:
-        for path in downloaded_files:
-            try:
-                os.unlink(path)
-            except OSError as e:
-                logger.warning("Failed to clean up temp file %s: %s", path, e)
-
     total_elapsed = time.time() - job_t0
 
     # Single summary log with per-track step timings and total
@@ -244,5 +217,8 @@ def handler(event: dict) -> dict:
     }
 
     logger.info("Response body:\n%s", json.dumps(_truncate_for_log(response), ensure_ascii=False))
+
+    if inp.get("result_sink"):
+        persist_output(inp["result_sink"], response)
 
     return response

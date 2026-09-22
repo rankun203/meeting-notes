@@ -348,3 +348,24 @@ This is a [uv](https://docs.astral.sh/uv/)-managed project. See `pyproject.toml`
 uv sync
 uv run python -m audio_extraction
 ```
+
+## Transfer reliability and durable results
+
+Downloads retry transient connection/read failures (including truncated streamed bodies),
+HTTP 408/429, and selected 5xx responses up to four attempts with 1/2/4-second backoff.
+Each attempt starts from byte zero; incomplete files are removed. A per-job temporary
+directory also cleans up decoded tracks if another track or GPU processing fails.
+The source URL must allow repeated downloads and remain valid throughout queueing.
+
+An optional `input.result_sink` object accepts `url` and `token`. Before returning a
+successful job, the worker POSTs `{"type":"TRANSCRIPT_OUTPUT","body":<output>}` with
+`Authorization: Bearer <token>`. The sink must persist the output before returning a
+2xx response and upsert by task/output type, because retries can deliver duplicates.
+Use a task-scoped callback capability; request bodies and capabilities are not logged.
+A failed callback fails the job instead of claiming that an unpersisted result is durable.
+
+GPU-free transfer regressions use the project test dependency group:
+
+```bash
+uv run --only-group transfer-test env PYTHONPATH=src python -m unittest discover -s tests -v
+```
