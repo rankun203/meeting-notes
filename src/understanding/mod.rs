@@ -22,8 +22,6 @@ struct RunPodRunRequest {
 
 #[derive(Debug, Serialize)]
 struct ExtractionInput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result_sink: Option<ResultSink>,
     tracks: Vec<TrackInput>,
     language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -33,19 +31,6 @@ struct ExtractionInput {
     min_speakers: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_speakers: Option<u32>,
-}
-
-/// Task-scoped durable output callback capability. Never log its token.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ResultSink {
-    pub url: String,
-    pub token: String,
-}
-
-impl std::fmt::Debug for ResultSink {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ResultSink { <redacted> }")
-    }
 }
 
 /// RunPod /run response.
@@ -137,21 +122,8 @@ impl ExtractionClient {
         min_speakers: Option<u32>,
         max_speakers: Option<u32>,
     ) -> Result<String, String> {
-        self.submit_job_with_result_sink(tracks, language, diarize, min_speakers, max_speakers, None).await
-    }
-
-    pub async fn submit_job_with_result_sink(
-        &self,
-        tracks: Vec<TrackInput>,
-        language: &str,
-        diarize: bool,
-        min_speakers: Option<u32>,
-        max_speakers: Option<u32>,
-        result_sink: Option<ResultSink>,
-    ) -> Result<String, String> {
         let body = RunPodRunRequest {
             input: ExtractionInput {
-                result_sink,
                 tracks,
                 language: language.to_string(),
                 model_size: None,

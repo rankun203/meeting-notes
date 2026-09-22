@@ -1419,13 +1419,7 @@ async fn run_gday_extraction(
         .get_pending_extractions()
         .await
         .into_iter()
-        .find(|(id, job)| {
-            id == session_id
-                && job
-                    .platform_task
-                    .as_ref()
-                    .is_some_and(|task| task.user_auth)
-        })
+        .find(|(id, job)| id == session_id && job.platform_task.is_some())
         .and_then(|(_, job)| job.platform_task);
     let task = if let Some(task) = pending {
         if task.base_url != origin {
@@ -1433,9 +1427,7 @@ async fn run_gday_extraction(
         }
         task
     } else {
-        if !platform.available().await? {
-            return Err("This server does not support Gday tasks".into());
-        }
+        platform.ensure_transcription_available().await?;
         manager
             .set_processing_state(session_id, Some("uploading".into()))
             .await;
@@ -1476,7 +1468,6 @@ async fn run_gday_extraction(
         let task = crate::session::session::PlatformTask {
             base_url: origin.into(),
             task_id: String::new(),
-            user_auth: true,
             submission: Some(crate::session::session::GdaySubmission {
                 idempotency_key: Uuid::new_v4().to_string(),
                 title,
@@ -1559,13 +1550,20 @@ pub(super) async fn run_transcription_pipeline(
             ).await;
         }
     }
+    if session_manager
+        .get_pending_extractions()
+        .await
+        .iter()
+        .any(|(id, job)| id == session_id && job.platform_task.is_some())
+    {
+        return Err("Sign in to the Gday server that owns this meeting's pending task".into());
+    }
+    // This is the separate standalone file-drop + RunPod workflow.
     // Step 1: Upload audio files to file-drop
     session_manager
         .set_processing_state(session_id, Some("uploading".to_string()))
         .await;
 
-    let platform = PlatformClient::new(file_drop_url, file_drop_api_key);
-    let durable_tasks = platform.available().await?;
     let http = reqwest::Client::new();
     let mut tracks: Vec<TrackInput> = Vec::new();
 
@@ -1641,30 +1639,8 @@ pub(super) async fn run_transcription_pipeline(
 
     let client = ExtractionClient::new(extraction_url.to_string(), extraction_key.to_string());
 
-    let (platform_task, result_sink) = if durable_tasks {
-        let title = session_manager.get_session(session_id).await
-            .and_then(|session| session.name).unwrap_or_else(|| session_id.to_owned());
-        let (task, sink) = platform.create_task(session_id, &title, &tracks).await?;
-        (Some(task), Some(sink))
-    } else {
-        (None, None)
-    };
-
-    // Save the task before /run: a lost submission response must not orphan a
-    // worker result. An empty job ID means only the durable task can be polled.
-    if platform_task.is_some() {
-        session_manager.persist_audio_extraction(session_id, Some(
-            crate::session::session::AudioExtractionJob {
-                job_id: String::new(), status: "in_progress".to_string(),
-                submitted_at: Some(chrono::Utc::now()),
-                extraction_url: Some(extraction_url.to_string()),
-                platform_task: platform_task.clone(),
-            }
-        )).await?;
-    }
-
     let job_id = client
-        .submit_job_with_result_sink(tracks, language, diarize, None, None, result_sink)
+        .submit_job(tracks, language, diarize, None, None)
         .await?;
 
     info!("[{}] RunPod job submitted: {}", session_id, job_id);
@@ -1676,19 +1652,11 @@ pub(super) async fn run_transcription_pipeline(
             status: "in_progress".to_string(),
             submitted_at: Some(chrono::Utc::now()),
             extraction_url: Some(extraction_url.to_string()),
-            platform_task: platform_task.clone(),
+            platform_task: None,
         }
     )).await?;
 
-    if let Some(task) = &platform_task {
-        if let Err(e) = platform.update_task(&task.task_id, json!({"runpodJobId": job_id})).await {
-            warn!("[{}] {}", session_id, e);
-        }
-    }
-
-    // Poll until completion — no timeout, keep checking forever
-    let durable = platform_task.as_ref().map(|task| (&platform, task.task_id.as_str()));
-    let output = poll_extraction_job(Some(&client), &job_id, session_id, session_manager, durable).await?;
+    let output = poll_extraction_job(&client, &job_id, session_id, session_manager).await?;
 
     info!("[{}] Extraction complete, {} tracks returned", session_id, output.tracks.len());
 
@@ -2145,58 +2113,18 @@ async fn maybe_auto_summarize(
 }
 
 
-/// Poll an extraction job until completion. No timeout — keeps polling forever.
+/// Poll a standalone RunPod job. Gday tasks use their own OAuth-authenticated API.
 async fn poll_extraction_job(
-    client: Option<&ExtractionClient>,
+    client: &ExtractionClient,
     job_id: &str,
     session_id: &str,
     session_manager: &SessionManager,
-    durable: Option<(&PlatformClient, &str)>,
 ) -> Result<ExtractionOutput, String> {
     let mut delay = std::time::Duration::from_secs(2);
     let max_delay = std::time::Duration::from_secs(15);
-
     loop {
         tokio::time::sleep(delay).await;
-
-        // The worker persists here before returning to RunPod. This also works
-        // after RunPod has expired the response while the computer was asleep.
-        if let Some((platform, task_id)) = durable {
-            match platform.output(task_id).await {
-                Ok(Some(output)) => return Ok(output),
-                Ok(None) => {},
-                Err(e) => warn!("[{}] Durable result lookup failed: {}", session_id, e),
-            }
-        }
-
-        if (job_id.is_empty() || client.is_none()) && durable.is_some() {
-            session_manager.emit_transcription_progress(session_id, "extracting");
-            delay = (delay * 2).min(max_delay);
-            continue;
-        }
-
-        let client = client.ok_or("No extraction client or durable task available")?;
-        let status = match client.poll_status_detailed(job_id).await {
-            Ok(status) => status,
-            Err(error) => {
-                // A callback may have arrived during the RunPod request.
-                if let Some((platform, task_id)) = durable {
-                    if let Ok(Some(output)) = platform.output(task_id).await {
-                        return Ok(output);
-                    }
-                    if error.terminal {
-                        // Store a bounded category, not RunPod's potentially sensitive traceback.
-                        if let Err(e) = platform.update_task(task_id, json!({
-                            "status": "FAILED", "error": "RunPod extraction ended without a transcript"
-                        })).await {
-                            warn!("[{}] {}", session_id, e);
-                        }
-                    }
-                }
-                return Err(error.message);
-            }
-        };
-        match status {
+        match client.poll_status(job_id).await? {
             Some(output) => return Ok(output),
             None => {
                 session_manager.emit_transcription_progress(session_id, "extracting");
@@ -2245,28 +2173,18 @@ pub async fn resume_pending_extractions(
         info!("Resuming extraction job {} for session {}", job.job_id, session_id);
 
         tokio::spawn(async move {
-            let platform_key = stg.read().await.file_drop_api_key.clone();
-            let platform = job.platform_task.as_ref().map(|task| {
-                if task.user_auth {
-                    PlatformClient::for_user(&task.base_url, auth.clone())
-                } else {
-                    PlatformClient::new(&task.base_url, &platform_key)
-                }
-            });
-            let durable = platform.as_ref().zip(job.platform_task.as_ref())
-                .map(|(platform, task)| (platform, task.task_id.as_str()));
-
-            // Resume polling
-            let result = if job.platform_task.as_ref().is_some_and(|task| task.user_auth) {
-                let platform = platform.as_ref().unwrap();
-                match ensure_gday_task(
-                    platform, &session_id, job.platform_task.as_ref().unwrap().clone(), &sm,
-                ).await {
-                    Ok(task) => poll_gday_task(platform, &task.task_id, &session_id, &sm).await,
+            let result = if let Some(task) = &job.platform_task {
+                // Previously saved Gday tasks also require the owning user's login.
+                let platform = PlatformClient::for_user(&task.base_url, auth.clone());
+                match ensure_gday_task(&platform, &session_id, task.clone(), &sm).await {
+                    Ok(task) => poll_gday_task(&platform, &task.task_id, &session_id, &sm).await,
                     Err(error) => Err(error),
                 }
             } else {
-                poll_extraction_job(client.as_ref(), &job.job_id, &session_id, &sm, durable).await
+                poll_extraction_job(
+                    client.as_ref().expect("standalone credentials checked"),
+                    &job.job_id, &session_id, &sm,
+                ).await
             };
 
             match result {
@@ -2866,23 +2784,123 @@ mod upload_tests {
     use super::*;
 
     #[tokio::test]
-    async fn durable_result_recovers_without_runpod_credentials_or_submission_response() {
-        let app = Router::new().route("/api/platform/tasks/task", get(|| async {
-            Json(json!({"outputs":[{"type":"TRANSCRIPT_OUTPUT","body":{
-                "tracks":{},"language":"en","model":"durable"
-            }}]}))
-        }));
+    async fn standalone_transcription_does_not_probe_gday_or_create_platform_tasks() {
+        use axum::http::HeaderMap;
+        async fn unexpected() -> StatusCode {
+            panic!("Standalone transcription called a Gday endpoint");
+        }
+        let app = Router::new()
+            .route(
+                "/upload",
+                post(|headers: HeaderMap| async move {
+                    assert_eq!(headers["authorization"], "Bearer filedrop-key");
+                    Json(json!({"url":"/d/audio.opus"}))
+                }),
+            )
+            .route(
+                "/run",
+                post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                    assert_eq!(headers["authorization"], "Bearer runpod-key");
+                    assert!(body["input"].get("result_sink").is_none());
+                    assert_eq!(body["input"]["tracks"][0]["track_name"], "mic");
+                    Json(json!({"id":"standalone-job","status":"IN_QUEUE"}))
+                }),
+            )
+            .route(
+                "/status/standalone-job",
+                get(|| async {
+                    Json(json!({"id":"standalone-job","status":"COMPLETED","output":{
+                        "tracks":{},"language":"en","model":"standalone"
+                    }}))
+                }),
+            )
+            .fallback(unexpected);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-        let dir = std::env::temp_dir().join(format!("gday-recovery-test-{}", Uuid::new_v4()));
-        let manager = SessionManager::new(dir.clone());
-        let platform = PlatformClient::new(&url, "test-key");
-        let output = poll_extraction_job(None, "", "session", &manager, Some((&platform, "task")))
-            .await.unwrap();
-        assert_eq!(output.model, "durable");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let directory =
+            std::env::temp_dir().join(format!("standalone-transcription-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(directory.join("recordings"));
+        let info = manager
+            .create_session(crate::session::config::SessionConfig::default())
+            .await;
+        let session_dir = manager.session_dir(&info.id);
+        std::fs::write(session_dir.join("mic.opus"), b"fixture").unwrap();
+        let sources = vec![crate::session::session::SourceMetadata {
+            filename: "mic.opus".into(),
+            source_type: crate::audio::source::SourceType::Mic,
+            source_label: "mic".into(),
+            channels: 1,
+            raw_sample_rate: 48000,
+        }];
+        let people = PeopleManager::new(&directory);
+        let files = FilesDb::new(directory.join("recordings"));
+        run_transcription_pipeline(
+            &info.id,
+            &session_dir,
+            "en",
+            &sources,
+            &url,
+            "runpod-key",
+            &url,
+            "filedrop-key",
+            false,
+            false,
+            0.75,
+            &manager,
+            &people,
+            &files,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(std::fs::read_to_string(session_dir.join("transcript.json"))
+            .unwrap()
+            .contains("standalone"));
+
+        // An old Gday record cannot be resumed with the standalone file-drop key.
+        let old_task = serde_json::from_value(json!({
+            "base_url":url,"task_id":"previous-gday-task","user_auth":false
+        }))
+        .unwrap();
+        manager
+            .persist_audio_extraction(
+                &info.id,
+                Some(crate::session::session::AudioExtractionJob {
+                    job_id: String::new(),
+                    status: "in_progress".into(),
+                    submitted_at: None,
+                    extraction_url: None,
+                    platform_task: Some(old_task),
+                }),
+            )
+            .await
+            .unwrap();
+        let error = run_transcription_pipeline(
+            &info.id,
+            &session_dir,
+            "en",
+            &sources,
+            &url,
+            "runpod-key",
+            &url,
+            "filedrop-key",
+            false,
+            false,
+            0.75,
+            &manager,
+            &people,
+            &files,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Sign in"));
+        assert_eq!(manager.get_pending_extractions().await.len(), 1);
         server.abort();
-        let _ = std::fs::remove_dir_all(dir);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -49,7 +49,6 @@ Object.assign(process.env, {
   DATABASE_ADAPTER: "sqlite",
   DATABASE_URI: `file:${directory}/payload.db`,
   AUTH_DATABASE_URI: `file:${directory}/auth.db`,
-  GDAY_API_TOKEN: "",
   RUNPOD_ENDPOINT_URL: "",
   RUNPOD_API_KEY: "",
   OIDC_UPSTREAM_ISSUER: "",

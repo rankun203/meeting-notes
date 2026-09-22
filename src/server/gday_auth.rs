@@ -491,7 +491,7 @@ mod tests {
         Audience, EmptyAdditionalClaims, JsonWebKeyId, PkceCodeVerifier, PrivateSigningKey,
         StandardClaims, SubjectIdentifier,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct MockProvider {
         origin: String,
@@ -500,6 +500,7 @@ mod tests {
         submissions: Mutex<Vec<Value>>,
         refreshes: AtomicUsize,
         uploads: AtomicUsize,
+        unavailable: AtomicBool,
     }
     async fn metadata(State(state): State<Arc<MockProvider>>) -> Json<Value> {
         let issuer = format!("{}/api/auth", state.origin);
@@ -589,7 +590,7 @@ mod tests {
         Json(body): Json<Value>,
     ) -> Json<Value> {
         assert_eq!(headers["authorization"], "Bearer access-two");
-        assert_eq!(body["execute"], true);
+        assert!(body.get("execute").is_none());
         assert_eq!(body["executionOptions"]["language"], "en");
         assert_eq!(
             body["inputs"][0]["url"],
@@ -636,6 +637,7 @@ mod tests {
             submissions: Mutex::new(Vec::new()),
             refreshes: AtomicUsize::new(0),
             uploads: AtomicUsize::new(0),
+            unavailable: AtomicBool::new(false),
         });
         let app = Router::new()
             .route("/.well-known/openid-configuration", get(metadata))
@@ -665,7 +667,16 @@ mod tests {
             .route("/api/platform/tasks/durable-task", get(task_output))
             .route(
                 "/api/platform/capabilities",
-                get(|| async { Json(json!({"durableTasks":true,"transcription":true})) }),
+                get(|State(state): State<Arc<MockProvider>>| async move {
+                    if state.unavailable.load(Ordering::SeqCst) {
+                        (StatusCode::NOT_FOUND, Json(json!({})))
+                    } else {
+                        (
+                            StatusCode::OK,
+                            Json(json!({"durableTasks":true,"transcription":true})),
+                        )
+                    }
+                }),
             )
             .with_state(state.clone());
         let server = tokio::spawn(async move {
@@ -747,6 +758,14 @@ mod tests {
         assert_eq!(second.unwrap(), "access-two");
         assert_eq!(state.refreshes.load(Ordering::SeqCst), 1);
         assert!(auth.access_token("https://another.example").await.is_err());
+
+        state.unavailable.store(true, Ordering::SeqCst);
+        let platform = super::super::platform::PlatformClient::for_user(&base, auth.clone());
+        assert!(
+            platform.ensure_transcription_available().await.is_err(),
+            "Gday 404 must never enable a shared-key fallback"
+        );
+        state.unavailable.store(false, Ordering::SeqCst);
 
         let recordings = directory.join("recordings");
         let manager = crate::session::SessionManager::new(recordings.clone());

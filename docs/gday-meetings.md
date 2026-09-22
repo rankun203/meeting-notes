@@ -37,19 +37,22 @@ downloaded as JSON. User access/refresh tokens never appear in browser responses
 session metadata. Preserve access to the owning Gday account/server while tasks are
 outstanding. If sign-in expires or is revoked, sign in again and retry the meeting.
 
-## Compatibility and recovery limits
+## Standalone transcription and recovery
 
-For the signed-out direct RunPod path, a capabilities 404 selects legacy file-drop;
-authentication or service errors do not silently disable persistence. Legacy file-drop now retains downloads
-until expiry (24 hours by default), allowing the worker to retry interrupted reads.
-Explicit `--expiry-secs` deployment arguments still override the new default.
+Gday uploads, task creation and task retrieval always require the signed-in user's
+OAuth grant. There is no shared-key Gday mode, capability-based fallback, externally
+submitted Gday job, or client task-status PATCH. Gday owns worker execution and status.
 
-For legacy client-submitted RunPod jobs, a lost acknowledgement still leaves a durable
-task recoverable on daemon restart even without a RunPod job ID. Such a task can remain pending when
-the provider never accepted the request; inspect it before manually retrying to
-avoid duplicate GPU work. Lookup failures preserve task references for another
-restart. Task failure status only changes for an explicit terminal RunPod result,
-not an unavailable or expired status response.
+The separately configured standalone file-drop + direct RunPod workflow remains
+available when signed out. It uploads only to that file-drop service and submits directly
+to RunPod; it never probes or creates Gday tasks. Do not configure the standalone
+file-drop URL to point at Gday. Its input files expire after 24 hours by default, and
+its results are subject to RunPod response retention.
+
+Previously saved Gday task references are retained and now require login to the owning
+server/account. Their old authentication-mode flag is ignored. A pending Gday task
+cannot be silently replaced by standalone transcription when signed out. OAuth/API
+errors preserve the durable reference for a later authenticated retry.
 
 Deployment of these changes is separate from source verification: rebuilding only
 the desktop cannot fix transfer behavior inside an old worker or file-drop server.

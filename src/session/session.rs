@@ -188,8 +188,6 @@ pub struct AudioExtractionJob {
 pub struct PlatformTask {
     pub base_url: String,
     pub task_id: String,
-    #[serde(default)]
-    pub user_auth: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submission: Option<GdaySubmission>,
 }
