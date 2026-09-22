@@ -188,6 +188,20 @@ pub struct AudioExtractionJob {
 pub struct PlatformTask {
     pub base_url: String,
     pub task_id: String,
+    #[serde(default)]
+    pub user_auth: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<GdaySubmission>,
+}
+
+/// Saved before submitting a Gday task so lost acknowledgements can be retried exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GdaySubmission {
+    pub idempotency_key: String,
+    pub title: String,
+    pub tracks: Vec<crate::understanding::TrackInput>,
+    pub language: String,
+    pub diarize: bool,
 }
 
 /// Written to metadata.json in the session folder.

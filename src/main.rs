@@ -195,11 +195,13 @@ async fn main() {
                 );
             }
 
+            let gday_auth = server::gday_auth::GdayAuth::load(&data_dir);
+
             // Resume any pending extraction jobs from before restart
             server::routes::resume_pending_extractions(
                 manager.clone(), people_manager.clone(),
                 files_db.clone(), shared_settings.clone(),
-                shared_secrets.clone(), tags_manager.clone(),
+                shared_secrets.clone(), tags_manager.clone(), gday_auth.clone(),
             ).await;
 
             let claude_runner = meeting_notes_daemon::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
@@ -207,7 +209,7 @@ async fn main() {
             let shutdown_manager = manager.clone();
             let app = server::create_router(
                 manager, people_manager, shared_settings, files_db, tags_manager,
-                conversation_manager, shared_secrets, claude_runner, web_ui,
+                conversation_manager, shared_secrets, claude_runner, web_ui, gday_auth.clone(),
             );
 
             let addr = format!("{}:{}", host, port);

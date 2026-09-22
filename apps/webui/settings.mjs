@@ -1,3 +1,4 @@
+import { GdaySettings } from './gday-settings.mjs';
 import { AnalyticsSettings } from './analytics-settings.mjs';
 import { useState, useEffect, useRef } from 'react';
 import { jsx, jsxs, Fragment, api, INPUT_CLS, LABEL_CLS, tagColor, normalizeTagName, autoResize, TagIcon, ChevronIcon } from './utils.mjs';
@@ -479,6 +480,8 @@ export function SettingsPage({ category, onSelectSession }) {
 
   const categoryContent = {
     services: jsxs('div', { className: 'space-y-6', children: [
+      jsx(GdaySettings, {}),
+      jsx('p', { className: 'text-xs text-gray-500', children: 'The direct RunPod settings below are used when you are signed out of Gday Meetings.' }),
       jsxs('div', { className: 'space-y-4', children: [
         jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Audio Extraction (RunPod)' }),
         jsxs('div', { children: [

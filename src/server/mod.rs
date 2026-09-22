@@ -1,6 +1,7 @@
 pub mod analytics;
 mod changes;
 mod platform;
+pub mod gday_auth;
 pub mod routes;
 pub mod web_ui;
 pub mod ws;
@@ -29,9 +30,11 @@ pub fn create_router(
     llm_secrets: SharedSecrets,
     claude_runner: ClaudeCodeRunner,
     enable_web_ui: bool,
+    gday_auth: std::sync::Arc<gday_auth::GdayAuth>,
 ) -> Router {
     let llm_secrets_for_analytics = llm_secrets.clone();
     let state = AppState {
+        gday_auth,
         session_manager,
         people_manager,
         settings,
@@ -48,6 +51,7 @@ pub fn create_router(
     let api_routes = Router::new()
         .merge(analytics::routes(llm_secrets_for_analytics))
         .merge(routes::session_routes())
+        .merge(gday_auth::routes(state.gday_auth.clone()))
         .merge(routes::conversation_routes())
         .merge(routes::claude_routes())
         .merge(ws::ws_routes());

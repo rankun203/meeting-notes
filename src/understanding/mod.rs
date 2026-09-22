@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 /// Input track descriptor sent to audio-extraction.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackInput {
     pub audio_url: String,
     pub track_name: String,

@@ -35,6 +35,7 @@ use super::platform::PlatformClient;
 /// Shared state for routes.
 #[derive(Clone)]
 pub struct AppState {
+    pub gday_auth: std::sync::Arc<super::gday_auth::GdayAuth>,
     pub session_manager: SessionManager,
     pub people_manager: PeopleManager,
     pub settings: SharedSettings,
@@ -549,7 +550,8 @@ async fn stop_recording(
 
     // Auto-transcribe if enabled
     let settings = state.settings.read().await;
-    let should_auto_transcribe = settings.auto_transcribe && settings.is_extraction_configured();
+    let gday_origin = state.gday_auth.connected_origin().await;
+    let should_auto_transcribe = settings.auto_transcribe && (gday_origin.is_some() || settings.is_extraction_configured());
     let extraction_url = settings.audio_extraction_url.clone();
     let extraction_key = settings.audio_extraction_api_key.clone();
     let file_drop_url = settings.file_drop_url.clone();
@@ -582,15 +584,16 @@ async fn stop_recording(
                 let llm_secrets = state.llm_secrets.clone();
                 let tags_mgr = state.tags_manager.clone();
                 let session_id = id.clone();
-                let eu = extraction_url.unwrap();
-                let ek = extraction_key.unwrap();
+                let gday_auth = state.gday_auth.clone();
+                let eu = extraction_url.unwrap_or_default();
+                let ek = extraction_key.unwrap_or_default();
 
                 tokio::spawn(async move {
                     let result = run_transcription_pipeline(
                         &session_id, &session_dir, &language, &source_meta,
                         &eu, &ek, &file_drop_url, &file_drop_api_key,
                         diarize, people_recognition, match_threshold,
-                        &session_manager, &people_manager, &files_db,
+                        &session_manager, &people_manager, &files_db, Some(gday_auth),
                     ).await;
 
                     match result {
@@ -1268,14 +1271,14 @@ async fn transcribe_session(
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     // 1. Check settings
     let settings = state.settings.read().await;
-    if !settings.is_extraction_configured() {
+    if state.gday_auth.connected_origin().await.is_none() && !settings.is_extraction_configured() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Audio extraction not configured. Set audio_extraction_url and audio_extraction_api_key in settings."})),
+            Json(json!({"error": "Sign in to Gday Meetings or configure local audio extraction in Services."})),
         ));
     }
-    let extraction_url = settings.audio_extraction_url.clone().unwrap();
-    let extraction_key = settings.audio_extraction_api_key.clone().unwrap();
+    let extraction_url = settings.audio_extraction_url.clone().unwrap_or_default();
+    let extraction_key = settings.audio_extraction_api_key.clone().unwrap_or_default();
     let file_drop_url = settings.file_drop_url.clone();
     let file_drop_api_key = settings.file_drop_api_key.clone();
     let diarize = settings.diarize;
@@ -1314,6 +1317,7 @@ async fn transcribe_session(
     let llm_secrets = state.llm_secrets.clone();
     let tags_mgr = state.tags_manager.clone();
     let session_id = id.clone();
+    let gday_auth = state.gday_auth.clone();
 
     tokio::spawn(async move {
         let result = run_transcription_pipeline(
@@ -1331,6 +1335,7 @@ async fn transcribe_session(
             &session_manager,
             &people_manager,
             &files_db,
+            Some(gday_auth),
         )
         .await;
 
@@ -1362,8 +1367,170 @@ async fn transcribe_session(
     Ok((StatusCode::ACCEPTED, Json(json!({"status": "processing"}))))
 }
 
+async fn ensure_gday_task(
+    platform: &PlatformClient,
+    session_id: &str,
+    mut task: crate::session::session::PlatformTask,
+    manager: &SessionManager,
+) -> Result<crate::session::session::PlatformTask, String> {
+    if task.task_id.is_empty() {
+        let submission = task
+            .submission
+            .as_ref()
+            .ok_or("Pending Gday task has no submission details")?;
+        task = platform
+            .execute(
+                session_id,
+                &submission.title,
+                &submission.tracks,
+                &submission.language,
+                submission.diarize,
+                &submission.idempotency_key,
+            )
+            .await?;
+        manager
+            .persist_audio_extraction(
+                session_id,
+                Some(crate::session::session::AudioExtractionJob {
+                    job_id: String::new(),
+                    status: "in_progress".into(),
+                    submitted_at: Some(chrono::Utc::now()),
+                    extraction_url: None,
+                    platform_task: Some(task.clone()),
+                }),
+            )
+            .await?;
+    }
+    Ok(task)
+}
+
+async fn run_gday_extraction(
+    origin: &str,
+    auth: std::sync::Arc<super::gday_auth::GdayAuth>,
+    session_id: &str,
+    session_dir: &std::path::Path,
+    language: &str,
+    source_meta: &[crate::session::session::SourceMetadata],
+    diarize: bool,
+    manager: &SessionManager,
+) -> Result<ExtractionOutput, String> {
+    let platform = PlatformClient::for_user(origin, auth);
+    let pending = manager
+        .get_pending_extractions()
+        .await
+        .into_iter()
+        .find(|(id, job)| {
+            id == session_id
+                && job
+                    .platform_task
+                    .as_ref()
+                    .is_some_and(|task| task.user_auth)
+        })
+        .and_then(|(_, job)| job.platform_task);
+    let task = if let Some(task) = pending {
+        if task.base_url != origin {
+            return Err("Sign in to the Gday server that owns the pending task".into());
+        }
+        task
+    } else {
+        if !platform.available().await? {
+            return Err("This server does not support Gday tasks".into());
+        }
+        manager
+            .set_processing_state(session_id, Some("uploading".into()))
+            .await;
+        let mut tracks = Vec::new();
+        for meta in source_meta
+            .iter()
+            .filter(|source| !source.filename.is_empty())
+        {
+            let bytes = tokio::fs::read(session_dir.join(&meta.filename))
+                .await
+                .map_err(|_| format!("Unable to read {}", meta.filename))?;
+            let url = platform.upload(&meta.filename, bytes).await?;
+            tracks.push(TrackInput {
+                audio_url: url,
+                track_name: meta
+                    .filename
+                    .split('.')
+                    .next()
+                    .unwrap_or(&meta.filename)
+                    .into(),
+                source_type: match meta.source_type {
+                    crate::audio::source::SourceType::Mic => "mic",
+                    crate::audio::source::SourceType::SystemMix => "system_mix",
+                    _ => "unknown",
+                }
+                .into(),
+                channels: meta.channels,
+            });
+        }
+        if tracks.is_empty() {
+            return Err("No audio tracks to transcribe".into());
+        }
+        let title = manager
+            .get_session(session_id)
+            .await
+            .and_then(|session| session.name)
+            .unwrap_or_else(|| session_id.into());
+        let task = crate::session::session::PlatformTask {
+            base_url: origin.into(),
+            task_id: String::new(),
+            user_auth: true,
+            submission: Some(crate::session::session::GdaySubmission {
+                idempotency_key: Uuid::new_v4().to_string(),
+                title,
+                tracks,
+                language: language.into(),
+                diarize,
+            }),
+        };
+        // Preserve the exact input URLs/key before a submission response can be lost.
+        manager
+            .persist_audio_extraction(
+                session_id,
+                Some(crate::session::session::AudioExtractionJob {
+                    job_id: String::new(),
+                    status: "in_progress".into(),
+                    submitted_at: Some(chrono::Utc::now()),
+                    extraction_url: None,
+                    platform_task: Some(task.clone()),
+                }),
+            )
+            .await?;
+        task
+    };
+    let task = ensure_gday_task(&platform, session_id, task, manager).await?;
+    manager
+        .set_processing_state(session_id, Some("extracting".into()))
+        .await;
+    poll_gday_task(&platform, &task.task_id, session_id, manager).await
+}
+
+async fn poll_gday_task(
+    platform: &PlatformClient,
+    task_id: &str,
+    session_id: &str,
+    manager: &SessionManager,
+) -> Result<ExtractionOutput, String> {
+    loop {
+        match platform.task_result(task_id).await? {
+            super::platform::TaskResult::Complete(output) => return Ok(output),
+            super::platform::TaskResult::Failed => {
+                // A new explicit transcription can create a fresh attempt after a terminal failure.
+                manager.persist_audio_extraction(session_id, None).await?;
+                return Err("Gday transcription failed; retry from this meeting".into());
+            }
+            super::platform::TaskResult::Pending => {
+                manager.emit_transcription_progress(session_id, "extracting");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
 /// Run the full transcription pipeline in a background task.
-async fn run_transcription_pipeline(
+pub(super) async fn run_transcription_pipeline(
     session_id: &str,
     session_dir: &std::path::Path,
     language: &str,
@@ -1378,7 +1545,20 @@ async fn run_transcription_pipeline(
     session_manager: &SessionManager,
     people_manager: &PeopleManager,
     files_db: &FilesDb,
+    gday_auth: Option<std::sync::Arc<super::gday_auth::GdayAuth>>,
 ) -> Result<u32, String> {
+    if let Some(auth) = gday_auth {
+        if let Some(origin) = auth.connected_origin().await {
+            let output = run_gday_extraction(
+                &origin, auth, session_id, session_dir, language, source_meta,
+                diarize, session_manager,
+            ).await?;
+            return process_extraction_output(
+                session_id, session_dir, source_meta, output, people_recognition,
+                match_threshold, session_manager, people_manager, files_db,
+            ).await;
+        }
+    }
     // Step 1: Upload audio files to file-drop
     session_manager
         .set_processing_state(session_id, Some("uploading".to_string()))
@@ -2035,6 +2215,7 @@ pub async fn resume_pending_extractions(
     settings: SharedSettings,
     llm_secrets: SharedSecrets,
     tags_manager: TagsManager,
+    gday_auth: std::sync::Arc<super::gday_auth::GdayAuth>,
 ) {
     let pending = session_manager.get_pending_extractions().await;
     if pending.is_empty() { return; }
@@ -2059,18 +2240,34 @@ pub async fn resume_pending_extractions(
         let stg = settings.clone();
         let secrets = llm_secrets.clone();
         let tm = tags_manager.clone();
+        let auth = gday_auth.clone();
 
         info!("Resuming extraction job {} for session {}", job.job_id, session_id);
 
         tokio::spawn(async move {
             let platform_key = stg.read().await.file_drop_api_key.clone();
-            let platform = job.platform_task.as_ref()
-                .map(|task| PlatformClient::new(&task.base_url, &platform_key));
+            let platform = job.platform_task.as_ref().map(|task| {
+                if task.user_auth {
+                    PlatformClient::for_user(&task.base_url, auth.clone())
+                } else {
+                    PlatformClient::new(&task.base_url, &platform_key)
+                }
+            });
             let durable = platform.as_ref().zip(job.platform_task.as_ref())
                 .map(|(platform, task)| (platform, task.task_id.as_str()));
 
             // Resume polling
-            let result = poll_extraction_job(client.as_ref(), &job.job_id, &session_id, &sm, durable).await;
+            let result = if job.platform_task.as_ref().is_some_and(|task| task.user_auth) {
+                let platform = platform.as_ref().unwrap();
+                match ensure_gday_task(
+                    platform, &session_id, job.platform_task.as_ref().unwrap().clone(), &sm,
+                ).await {
+                    Ok(task) => poll_gday_task(platform, &task.task_id, &session_id, &sm).await,
+                    Err(error) => Err(error),
+                }
+            } else {
+                poll_extraction_job(client.as_ref(), &job.job_id, &session_id, &sm, durable).await
+            };
 
             match result {
                 Ok(output) => {
