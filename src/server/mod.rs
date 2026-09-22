@@ -1,6 +1,7 @@
 pub mod analytics;
 mod changes;
 mod platform;
+mod gday_migration;
 pub mod gday_auth;
 pub mod routes;
 pub mod web_ui;
@@ -51,6 +52,7 @@ pub fn create_router(
     let api_routes = Router::new()
         .merge(analytics::routes(llm_secrets_for_analytics))
         .merge(routes::session_routes())
+        .merge(gday_migration::routes())
         .merge(gday_auth::routes(state.gday_auth.clone()))
         .merge(routes::conversation_routes())
         .merge(routes::claude_routes())

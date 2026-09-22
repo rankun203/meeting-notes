@@ -57,6 +57,133 @@ impl PlatformClient {
         Ok(url.into())
     }
 
+    /// Streams an existing recording without buffering the library in memory.
+    pub async fn upload_file(
+        &self,
+        filename: &str,
+        path: &std::path::Path,
+    ) -> Result<String, String> {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|_| format!("Unable to open {filename}"))?;
+        let size = file
+            .metadata()
+            .await
+            .map_err(|_| "Unable to inspect audio")?
+            .len();
+        if size == 0 || size > 500_000_000 {
+            return Err(format!("{filename}: audio must be nonempty and no larger than 500 MB; compress to Opus, M4A or MP3 first"));
+        }
+        let response = self
+            .http
+            .post(format!("{}/upload", self.base_url))
+            .query(&[("filename", filename)])
+            .bearer_auth(self.token().await?)
+            .header(reqwest::header::CONTENT_LENGTH, size)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .timeout(Duration::from_secs(900))
+            .body(reqwest::Body::wrap_stream(
+                tokio_util::io::ReaderStream::new(file),
+            ))
+            .send()
+            .await
+            .map_err(|_| format!("Upload interrupted for {filename}; retry migration"))?;
+        if !response.status().is_success() {
+            return Err(format!("Gday rejected {filename} ({})", response.status()));
+        }
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|_| "Invalid upload response")?;
+        let base = reqwest::Url::parse(&format!("{}/", self.base_url))
+            .map_err(|_| "Invalid platform URL")?;
+        let url = base
+            .join(value["url"].as_str().ok_or("Upload response missing URL")?)
+            .map_err(|_| "Invalid audio URL")?;
+        if url.origin() != base.origin() {
+            return Err("Audio URL belongs to another server".into());
+        }
+        Ok(url.into())
+    }
+
+    pub async fn ensure_import_available(&self) -> Result<(), String> {
+        let response = self
+            .http
+            .get(format!("{}/api/platform/capabilities", self.base_url))
+            .bearer_auth(self.token().await?)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|_| "Unable to contact Gday Meetings")?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Gday capability check failed ({})",
+                response.status()
+            ));
+        }
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|_| "Invalid Gday capabilities")?;
+        if value["meetingImports"] != true {
+            return Err("Upgrade Gday Meetings to a version supporting existing-meeting imports before migrating".into());
+        }
+        Ok(())
+    }
+
+    pub async fn imported_meeting(&self, external_id: &str) -> Result<Option<Value>, String> {
+        let mut url =
+            reqwest::Url::parse(&format!("{}/api/platform/meetings/import/", self.base_url))
+                .map_err(|_| "Invalid platform URL")?;
+        url.path_segments_mut()
+            .map_err(|_| "Invalid platform URL")?
+            .pop_if_empty()
+            .push(external_id);
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(self.token().await?)
+            .timeout(Duration::from_secs(900))
+            .send()
+            .await
+            .map_err(|_| "Unable to verify Gday meeting; retry migration")?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(format!("Gday import verification failed ({}); check server version, login or conflicting meeting", response.status()));
+        }
+        response
+            .json()
+            .await
+            .map(Some)
+            .map_err(|_| "Invalid import verification response".into())
+    }
+
+    pub async fn import_meeting(&self, body: &Value) -> Result<Value, String> {
+        let response = self
+            .http
+            .post(format!("{}/api/platform/meetings/import", self.base_url))
+            .bearer_auth(self.token().await?)
+            .timeout(Duration::from_secs(900))
+            .json(body)
+            .send()
+            .await
+            .map_err(|_| {
+                "Import acknowledgement lost; retry migration to verify the existing copy"
+            })?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Gday rejected meeting import ({}); no local files were removed",
+                response.status()
+            ));
+        }
+        response
+            .json()
+            .await
+            .map_err(|_| "Invalid import response; retry migration to verify".into())
+    }
+
     pub async fn execute(
         &self,
         session_id: &str,

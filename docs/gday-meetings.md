@@ -37,6 +37,30 @@ downloaded as JSON. User access/refresh tokens never appear in browser responses
 session metadata. Preserve access to the owning Gday account/server while tasks are
 outstanding. If sign-in expires or is revoked, sign in again and retry the meeting.
 
+## Copy existing local meetings
+
+Migration needs the deployed Gday URL and your OAuth login. Building the app or
+previewing the plan does not transfer any data. Deploy the migration-capable server
+and daemon, sign in to the intended Gday account under **Settings → Services**, then
+review **Copy existing meetings to Gday**.
+
+The preview lists the number of local meetings ready to copy, their audio size, and
+blocked meetings with the reason each cannot be copied. Resolve those issues or start
+with the ready meetings; blocked meetings are skipped. Click **Copy existing meetings
+to Gday** to transfer recordings and their existing results. This imports existing
+content without automatically transcribing it again.
+
+Progress shows the current meeting, processed count, and per-meeting outcomes:
+**Copied**, **Already copied**, or **Failed** with an error. Keep the daemon running
+during the transfer. Reopening settings reconnects to its progress. After completion,
+resolve any errors and use **Refresh preview** and **Retry copying meetings**; already
+imported meetings are recognized rather than duplicated. A progress-request error
+retries automatically while the run is active.
+
+Local recordings and result files remain as a backup. Verify the copied meetings,
+audio, and outputs in the deployed CMS before relying on that copy; this flow never
+deletes local files. Signing out does not undo completed imports.
+
 ## Standalone transcription and recovery
 
 Gday uploads, task creation and task retrieval always require the signed-in user's

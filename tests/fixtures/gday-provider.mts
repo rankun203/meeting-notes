@@ -62,6 +62,7 @@ const { discovery } = await import(source("server/auth/discovery.ts"));
 const platform = await import(
   source("app/(site)/api/platform/[...path]/route.ts")
 );
+const { POST: upload } = await import(source("app/(site)/upload/route.ts"));
 const payload = await cms();
 await payload.create({
   collection: "users",
@@ -78,6 +79,7 @@ handler = async (request) => {
   const url = new URL(request.url);
   if (url.pathname === "/.well-known/openid-configuration")
     return discovery(request, "oidc");
+  if (url.pathname === "/upload") return upload(request);
   if (url.pathname.startsWith("/api/platform/"))
     return platform.GET(request, {
       params: Promise.resolve({

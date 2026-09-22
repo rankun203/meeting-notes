@@ -395,7 +395,7 @@ impl GdayAuth {
     }
 }
 
-fn request_origin(headers: &HeaderMap) -> Result<String, String> {
+pub(crate) fn request_origin(headers: &HeaderMap) -> Result<String, String> {
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
@@ -974,6 +974,30 @@ mod tests {
                 true
             );
         }
+        // Exercise the actual native CMS upload + existing-meeting import contract.
+        let client = super::super::platform::PlatformClient::for_user(&base, auth.clone());
+        client.ensure_import_available().await.unwrap();
+        let audio_path = directory.join("fixture.wav");
+        let spec = hound::WavSpec { channels:1, sample_rate:8000, bits_per_sample:16, sample_format:hound::SampleFormat::Int };
+        let mut writer = hound::WavWriter::create(&audio_path, spec).unwrap();
+        for _ in 0..16 { writer.write_sample(0i16).unwrap(); } writer.finalize().unwrap();
+        let bytes = std::fs::read(&audio_path).unwrap();
+        use sha2::{Digest, Sha256};
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let audio_url = client.upload_file("fixture.wav", &audio_path).await.unwrap();
+        let external_id = format!("rust-import-{}", uuid::Uuid::new_v4());
+        let import_key = format!("{:x}", Sha256::digest(external_id.as_bytes()));
+        assert!(client.imported_meeting(&external_id).await.unwrap().is_none());
+        let body = json!({"externalId":external_id,"title":"Preserved local meeting","importKey":import_key,
+            "metadata":{"notes":"Preserve original notes"},"artifacts":{"transcript.json":{"segments":[{"text":"Edited transcript"}]},"notes.md":"Original notes"},
+            "audio":[{"filename":"fixture.wav","url":audio_url,"size":bytes.len(),"sha256":digest}]});
+        let first = client.import_meeting(&body).await.unwrap();
+        assert_eq!(first["audioCount"],1);
+        assert_eq!(first["artifactCount"],2);
+        let retry = client.import_meeting(&body).await.unwrap();
+        assert_eq!(first["id"],retry["id"]);
+        let verified = client.imported_meeting(&external_id).await.unwrap().unwrap();
+        assert_eq!(verified["importKey"],import_key);
         auth.logout().await.unwrap();
         assert!(auth.access_token(&base).await.is_err());
         std::fs::remove_dir_all(directory).unwrap();
