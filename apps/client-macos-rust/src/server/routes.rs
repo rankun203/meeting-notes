@@ -1,0 +1,2930 @@
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::path::{Path as FsPath, PathBuf};
+
+use axum::{
+    Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    response::IntoResponse,
+    response::sse::{Event, Sse},
+    routing::{delete, get, patch, post, put},
+};
+use futures::StreamExt;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
+use tracing::{info, warn, error};
+use uuid::Uuid;
+
+use crate::chat::manager::ConversationManager;
+use crate::chat::types::{ContextCriteria, Mention, Message};
+use crate::filesdb::FilesDb;
+use crate::llm::claude_code::ClaudeCodeRunner;
+use crate::llm::client::LlmClient;
+use crate::llm::secrets::SharedSecrets;
+use crate::people::PeopleManager;
+use crate::session::SessionManager;
+use crate::session::config::SessionConfig;
+use crate::session::session::SessionInfo;
+use crate::settings::SharedSettings;
+use crate::tags::TagsManager;
+use crate::understanding::{ExtractionClient, ExtractionOutput, TrackInput};
+use super::platform::PlatformClient;
+
+/// Shared state for routes.
+#[derive(Clone)]
+pub struct AppState {
+    pub gday_auth: std::sync::Arc<super::gday_auth::GdayAuth>,
+    pub session_manager: SessionManager,
+    pub people_manager: PeopleManager,
+    pub settings: SharedSettings,
+    pub files_db: FilesDb,
+    pub tags_manager: TagsManager,
+    pub conversation_manager: ConversationManager,
+    pub llm_secrets: SharedSecrets,
+    pub claude_runner: ClaudeCodeRunner,
+}
+
+impl AppState {
+    /// Regenerate the recordings/index.md file in the background.
+    fn refresh_recordings_index(&self) {
+        let recordings_dir = self.files_db.recordings_dir().to_path_buf();
+        let session_manager = self.session_manager.clone();
+        tokio::spawn(async move {
+            let mut sessions = session_manager.session_entries().await;
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
+            }).await;
+        });
+    }
+
+    /// Regenerate the people/index.md file in the background.
+    fn refresh_people_index(&self) {
+        let people_manager = self.people_manager.clone();
+        tokio::spawn(async move {
+            let mut people = people_manager.person_entries().await;
+            let people_dir = people_manager.people_dir().to_path_buf();
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::markdown::write_people_index(&people_dir, &mut people);
+            }).await;
+        });
+    }
+}
+
+pub fn session_routes() -> Router<AppState> {
+    Router::new()
+        .route("/sessions", post(create_session))
+        .route("/sessions", get(list_sessions))
+        .route("/sessions/{id}", get(get_session))
+        .route("/sessions/{id}", patch(rename_session))
+        .route("/sessions/{id}", delete(delete_session))
+        .route("/sessions/{id}/recording/start", post(start_recording))
+        .route("/sessions/{id}/recording/stop", post(stop_recording))
+        .route("/sessions/{id}/recording/upload", post(upload_recording))
+        .route("/sessions/{id}/notices/{created_at}", delete(dismiss_notice))
+        .route("/sessions/{id}/files", get(get_files))
+        .route("/sessions/{id}/files/{filename}", get(serve_file))
+        .route("/sessions/{id}/transcript", get(get_transcript))
+        .route("/sessions/{id}/transcript", delete(delete_transcript))
+        .route("/sessions/{id}/attribution", get(get_attribution))
+        .route("/sessions/{id}/attribution", post(update_attribution))
+        .route("/sessions/{id}/transcribe", post(transcribe_session))
+        .route("/sessions/{id}/summarize", post(summarize_session))
+        .route("/sessions/{id}/summary", get(get_summary))
+        .route("/sessions/{id}/summary", patch(update_summary))
+        .route("/sessions/{id}/summary", delete(delete_summary))
+        .route("/sessions/{id}/todos", get(get_session_todos))
+        .route("/sessions/{id}/todos/{idx}", patch(toggle_todo))
+        .route("/sessions/{id}/waveform/{filename}", get(get_waveform))
+        .route("/people", get(list_people))
+        .route("/people", post(create_person))
+        .route("/people/{id}", get(get_person))
+        .route("/people/{id}", patch(update_person))
+        .route("/people/{id}", delete(delete_person))
+        .route("/people/{id}/sessions", get(get_person_sessions))
+        .route("/people/{id}/todos", get(get_person_todos))
+        .route("/sessions/{id}/tags", put(set_session_tags))
+        .route("/tags", get(list_tags))
+        .route("/tags", post(create_tag))
+        .route("/tags/{name}", get(get_tag_sessions))
+        .route("/tags/{name}", patch(update_tag))
+        .route("/tags/{name}", delete(delete_tag))
+        .route("/settings", get(get_settings))
+        .route("/settings", put(update_settings))
+        .route("/config", get(get_config))
+}
+
+async fn create_session(
+    State(state): State<AppState>,
+    Json(config): Json<SessionConfig>,
+) -> (StatusCode, Json<SessionInfo>) {
+    let info = state.session_manager.create_session(config).await;
+    state.refresh_recordings_index();
+    (StatusCode::CREATED, Json(info))
+}
+
+#[derive(Deserialize)]
+struct ListParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+async fn list_sessions(
+    State(state): State<AppState>,
+    Query(params): Query<ListParams>,
+) -> Json<Value> {
+    let limit = params.limit.unwrap_or(20);
+    let offset = params.offset.unwrap_or(0);
+    let hidden_tags = state.tags_manager.hidden_tag_names().await;
+    let (mut sessions, total) = state.session_manager.list_sessions(limit, offset, &hidden_tags).await;
+    // Load only compact speaker counts for the requested page.
+    for s in &mut sessions {
+        s.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&s.id).await;
+    }
+    Json(json!({
+        "sessions": sessions,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }))
+}
+
+async fn get_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
+    let mut info = state.session_manager
+        .get_session(&id)
+        .await
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
+    info.unconfirmed_speakers = state.files_db.unconfirmed_speakers(&id).await;
+    Ok(Json(info))
+}
+
+async fn rename_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
+    state.session_manager.reconcile().await;
+    if let Some(expected) = body.get("previous_notes") {
+        let current = state.session_manager.get_session(&id).await
+            .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
+        if *expected != json!(current.notes) {
+            return Err((StatusCode::CONFLICT, Json(json!({"error": "Notes changed on disk. Your draft is preserved; reload before saving."}))));
+        }
+    }
+    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+        state.session_manager
+            .rename_session(&id, name.to_string())
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
+    if let Some(lang) = body.get("language").and_then(|v| v.as_str()) {
+        state.session_manager
+            .update_session_language(&id, lang.to_string())
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
+    if body.get("notes").is_some() {
+        let notes = body.get("notes").unwrap().as_str().map(|s| s.to_string());
+        state.session_manager
+            .update_session_notes(&id, notes)
+            .await
+            .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    }
+    if let Some(auto_stop) = body.get("auto_stop") {
+        let (silence_secs, screen_lock, system_sleep) = match auto_stop {
+            // Backward compatibility for older web clients.
+            Value::Bool(enabled) => (
+                Some(if *enabled { Some(60) } else { None }),
+                None,
+                None,
+            ),
+            Value::Object(settings) => {
+                let silence_secs = match settings.get("system_audio_silence_secs") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(value) => match value.as_u64() {
+                        Some(seconds) => Some(Some(seconds)),
+                        None => return Err((StatusCode::BAD_REQUEST, Json(json!({
+                            "error": "auto_stop.system_audio_silence_secs must be a positive integer or null"
+                        })))),
+                    },
+                };
+                let parse_bool = |key: &str| -> Result<Option<bool>, (StatusCode, Json<Value>)> {
+                    match settings.get(key) {
+                        None => Ok(None),
+                        Some(value) => value.as_bool().map(Some).ok_or((
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error": format!("auto_stop.{} must be a boolean", key)})),
+                        )),
+                    }
+                };
+                (
+                    silence_secs,
+                    parse_bool("screen_lock")?,
+                    parse_bool("system_sleep")?,
+                )
+            }
+            _ => return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "auto_stop must be an object"
+            })))),
+        };
+        state.session_manager
+            .update_auto_stop(&id, silence_secs, screen_lock, system_sleep)
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    }
+    state.refresh_recordings_index();
+    state.session_manager
+        .get_session(&id)
+        .await
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))
+}
+
+async fn delete_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    // Remove transcript from cache before deleting session files
+    state.files_db.remove_transcript(&id).await;
+
+    let result = state.session_manager
+        .delete_session(&id)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_recordings_index();
+    }
+    result
+}
+
+async fn dismiss_notice(
+    State(state): State<AppState>,
+    Path((id, created_at)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid notice timestamp"}))))?;
+    state.session_manager
+        .dismiss_notice(&id, created_at)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+}
+
+async fn start_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state.session_manager
+        .start_recording(&id)
+        .await
+        .map(|files| Json(json!({"status": "recording", "files": files})))
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))
+}
+
+const MAX_MEDIA_UPLOAD_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct UploadRecordingParams {
+    filename: String,
+}
+
+async fn upload_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<UploadRecordingParams>,
+    request: Request,
+) -> Result<Json<SessionInfo>, (StatusCode, Json<Value>)> {
+    let original_filename = FsPath::new(&params.filename)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "a valid filename is required"))?
+        .to_string();
+
+    if !is_supported_media_filename(&original_filename) {
+        return Err(api_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "choose a common audio or video file",
+        ));
+    }
+
+    let session = state
+        .session_manager
+        .get_session(&id)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "session not found"))?;
+    if session.state != crate::session::session::SessionState::Created {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "files can only be uploaded to a newly created session",
+        ));
+    }
+
+    if request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > MAX_MEDIA_UPLOAD_BYTES)
+    {
+        return Err(api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the selected file is larger than the 20 GB upload limit",
+        ));
+    }
+
+    let session_dir = state.session_manager.session_dir(&id);
+    tokio::fs::create_dir_all(&session_dir)
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to prepare upload: {e}"),
+            )
+        })?;
+
+    let upload_path = session_dir.join(format!(".upload-{}.media", Uuid::new_v4()));
+    let converted_path = session_dir.join(format!(".converting-{}.opus", Uuid::new_v4()));
+    let mut upload_file = tokio::fs::File::create(&upload_path)
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create upload: {e}"),
+            )
+        })?;
+    let mut stream = request.into_body().into_data_stream();
+    let mut uploaded_bytes = 0_u64;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                drop(upload_file);
+                remove_file_if_present(&upload_path).await;
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("upload interrupted: {e}"),
+                ));
+            }
+        };
+        uploaded_bytes = uploaded_bytes.saturating_add(chunk.len() as u64);
+        if uploaded_bytes > MAX_MEDIA_UPLOAD_BYTES {
+            drop(upload_file);
+            remove_file_if_present(&upload_path).await;
+            return Err(api_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the selected file is larger than the 20 GB upload limit",
+            ));
+        }
+        if let Err(e) = upload_file.write_all(&chunk).await {
+            drop(upload_file);
+            remove_file_if_present(&upload_path).await;
+            return Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to save upload: {e}"),
+            ));
+        }
+    }
+
+    if let Err(e) = upload_file.flush().await {
+        drop(upload_file);
+        remove_file_if_present(&upload_path).await;
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to finish upload: {e}"),
+        ));
+    }
+    drop(upload_file);
+
+    if uploaded_bytes == 0 {
+        remove_file_if_present(&upload_path).await;
+        return Err(api_error(StatusCode::BAD_REQUEST, "the selected file is empty"));
+    }
+
+    let opus = session.opus.unwrap_or_default();
+    let mut ffmpeg = tokio::process::Command::new("ffmpeg");
+    ffmpeg
+        .kill_on_drop(true)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(&upload_path)
+        .args([
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-c:a",
+            "libopus",
+            "-application",
+            "voip",
+            "-vbr",
+            "on",
+            "-b:a",
+            &format!("{}k", opus.bitrate_kbps),
+            "-compression_level",
+            &opus.complexity.to_string(),
+            "-f",
+            "opus",
+        ])
+        .arg(&converted_path);
+
+    let output = ffmpeg.output().await;
+    remove_file_if_present(&upload_path).await;
+    let output = match output {
+        Ok(output) => output,
+        Err(e) => {
+            remove_file_if_present(&converted_path).await;
+            let message = if e.kind() == std::io::ErrorKind::NotFound {
+                "FFmpeg is not installed or is not available on PATH".to_string()
+            } else {
+                format!("failed to run FFmpeg: {e}")
+            };
+            return Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, message));
+        }
+    };
+
+    if !output.status.success() {
+        remove_file_if_present(&converted_path).await;
+        let detail = String::from_utf8_lossy(&output.stderr);
+        warn!("FFmpeg media import failed for session {}: {}", id, detail.trim());
+        return Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "FFmpeg could not find a readable audio track in this file",
+        ));
+    }
+
+    let output_filename = unique_opus_filename(&session_dir, &original_filename);
+    let final_path = session_dir.join(&output_filename);
+    if let Err(e) = tokio::fs::rename(&converted_path, &final_path).await {
+        remove_file_if_present(&converted_path).await;
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to finish conversion: {e}"),
+        ));
+    }
+
+    let info = match state
+        .session_manager
+        .complete_media_import(&id, &original_filename, output_filename)
+        .await
+    {
+        Ok(info) => info,
+        Err(e) => {
+            remove_file_if_present(&final_path).await;
+            return Err(api_error(StatusCode::CONFLICT, e));
+        }
+    };
+    state.refresh_recordings_index();
+    Ok(Json(info))
+}
+
+fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+    (status, Json(json!({"error": message.into()})))
+}
+
+fn is_supported_media_filename(filename: &str) -> bool {
+    let extension = FsPath::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
+    matches!(
+        extension.as_deref(),
+        Some(
+            "aac" | "aiff" | "avi" | "flac" | "m4a" | "m4v" | "mkv" | "mov" | "mp3"
+                | "mp4" | "mpeg" | "mpg" | "oga" | "ogg" | "opus" | "wav" | "webm" | "wma"
+        )
+    )
+}
+
+fn unique_opus_filename(session_dir: &FsPath, original_filename: &str) -> String {
+    let original_stem = FsPath::new(original_filename)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("upload");
+    let mut stem = crate::audio::source::sanitize_label(original_stem);
+    if stem.is_empty() {
+        stem = "upload".to_string();
+    }
+    stem = stem.chars().take(80).collect();
+
+    let first = format!("{stem}.opus");
+    if !session_dir.join(&first).exists() {
+        return first;
+    }
+    for suffix in 2..10_000 {
+        let candidate = format!("{stem}-{suffix}.opus");
+        if !session_dir.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    format!("upload-{}.opus", Uuid::new_v4())
+}
+
+async fn remove_file_if_present(path: &PathBuf) {
+    if let Err(e) = tokio::fs::remove_file(path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!("Failed to remove temporary upload file {}: {}", path.display(), e);
+        }
+    }
+}
+
+async fn stop_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let files = state.session_manager
+        .stop_recording(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+
+    // Auto-transcribe if enabled
+    let settings = state.settings.read().await;
+    let gday_origin = state.gday_auth.connected_origin().await;
+    let should_auto_transcribe = settings.auto_transcribe && (gday_origin.is_some() || settings.is_extraction_configured());
+    let extraction_url = settings.audio_extraction_url.clone();
+    let extraction_key = settings.audio_extraction_api_key.clone();
+    let file_drop_url = settings.file_drop_url.clone();
+    let file_drop_api_key = settings.file_drop_api_key.clone();
+    let diarize = settings.diarize;
+    let people_recognition = settings.people_recognition;
+    let match_threshold = settings.speaker_match_threshold;
+    drop(settings);
+
+    if should_auto_transcribe {
+        if let Ok((session_dir, language, source_meta)) = state
+            .session_manager
+            .get_session_extraction_info(&id)
+            .await
+        {
+            // Only auto-transcribe if not already processing
+            let already_processing = state.session_manager.get_session(&id).await
+                .map(|s| s.processing_state.is_some())
+                .unwrap_or(false);
+
+            if !already_processing {
+                state.session_manager
+                    .set_processing_state(&id, Some("starting".to_string()))
+                    .await;
+
+                let session_manager = state.session_manager.clone();
+                let people_manager = state.people_manager.clone();
+                let files_db = state.files_db.clone();
+                let settings_clone = state.settings.clone();
+                let llm_secrets = state.llm_secrets.clone();
+                let tags_mgr = state.tags_manager.clone();
+                let session_id = id.clone();
+                let gday_auth = state.gday_auth.clone();
+                let eu = extraction_url.unwrap_or_default();
+                let ek = extraction_key.unwrap_or_default();
+
+                tokio::spawn(async move {
+                    let result = run_transcription_pipeline(
+                        &session_id, &session_dir, &language, &source_meta,
+                        &eu, &ek, &file_drop_url, &file_drop_api_key,
+                        diarize, people_recognition, match_threshold,
+                        &session_manager, &people_manager, &files_db, Some(gday_auth),
+                    ).await;
+
+                    match result {
+                        Ok(unconfirmed) => {
+                            session_manager.set_processing_state(&session_id, None).await;
+                            session_manager.emit_transcription_completed(&session_id, unconfirmed);
+                            info!("Auto-transcription completed for session {}", session_id);
+
+                            // Auto-summarize if enabled
+                            maybe_auto_summarize(
+                                &session_id, &session_manager,
+                                &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
+                                &files_db,
+                            ).await;
+                        }
+                        Err(e) => {
+                            error!("Auto-transcription failed for session {}: {}", session_id, e);
+                            session_manager.set_processing_state(&session_id, None).await;
+                            session_manager.emit_transcription_failed(&session_id, &e);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    Ok(Json(json!({"status": "stopped", "files": files})))
+}
+
+async fn get_files(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<String>>, (StatusCode, Json<Value>)> {
+    state.session_manager
+        .get_files(&id)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))
+}
+
+async fn serve_file(
+    State(state): State<AppState>,
+    Path((id, filename)): Path<(String, String)>,
+    req: axum::extract::Request,
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+    // Verify session exists and file belongs to it
+    let files = state.session_manager
+        .get_files(&id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+
+    if !files.contains(&filename) {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "file not found"}))));
+    }
+
+    // Sanitize filename to prevent path traversal
+    let safe_name = std::path::Path::new(&filename)
+        .file_name()
+        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid filename"}))))?;
+
+    let file_path = state.session_manager.session_dir(&id).join(safe_name);
+
+    // Use tower-http ServeFile for proper Content-Length, Accept-Ranges, and range requests
+    let serve = tower_http::services::ServeFile::new(&file_path);
+    let result = tower::ServiceExt::oneshot(serve, req)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{}", e)}))))?;
+    Ok(result)
+}
+
+async fn get_waveform(
+    State(state): State<AppState>,
+    Path((id, filename)): Path<(String, String)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Verify session exists and file belongs to it
+    let files = state.session_manager
+        .get_files(&id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+
+    if !files.contains(&filename) {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "file not found"}))));
+    }
+
+    let session_dir = state.session_manager.session_dir(&id);
+
+    // Generate waveform on a blocking thread (decoding is CPU-intensive)
+    let waveform = tokio::task::spawn_blocking(move || {
+        crate::waveform::get_or_generate_waveform(&session_dir, &filename)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("join: {}", e)}))))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    Ok(Json(serde_json::to_value(waveform).unwrap()))
+}
+
+async fn get_config() -> Json<Value> {
+    let sources = crate::audio::discover_sources();
+    Json(json!({
+        "sources": sources,
+        "capabilities": {
+            "auto_stop_screen_lock": cfg!(target_os = "macos"),
+            "auto_stop_system_sleep": cfg!(target_os = "macos"),
+        },
+        "fields": {
+            "language": {
+                "type": "select",
+                "default": "en",
+                "label": "Language",
+                "description": "Language for transcription",
+                "options": [
+                    { "value": "en", "label": "English" },
+                    { "value": "zh-cn", "label": "Chinese (Simplified)" },
+                    { "value": "zh-tw", "label": "Chinese (Traditional)" },
+                    { "value": "ja", "label": "Japanese" },
+                    { "value": "ko", "label": "Korean" },
+                    { "value": "es", "label": "Spanish" },
+                    { "value": "fr", "label": "French" },
+                    { "value": "de", "label": "German" },
+                    { "value": "pt", "label": "Portuguese" },
+                    { "value": "ru", "label": "Russian" },
+                    { "value": "ar", "label": "Arabic" },
+                ],
+            },
+            "format": {
+                "type": "select",
+                "default": "opus",
+                "label": "Format",
+                "description": "Audio file format",
+                "options": [
+                    { "value": "wav", "label": "WAV", "title": "Lossless, lowest CPU (~2%), but large files" },
+                    { "value": "mp3", "label": "MP3", "title": "Lossy, widely compatible, ~6% CPU" },
+                    { "value": "opus", "label": "Opus", "title": "Designed for speech, smallest files, ~4% CPU" },
+                ],
+            },
+            "raw_sample_rate": {
+                "type": "select",
+                "default": 48000,
+                "label": "Raw Sample Rate",
+                "description": "Recording sample rate — higher means better quality but larger files",
+                "advanced": true,
+                "options": [
+                    { "value": 16000, "label": "16000 Hz" },
+                    { "value": 22050, "label": "22050 Hz" },
+                    { "value": 44100, "label": "44100 Hz" },
+                    { "value": 48000, "label": "48000 Hz" },
+                ],
+            },
+            "mp3_bitrate": {
+                "type": "select",
+                "default": 64,
+                "label": "MP3 Bitrate",
+                "description": "MP3 encoder bitrate — higher means better quality and larger files",
+                "advanced": true,
+                "show_when": { "field": "format", "value": "mp3" },
+                "config_path": "mp3.bitrate_kbps",
+                "options": [
+                    { "value": 32, "label": "32 kbps" },
+                    { "value": 48, "label": "48 kbps" },
+                    { "value": 64, "label": "64 kbps" },
+                    { "value": 96, "label": "96 kbps" },
+                    { "value": 128, "label": "128 kbps" },
+                    { "value": 192, "label": "192 kbps" },
+                    { "value": 256, "label": "256 kbps" },
+                    { "value": 320, "label": "320 kbps" },
+                ],
+            },
+            "mp3_sample_rate": {
+                "type": "select",
+                "default": 16000,
+                "label": "MP3 Sample Rate",
+                "description": "MP3 encoder output sample rate — can differ from recording rate; the encoder will resample",
+                "advanced": true,
+                "show_when": { "field": "format", "value": "mp3" },
+                "config_path": "mp3.sample_rate",
+                "options": [
+                    { "value": 8000, "label": "8000 Hz" },
+                    { "value": 16000, "label": "16000 Hz" },
+                    { "value": 22050, "label": "22050 Hz" },
+                    { "value": 44100, "label": "44100 Hz" },
+                    { "value": 48000, "label": "48000 Hz" },
+                ],
+            },
+            "opus_bitrate": {
+                "type": "select",
+                "default": 32,
+                "label": "Opus Bitrate",
+                "description": "Opus encoder target bitrate — 24-32 kbps is transparent for speech",
+                "advanced": true,
+                "show_when": { "field": "format", "value": "opus" },
+                "config_path": "opus.bitrate_kbps",
+                "options": [
+                    { "value": 16, "label": "16 kbps" },
+                    { "value": 24, "label": "24 kbps" },
+                    { "value": 32, "label": "32 kbps" },
+                    { "value": 48, "label": "48 kbps" },
+                    { "value": 64, "label": "64 kbps" },
+                    { "value": 96, "label": "96 kbps" },
+                    { "value": 128, "label": "128 kbps" },
+                ],
+            },
+            "opus_complexity": {
+                "type": "select",
+                "default": 5,
+                "label": "Opus Complexity",
+                "description": "Encoder complexity (0-10) — higher is better quality but more CPU",
+                "advanced": true,
+                "show_when": { "field": "format", "value": "opus" },
+                "config_path": "opus.complexity",
+                "options": [
+                    { "value": 0, "label": "0 (fastest)" },
+                    { "value": 3, "label": "3" },
+                    { "value": 5, "label": "5 (default)" },
+                    { "value": 7, "label": "7" },
+                    { "value": 10, "label": "10 (best)" },
+                ],
+            },
+        },
+    }))
+}
+
+// --- Transcript routes ---
+
+async fn get_transcript(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    let path = state.files_db.recordings_dir().join(&id).join("transcript.json");
+    if !path.is_file() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))));
+    }
+    let bytes = crate::storage::blocking(move || {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(bytes)
+    }).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/json"),
+         (axum::http::header::CACHE_CONTROL, "no-cache")], bytes).into_response())
+}
+
+async fn delete_transcript(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    // Remove from cache + index
+    state.files_db.remove_transcript(&id).await;
+
+    // Remove files from disk
+    let session_dir = state.session_manager.session_dir(&id);
+    for filename in &["transcript.json", "extraction_raw.json"] {
+        let path = session_dir.join(filename);
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    state.session_manager.set_processing_state(&id, None).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Attribution routes ---
+
+async fn get_attribution(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match state.files_db.get_transcript(&id).await {
+        Some(data) => {
+            let embs = data.get("speaker_embeddings").cloned().unwrap_or(json!({}));
+            Ok(Json(embs))
+        }
+        None => Err((StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"})))),
+    }
+}
+
+#[derive(Deserialize)]
+struct AttributionAction {
+    speaker: String,
+    #[serde(default)]
+    person_id: Option<String>,
+    action: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AttributionRequest {
+    attributions: Vec<AttributionAction>,
+}
+
+async fn update_attribution(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<AttributionRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Read the current source document; merge only this operation's changes.
+    let mut transcript = state.files_db.get_transcript(&id).await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"error": "transcript not found"}))))?;
+
+    let original_transcript = transcript.clone();
+
+    for action in &body.attributions {
+        // Get the speaker's embedding from the transcript
+        let embedding: Vec<f64> = transcript
+            .get("speaker_embeddings")
+            .and_then(|embs| embs.get(&action.speaker))
+            .and_then(|e| e.get("embedding"))
+            .and_then(|e| serde_json::from_value(e.clone()).ok())
+            .unwrap_or_default();
+
+        match action.action.as_str() {
+            "confirm" => {
+                // Save embedding to the confirmed person
+                if let Some(pid) = &action.person_id {
+                    let _ = state.people_manager
+                        .add_embedding(pid, embedding, &id, None)
+                        .await;
+                }
+            }
+            "correct" => {
+                // Reassign to a different person and save embedding
+                if let Some(pid) = &action.person_id {
+                    let _ = state.people_manager
+                        .add_embedding(pid, embedding, &id, None)
+                        .await;
+                    // Update the transcript
+                    let person = state.people_manager.get_person(pid).await;
+                    if let Some(embs) = transcript.get_mut("speaker_embeddings") {
+                        if let Some(entry) = embs.get_mut(&action.speaker) {
+                            entry["person_id"] = json!(pid);
+                            entry["person_name"] = json!(person.as_ref().map(|p| &p.name));
+                            entry["confidence"] = json!(1.0);
+                        }
+                    }
+                    update_segment_speakers(&mut transcript, &action.speaker, pid, person.as_ref().map(|p| p.name.as_str()));
+                }
+            }
+            "create" => {
+                // Create a new person from this speaker
+                if let Some(name) = &action.name {
+                    match state.people_manager
+                        .create_person_from_speaker(name.clone(), embedding, &id)
+                        .await
+                    {
+                        Ok(person) => {
+                            if let Some(embs) = transcript.get_mut("speaker_embeddings") {
+                                if let Some(entry) = embs.get_mut(&action.speaker) {
+                                    entry["person_id"] = json!(&person.id);
+                                    entry["person_name"] = json!(&person.name);
+                                    entry["confidence"] = json!(1.0);
+                                }
+                            }
+                            update_segment_speakers(&mut transcript, &action.speaker, &person.id, Some(&person.name));
+                        }
+                        Err(e) => {
+                            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))));
+                        }
+                    }
+                }
+            }
+            "reject" => {
+                // Remove the attribution, don't save embedding
+                if let Some(embs) = transcript.get_mut("speaker_embeddings") {
+                    if let Some(entry) = embs.get_mut(&action.speaker) {
+                        entry["person_id"] = json!(null);
+                        entry["person_name"] = json!(null);
+                        entry["confidence"] = json!(0.0);
+                    }
+                }
+                update_segment_speakers(&mut transcript, &action.speaker, "", None);
+            }
+            _ => {}
+        }
+    }
+
+    // Merge against current disk content and invalidate the derived projection.
+    state.files_db.update_transcript(&id, original_transcript, transcript).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    Ok(Json(json!({"status": "ok"})))
+}
+
+/// Update person_id and person_name in all transcript segments matching the speaker.
+fn update_segment_speakers(transcript: &mut Value, speaker: &str, person_id: &str, person_name: Option<&str>) {
+    if let Some(segments) = transcript.get_mut("segments").and_then(|s| s.as_array_mut()) {
+        for seg in segments {
+            if seg.get("speaker").and_then(|s| s.as_str()) == Some(speaker) {
+                if person_id.is_empty() {
+                    seg["person_id"] = json!(null);
+                    seg["person_name"] = json!(null);
+                } else {
+                    seg["person_id"] = json!(person_id);
+                    seg["person_name"] = json!(person_name);
+                }
+            }
+        }
+    }
+}
+
+// --- People routes ---
+
+async fn list_people(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let people = state.people_manager.list_people().await;
+    Json(json!({ "people": people }))
+}
+
+#[derive(Deserialize)]
+struct CreatePersonRequest {
+    name: String,
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+async fn create_person(
+    State(state): State<AppState>,
+    Json(body): Json<CreatePersonRequest>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let result = state
+        .people_manager
+        .create_person(body.name, body.notes)
+        .await
+        .map(|p| (StatusCode::CREATED, Json(serde_json::to_value(p).unwrap())))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_people_index();
+    }
+    result
+}
+
+async fn get_person(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state
+        .people_manager
+        .get_person(&id)
+        .await
+        .map(|p| Json(serde_json::to_value(p).unwrap()))
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "person not found"}))))
+}
+
+#[derive(Deserialize)]
+struct UpdatePersonRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    notes: Option<Option<String>>,
+    #[serde(default)]
+    starred: Option<bool>,
+}
+
+async fn update_person(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdatePersonRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let result = state
+        .people_manager
+        .update_person(&id, body.name, body.notes, body.starred)
+        .await
+        .map(|p| Json(serde_json::to_value(p).unwrap()))
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_people_index();
+    }
+    result
+}
+
+async fn delete_person(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let result = state
+        .people_manager
+        .delete_person(&id)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))));
+    if result.is_ok() {
+        state.refresh_people_index();
+    }
+    result
+}
+
+async fn get_person_sessions(
+    State(state): State<AppState>,
+    Path(person_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state.session_manager.reconcile().await;
+    // Revalidate compact speaker projections; never load transcript content.
+    let session_ids = state.files_db.person_session_ids(&person_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    let mut result: Vec<Value> = Vec::new();
+    for sid in &session_ids {
+        if let Some(info) = state.session_manager.get_session_cached(sid).await {
+            let matched_speakers = state.files_db.matched_speakers(sid, &person_id).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+            result.push(json!({
+                "id": info.id,
+                "name": info.name,
+                "state": info.state,
+                "created_at": info.created_at,
+                "updated_at": info.updated_at,
+                "duration_secs": info.duration_secs,
+                "matched_speakers": matched_speakers,
+            }));
+        }
+    }
+
+    result.sort_by(|a, b| {
+        let a_t = a.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        let b_t = b.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+        b_t.cmp(a_t)
+    });
+
+    Ok(Json(json!({ "sessions": result })))
+}
+
+// --- Settings routes ---
+
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let settings = state.settings.read().await;
+    let mut result = settings.to_masked_json();
+    // Add llm_api_key_set indicator for the current host (never expose the actual key)
+    let secrets = state.llm_secrets.read().await;
+    result.as_object_mut().unwrap().insert(
+        "llm_api_key_set".to_string(),
+        json!(secrets.has_api_key(&settings.llm_host)),
+    );
+    Json(result)
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Determine the host to associate the key with.
+    // If llm_host is being updated in this request, use the new value;
+    // otherwise fall back to the current setting.
+    let host_for_key = body.get("llm_host")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Route llm_api_key to the secrets file, keyed by host provider
+    if let Some(v) = body.get("llm_api_key") {
+        let key = v.as_str().map(|s| s.to_string());
+        let host = match &host_for_key {
+            Some(h) => h.clone(),
+            None => state.settings.read().await.llm_host.clone(),
+        };
+        let mut secrets = state.llm_secrets.write().await;
+        secrets.set_api_key(&host, key)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+        info!("LLM API key updated for host");
+    }
+
+    let mut settings = state.settings.write().await;
+    settings
+        .merge_and_save(&body)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    info!("Settings updated");
+
+    let mut result = settings.to_masked_json();
+    let secrets = state.llm_secrets.read().await;
+    result.as_object_mut().unwrap().insert(
+        "llm_api_key_set".to_string(),
+        json!(secrets.has_api_key(&settings.llm_host)),
+    );
+    Ok(Json(result))
+}
+
+// --- Tag routes ---
+
+async fn list_tags(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let tags = state.tags_manager.list_tags().await;
+    let counts = state.session_manager.tag_session_counts().await;
+    let list: Vec<Value> = tags.iter().map(|t| {
+        json!({
+            "name": t.name,
+            "hidden": t.hidden,
+            "notes": t.notes,
+            "session_count": counts.get(&t.name).copied().unwrap_or(0),
+        })
+    }).collect();
+    Json(json!({ "tags": list }))
+}
+
+async fn create_tag(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let tag = state.tags_manager.create_tag(name).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    Ok(Json(json!(tag)))
+}
+
+async fn update_tag(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let new_name = body.get("name").and_then(|v| v.as_str());
+    let hidden = body.get("hidden").and_then(|v| v.as_bool());
+    let notes = if body.get("notes").is_some() {
+        Some(body.get("notes").unwrap().as_str().map(|s| s.to_string()))
+    } else { None };
+    let (tag, old_name) = state.tags_manager.update_tag(&name, new_name, hidden, notes).await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+    // If renamed, cascade to all sessions
+    if let Some(old) = old_name {
+        state.session_manager.rename_tag_in_all_sessions(&old, &tag.name).await;
+    }
+    Ok(Json(json!(tag)))
+}
+
+async fn delete_tag(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    state.tags_manager.delete_tag(&name).await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    // Cascade: remove tag from all sessions
+    state.session_manager.remove_tag_from_all_sessions(&name).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_tag_sessions(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !state.tags_manager.tag_exists(&name).await {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "tag not found"}))));
+    }
+    let sessions = state.session_manager.sessions_for_tag(&name).await;
+    Ok(Json(json!({ "sessions": sessions })))
+}
+
+async fn set_session_tags(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let tags: Vec<String> = body.get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    // Validate all tags exist
+    for tag in &tags {
+        if !state.tags_manager.tag_exists(tag).await {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({"error": format!("tag '{}' does not exist", tag)}))));
+        }
+    }
+
+    let info = state.session_manager.update_session_tags(&id, tags).await
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(json!({"error": e}))))?;
+    state.refresh_recordings_index();
+    Ok(Json(serde_json::to_value(info).unwrap()))
+}
+
+// --- Transcribe route ---
+
+async fn transcribe_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    // 1. Check settings
+    let settings = state.settings.read().await;
+    if state.gday_auth.connected_origin().await.is_none() && !settings.is_extraction_configured() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Sign in to Meeting Notes Server or configure local audio extraction in Services."})),
+        ));
+    }
+    let extraction_url = settings.audio_extraction_url.clone().unwrap_or_default();
+    let extraction_key = settings.audio_extraction_api_key.clone().unwrap_or_default();
+    let file_drop_url = settings.file_drop_url.clone();
+    let file_drop_api_key = settings.file_drop_api_key.clone();
+    let diarize = settings.diarize;
+    let people_recognition = settings.people_recognition;
+    let match_threshold = settings.speaker_match_threshold;
+    drop(settings);
+
+    // 2. Check session
+    let (session_dir, language, source_meta) = state
+        .session_manager
+        .get_session_extraction_info(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({"error": e}))))?;
+
+    // 3. Prevent double-submit
+    if let Some(info) = state.session_manager.get_session(&id).await {
+        if info.processing_state.is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(json!({"error": "Transcription already in progress"})),
+            ));
+        }
+    }
+
+    // 4. Set state and return 202
+    state
+        .session_manager
+        .set_processing_state(&id, Some("starting".to_string()))
+        .await;
+
+    // 5. Spawn background task
+    let session_manager = state.session_manager.clone();
+    let people_manager = state.people_manager.clone();
+    let files_db = state.files_db.clone();
+    let settings_clone = state.settings.clone();
+    let llm_secrets = state.llm_secrets.clone();
+    let tags_mgr = state.tags_manager.clone();
+    let session_id = id.clone();
+    let gday_auth = state.gday_auth.clone();
+
+    tokio::spawn(async move {
+        let result = run_transcription_pipeline(
+            &session_id,
+            &session_dir,
+            &language,
+            &source_meta,
+            &extraction_url,
+            &extraction_key,
+            &file_drop_url,
+            &file_drop_api_key,
+            diarize,
+            people_recognition,
+            match_threshold,
+            &session_manager,
+            &people_manager,
+            &files_db,
+            Some(gday_auth),
+        )
+        .await;
+
+        match result {
+            Ok(unconfirmed) => {
+                session_manager
+                    .set_processing_state(&session_id, None)
+                    .await;
+                session_manager.emit_transcription_completed(&session_id, unconfirmed);
+                info!("Transcription completed for session {}", session_id);
+
+                // Auto-summarize if enabled
+                maybe_auto_summarize(
+                    &session_id, &session_manager,
+                    &settings_clone, &llm_secrets, &tags_mgr, &people_manager,
+                    &files_db,
+                ).await;
+            }
+            Err(e) => {
+                error!("Transcription failed for session {}: {}", session_id, e);
+                session_manager
+                    .set_processing_state(&session_id, None)
+                    .await;
+                session_manager.emit_transcription_failed(&session_id, &e);
+            }
+        }
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(json!({"status": "processing"}))))
+}
+
+async fn ensure_gday_task(
+    platform: &PlatformClient,
+    session_id: &str,
+    mut task: crate::session::session::PlatformTask,
+    manager: &SessionManager,
+) -> Result<crate::session::session::PlatformTask, String> {
+    if task.task_id.is_empty() {
+        let submission = task
+            .submission
+            .as_ref()
+            .ok_or("Pending server task has no submission details")?;
+        task = platform
+            .execute(
+                session_id,
+                &submission.title,
+                &submission.tracks,
+                &submission.language,
+                submission.diarize,
+                &submission.idempotency_key,
+            )
+            .await?;
+        manager
+            .persist_audio_extraction(
+                session_id,
+                Some(crate::session::session::AudioExtractionJob {
+                    job_id: String::new(),
+                    status: "in_progress".into(),
+                    submitted_at: Some(chrono::Utc::now()),
+                    extraction_url: None,
+                    platform_task: Some(task.clone()),
+                }),
+            )
+            .await?;
+    }
+    Ok(task)
+}
+
+async fn run_gday_extraction(
+    origin: &str,
+    auth: std::sync::Arc<super::gday_auth::GdayAuth>,
+    session_id: &str,
+    session_dir: &std::path::Path,
+    language: &str,
+    source_meta: &[crate::session::session::SourceMetadata],
+    diarize: bool,
+    manager: &SessionManager,
+) -> Result<ExtractionOutput, String> {
+    let platform = PlatformClient::for_user(origin, auth);
+    let pending = manager
+        .get_pending_extractions()
+        .await
+        .into_iter()
+        .find(|(id, job)| id == session_id && job.platform_task.is_some())
+        .and_then(|(_, job)| job.platform_task);
+    let task = if let Some(task) = pending {
+        if task.base_url != origin {
+            return Err("Sign in to the Meeting Notes Server that owns the pending task".into());
+        }
+        task
+    } else {
+        platform.ensure_transcription_available().await?;
+        manager
+            .set_processing_state(session_id, Some("uploading".into()))
+            .await;
+        let mut tracks = Vec::new();
+        for meta in source_meta
+            .iter()
+            .filter(|source| !source.filename.is_empty())
+        {
+            let bytes = tokio::fs::read(session_dir.join(&meta.filename))
+                .await
+                .map_err(|_| format!("Unable to read {}", meta.filename))?;
+            let url = platform.upload(&meta.filename, bytes).await?;
+            tracks.push(TrackInput {
+                audio_url: url,
+                track_name: meta
+                    .filename
+                    .split('.')
+                    .next()
+                    .unwrap_or(&meta.filename)
+                    .into(),
+                source_type: match meta.source_type {
+                    crate::audio::source::SourceType::Mic => "mic",
+                    crate::audio::source::SourceType::SystemMix => "system_mix",
+                    _ => "unknown",
+                }
+                .into(),
+                channels: meta.channels,
+            });
+        }
+        if tracks.is_empty() {
+            return Err("No audio tracks to transcribe".into());
+        }
+        let title = manager
+            .get_session(session_id)
+            .await
+            .and_then(|session| session.name)
+            .unwrap_or_else(|| session_id.into());
+        let task = crate::session::session::PlatformTask {
+            base_url: origin.into(),
+            task_id: String::new(),
+            submission: Some(crate::session::session::GdaySubmission {
+                idempotency_key: Uuid::new_v4().to_string(),
+                title,
+                tracks,
+                language: language.into(),
+                diarize,
+            }),
+        };
+        // Preserve the exact input URLs/key before a submission response can be lost.
+        manager
+            .persist_audio_extraction(
+                session_id,
+                Some(crate::session::session::AudioExtractionJob {
+                    job_id: String::new(),
+                    status: "in_progress".into(),
+                    submitted_at: Some(chrono::Utc::now()),
+                    extraction_url: None,
+                    platform_task: Some(task.clone()),
+                }),
+            )
+            .await?;
+        task
+    };
+    let task = ensure_gday_task(&platform, session_id, task, manager).await?;
+    manager
+        .set_processing_state(session_id, Some("extracting".into()))
+        .await;
+    poll_gday_task(&platform, &task.task_id, session_id, manager).await
+}
+
+async fn poll_gday_task(
+    platform: &PlatformClient,
+    task_id: &str,
+    session_id: &str,
+    manager: &SessionManager,
+) -> Result<ExtractionOutput, String> {
+    loop {
+        match platform.task_result(task_id).await? {
+            super::platform::TaskResult::Complete(output) => return Ok(output),
+            super::platform::TaskResult::Failed => {
+                // A new explicit transcription can create a fresh attempt after a terminal failure.
+                manager.persist_audio_extraction(session_id, None).await?;
+                return Err("Server transcription failed; retry from this meeting".into());
+            }
+            super::platform::TaskResult::Pending => {
+                manager.emit_transcription_progress(session_id, "extracting");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    }
+}
+
+/// Run the full transcription pipeline in a background task.
+pub(super) async fn run_transcription_pipeline(
+    session_id: &str,
+    session_dir: &std::path::Path,
+    language: &str,
+    source_meta: &[crate::session::session::SourceMetadata],
+    extraction_url: &str,
+    extraction_key: &str,
+    file_drop_url: &str,
+    file_drop_api_key: &str,
+    diarize: bool,
+    people_recognition: bool,
+    match_threshold: f64,
+    session_manager: &SessionManager,
+    people_manager: &PeopleManager,
+    files_db: &FilesDb,
+    gday_auth: Option<std::sync::Arc<super::gday_auth::GdayAuth>>,
+) -> Result<u32, String> {
+    if let Some(auth) = gday_auth {
+        if let Some(origin) = auth.connected_origin().await {
+            let output = run_gday_extraction(
+                &origin, auth, session_id, session_dir, language, source_meta,
+                diarize, session_manager,
+            ).await?;
+            return process_extraction_output(
+                session_id, session_dir, source_meta, output, people_recognition,
+                match_threshold, session_manager, people_manager, files_db,
+            ).await;
+        }
+    }
+    if session_manager
+        .get_pending_extractions()
+        .await
+        .iter()
+        .any(|(id, job)| id == session_id && job.platform_task.is_some())
+    {
+        return Err("Sign in to the Meeting Notes Server that owns this meeting's pending task".into());
+    }
+    // This is the separate standalone file-drop + RunPod workflow.
+    // Step 1: Upload audio files to file-drop
+    session_manager
+        .set_processing_state(session_id, Some("uploading".to_string()))
+        .await;
+
+    let http = reqwest::Client::new();
+    let mut tracks: Vec<TrackInput> = Vec::new();
+
+    for meta in source_meta.iter().filter(|m| !m.filename.is_empty()) {
+        let file_path = session_dir.join(&meta.filename);
+        if !file_path.exists() {
+            warn!("[{}] Audio file not found: {}", session_id, file_path.display());
+            continue;
+        }
+
+        info!("[{}] Uploading {} to file-drop...", session_id, meta.filename);
+        let bytes = std::fs::read(&file_path)
+            .map_err(|e| format!("Failed to read {}: {e}", meta.filename))?;
+        let file_size = bytes.len();
+
+        let upload_url = format!("{}/upload", file_drop_url.trim_end_matches('/'));
+        let resp = http
+            .post(&upload_url)
+            .query(&[("filename", &meta.filename)])
+            .header("Authorization", format!("Bearer {}", file_drop_api_key))
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to upload {} to file-drop: {e}", meta.filename))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("file-drop upload failed for {} ({}): {}", meta.filename, status, body));
+        }
+
+        let upload_result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse file-drop response: {e}"))?;
+
+        let download_path = upload_result["url"]
+            .as_str()
+            .ok_or_else(|| "file-drop response missing 'url' field".to_string())?;
+        let download_url = reqwest::Url::parse(&format!("{}/", file_drop_url.trim_end_matches('/')))
+            .and_then(|base| base.join(download_path))
+            .map_err(|e| format!("Invalid audio download URL: {e}"))?.to_string();
+
+        let source_type = match meta.source_type {
+            crate::audio::source::SourceType::Mic => "mic",
+            crate::audio::source::SourceType::SystemMix => "system_mix",
+            _ => "unknown",
+        };
+
+        info!(
+            "[{}] Uploaded {} ({} bytes)",
+            session_id, meta.filename, file_size
+        );
+
+        tracks.push(TrackInput {
+            audio_url: download_url,
+            track_name: meta.filename.split('.').next().unwrap_or(&meta.filename).to_string(),
+            source_type: source_type.to_string(),
+            channels: meta.channels,
+        });
+    }
+
+    if tracks.is_empty() {
+        return Err("No audio tracks to transcribe".to_string());
+    }
+
+    info!("[{}] Submitting {} tracks to RunPod", session_id, tracks.len());
+
+    // Step 3: Submit and poll
+    session_manager
+        .set_processing_state(session_id, Some("extracting".to_string()))
+        .await;
+
+    let client = ExtractionClient::new(extraction_url.to_string(), extraction_key.to_string());
+
+    let job_id = client
+        .submit_job(tracks, language, diarize, None, None)
+        .await?;
+
+    info!("[{}] RunPod job submitted: {}", session_id, job_id);
+
+    // Persist job info so it can be resumed if daemon restarts
+    session_manager.persist_audio_extraction(session_id, Some(
+        crate::session::session::AudioExtractionJob {
+            job_id: job_id.clone(),
+            status: "in_progress".to_string(),
+            submitted_at: Some(chrono::Utc::now()),
+            extraction_url: Some(extraction_url.to_string()),
+            platform_task: None,
+        }
+    )).await?;
+
+    let output = poll_extraction_job(&client, &job_id, session_id, session_manager).await?;
+
+    info!("[{}] Extraction complete, {} tracks returned", session_id, output.tracks.len());
+
+    // Process the extraction output (merge, match speakers, write transcript)
+    let result = process_extraction_output(
+        session_id, session_dir, source_meta,
+        output, people_recognition, match_threshold,
+        session_manager, people_manager, files_db,
+    ).await;
+
+    result
+}
+
+/// Process extraction output: save raw, merge segments, match speakers, write transcript.
+/// Used by both the initial pipeline and the resume-on-restart path.
+async fn process_extraction_output(
+    session_id: &str,
+    session_dir: &std::path::Path,
+    _source_meta: &[crate::session::session::SourceMetadata],
+    output: ExtractionOutput,
+    people_recognition: bool,
+    match_threshold: f64,
+    session_manager: &SessionManager,
+    people_manager: &PeopleManager,
+    files_db: &FilesDb,
+) -> Result<u32, String> {
+    // Save raw extraction output
+    let raw_path = session_dir.join("extraction_raw.json");
+    let raw_json = serde_json::to_string_pretty(&output)
+        .map_err(|e| format!("Failed to serialize raw output: {e}"))?;
+    std::fs::write(&raw_path, raw_json)
+        .map_err(|e| format!("Failed to write extraction_raw.json: {e}"))?;
+
+    // Merge segments from all tracks, sorted by start time
+    let mut all_segments: Vec<Value> = Vec::new();
+    let mut all_embeddings: HashMap<String, Vec<f64>> = HashMap::new();
+
+    for (track_name, track_result) in &output.tracks {
+        for seg in &track_result.segments {
+            let mut seg_json = serde_json::to_value(seg)
+                .map_err(|e| format!("Failed to serialize segment: {e}"))?;
+            seg_json["track"] = json!(track_name);
+            seg_json["source_type"] = json!(&track_result.source_type);
+            all_segments.push(seg_json);
+        }
+        for (speaker, emb) in &track_result.speaker_embeddings {
+            all_embeddings.insert(speaker.clone(), emb.clone());
+        }
+    }
+
+    all_segments.sort_by(|a, b| {
+        let a_start = a.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let b_start = b.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        a_start.partial_cmp(&b_start).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // People matching
+    session_manager
+        .set_processing_state(session_id, Some("matching".to_string()))
+        .await;
+
+    let mut speaker_info: HashMap<String, Value> = HashMap::new();
+    let mut unconfirmed: u32 = 0;
+
+    if people_recognition && !all_embeddings.is_empty() {
+        info!("[{}] Matching {} speakers against People library", session_id, all_embeddings.len());
+
+        let embeddings_f64: HashMap<String, Vec<f64>> = all_embeddings
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let attributions = people_manager
+            .match_speakers(&embeddings_f64, match_threshold)
+            .await;
+
+        for attr in &attributions {
+            if attr.person_id.is_none() {
+                unconfirmed += 1;
+            }
+            speaker_info.insert(attr.speaker.clone(), json!({
+                "embedding": attr.embedding,
+                "person_id": attr.person_id,
+                "person_name": attr.person_name,
+                "confidence": attr.confidence,
+            }));
+
+            for seg in &mut all_segments {
+                if seg.get("speaker").and_then(|s| s.as_str()) == Some(&attr.speaker) {
+                    seg["person_id"] = json!(attr.person_id);
+                    seg["person_name"] = json!(attr.person_name);
+                    seg["attribution_confidence"] = json!(attr.confidence);
+                }
+            }
+        }
+
+        info!("[{}] Matched speakers: {} confirmed, {} unconfirmed",
+              session_id, attributions.len() - unconfirmed as usize, unconfirmed);
+    } else {
+        for (speaker, emb) in &all_embeddings {
+            unconfirmed += 1;
+            speaker_info.insert(speaker.clone(), json!({
+                "embedding": emb,
+                "person_id": null,
+                "person_name": null,
+                "confidence": 0.0,
+            }));
+        }
+    }
+
+    // Write enriched transcript via FilesDb
+    let transcript = json!({
+        "language": output.language,
+        "model": output.model,
+        "segments": all_segments,
+        "speaker_embeddings": speaker_info,
+    });
+
+    files_db.put_transcript(session_id, transcript).await?;
+
+    // Clear extraction job from metadata
+    session_manager.set_audio_extraction(session_id, None).await;
+
+    info!("[{}] Transcript saved: {} segments, {} speakers",
+          session_id, all_segments.len(), speaker_info.len());
+
+    Ok(unconfirmed)
+}
+
+// ── Summary endpoints ──
+
+async fn get_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let path = dir.join("summary.json");
+    if !path.exists() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "summary not found"}))));
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to read summary: {e}")}))))?;
+    let json: Value = serde_json::from_str(&content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to parse summary: {e}")}))))?;
+    Ok(Json(json))
+}
+
+#[derive(Deserialize)]
+struct UpdateSummaryRequest {
+    content: String,
+}
+
+async fn update_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateSummaryRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let json_path = dir.join("summary.json");
+    if !json_path.exists() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "summary not found"}))));
+    }
+
+    let _lock = crate::storage::write_lock(&json_path);
+    let source_revision = crate::storage::revision(&json_path);
+    // Read existing summary, update content
+    let existing = std::fs::read_to_string(&json_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    let mut summary: Value = serde_json::from_str(&existing)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    summary["content"] = json!(body.content);
+
+    let json_str = serde_json::to_string_pretty(&summary)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    if crate::storage::revision(&json_path) != source_revision {
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "summary changed during update; reload and retry"}))));
+    }
+    crate::storage::atomic_write(&json_path, json_str.as_bytes())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+
+    // Also update .md file
+    let md_path = dir.join("summary.md");
+    let _ = std::fs::write(&md_path, &body.content);
+
+    Ok(Json(summary))
+}
+
+async fn delete_summary(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let path = dir.join("summary.json");
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("Failed to delete summary: {e}")}))))?;
+    }
+    Ok(Json(json!({"status": "deleted"})))
+}
+
+// ── TODO endpoints ──
+
+async fn get_session_todos(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let path = state.session_manager.session_dir(&id).join("todos.json");
+    if !path.exists() {
+        return Ok(Json(json!({"items": []})));
+    }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    let json: Value = serde_json::from_str(&content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    Ok(Json(json))
+}
+
+async fn toggle_todo(
+    State(state): State<AppState>,
+    Path((id, idx)): Path<(String, usize)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let dir = state.session_manager.session_dir(&id);
+    let todos_path = dir.join("todos.json");
+    if !todos_path.exists() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "no todos"}))));
+    }
+    let _lock = crate::storage::write_lock(&todos_path);
+    let source_revision = crate::storage::revision(&todos_path);
+    let content = std::fs::read_to_string(&todos_path)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    let mut todos: Value = serde_json::from_str(&content)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+
+    let items = todos.get_mut("items")
+        .and_then(|i| i.as_array_mut())
+        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid todos format"}))))?;
+
+    if idx >= items.len() {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "todo index out of range"}))));
+    }
+
+    // Toggle completed
+    let completed = items[idx].get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
+    items[idx]["completed"] = json!(!completed);
+
+    let json_str = serde_json::to_string_pretty(&todos)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+    if crate::storage::revision(&todos_path) != source_revision {
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "todos changed during update; reload and retry"}))));
+    }
+    crate::storage::atomic_write(&todos_path, json_str.as_bytes())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("{e}")}))))?;
+
+    drop(_lock);
+    // Also update the summary.md and summary.json checkbox states
+    let summary_json_path = dir.join("summary.json");
+    if summary_json_path.exists() {
+        let _summary_lock = crate::storage::write_lock(&summary_json_path);
+        if let Ok(s) = std::fs::read_to_string(&summary_json_path) {
+            if let Ok(mut sj) = serde_json::from_str::<Value>(&s) {
+                if let Some(md) = sj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+                    let mut n = 0usize;
+                    let new_md = regex::Regex::new(r"- \[([ xX])\]").unwrap()
+                        .replace_all(&md, |_caps: &regex::Captures| {
+                            let result = if n == idx {
+                                if !completed { "- [x]" } else { "- [ ]" }
+                            } else {
+                                _caps.get(0).unwrap().as_str()
+                            };
+                            n += 1;
+                            result.to_string()
+                        }).to_string();
+                    sj["content"] = json!(new_md);
+                    let _ = crate::storage::write_json(&summary_json_path, &sj);
+                    let _ = std::fs::write(dir.join("summary.md"), &new_md);
+                }
+            }
+        }
+    }
+
+    Ok(Json(todos))
+}
+
+async fn get_person_todos(
+    State(state): State<AppState>,
+    Path(person_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    state.session_manager.reconcile().await;
+    // Get all sessions this person appears in
+    let session_ids = state.files_db.person_session_ids(&person_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    let mut result: Vec<Value> = Vec::new();
+    for sid in &session_ids {
+        let todos_path = state.session_manager.session_dir(sid).join("todos.json");
+        if !todos_path.exists() { continue; }
+        let content = match std::fs::read_to_string(&todos_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let todos: Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let items = match todos.get("items").and_then(|i| i.as_array()) {
+            Some(items) => items,
+            None => continue,
+        };
+
+        // Get session info for display
+        let session_info = state.session_manager.get_session_cached(sid).await;
+        let session_name = session_info.as_ref().and_then(|s| s.name.clone()).unwrap_or_else(|| sid.clone());
+        let session_created = session_info.as_ref().map(|s| s.created_at.to_rfc3339());
+
+        for (idx, item) in items.iter().enumerate() {
+            // Include items assigned to this person
+            if item.get("person_id").and_then(|v| v.as_str()) == Some(&person_id) {
+                let mut todo = item.clone();
+                todo["session_id"] = json!(sid);
+                todo["session_name"] = json!(session_name);
+                todo["session_created_at"] = json!(session_created);
+                todo["todo_index"] = json!(idx);
+                result.push(todo);
+            }
+        }
+    }
+
+    Ok(Json(json!({"todos": result})))
+}
+
+#[derive(Deserialize, Default)]
+struct SummarizeRequest {
+    #[serde(default)]
+    additional_instructions: Option<String>,
+}
+
+async fn summarize_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<SummarizeRequest>>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let additional = body.and_then(|b| b.0.additional_instructions);
+
+    // Check LLM configuration
+    let settings = state.settings.read().await;
+    let host = settings.llm_host.clone();
+    let model = settings.summarization_model.clone()
+        .unwrap_or_else(|| settings.llm_model.clone());
+    let mut prompt = settings.summarization_prompt.clone().unwrap_or_default();
+    let sum_sort = settings.summarization_openrouter_sort.clone();
+    drop(settings);
+
+    if let Some(extra) = additional {
+        if !extra.trim().is_empty() {
+            prompt.push_str(&format!("\n\nAdditional instructions: {}", extra.trim()));
+        }
+    }
+
+    let secrets = state.llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    if api_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "LLM API key not configured"}))));
+    }
+
+    // Check transcript exists and get session info
+    let dir = state.session_manager.session_dir(&id);
+    let transcript_path = dir.join("transcript.json");
+    if !transcript_path.exists() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "No transcript available to summarize"}))));
+    }
+
+    let session_info = state.session_manager.get_session(&id).await;
+
+    // Spawn background task
+    let session_manager = state.session_manager.clone();
+    let people_manager = state.people_manager.clone();
+    let tags_mgr = state.tags_manager.clone();
+    let files_db = state.files_db.clone();
+    let session_id = id.clone();
+
+    tokio::spawn(async move {
+        session_manager.emit_summary_progress(&session_id, "summarizing").await;
+        match crate::chat::summarize::run_summarization(&session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), &tags_mgr, &people_manager, &session_manager, sum_sort.as_deref()).await {
+            Ok(_) => {
+                session_manager.refresh_files(&session_id).await;
+                session_manager.emit_summary_completed(&session_id).await;
+                // Refresh recordings index with new summary description
+                let recordings_dir = files_db.recordings_dir().to_path_buf();
+                let mut sessions = session_manager.session_entries().await;
+                crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
+                info!("Summary generated for session {}", session_id);
+            }
+            Err(e) => {
+                error!("Summary failed for session {}: {}", session_id, e);
+                session_manager.emit_summary_failed(&session_id, &e).await;
+            }
+        }
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(json!({"status": "processing"}))))
+}
+
+/// Check settings and run auto-summarization if enabled.
+async fn maybe_auto_summarize(
+    session_id: &str,
+    session_manager: &SessionManager,
+    settings: &SharedSettings,
+    llm_secrets: &SharedSecrets,
+    tags_manager: &TagsManager,
+    people_manager: &PeopleManager,
+    files_db: &FilesDb,
+) {
+    let s = settings.read().await;
+    if !s.auto_summarize {
+        return;
+    }
+    let host = s.llm_host.clone();
+    let model = s.summarization_model.clone().unwrap_or_else(|| s.llm_model.clone());
+    let prompt = s.summarization_prompt.clone().unwrap_or_default();
+    let sum_sort = s.summarization_openrouter_sort.clone();
+    drop(s);
+
+    let secrets = llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    if api_key.is_empty() {
+        warn!("[{}] Auto-summarize skipped: no LLM API key configured", session_id);
+        return;
+    }
+
+    let dir = session_manager.session_dir(session_id);
+    let session_info = session_manager.get_session(session_id).await;
+
+    session_manager.emit_summary_progress(session_id, "summarizing").await;
+
+    match crate::chat::summarize::run_summarization(session_id, &dir, &host, &api_key, &model, &prompt, session_info.as_ref(), tags_manager, people_manager, session_manager, sum_sort.as_deref()).await {
+        Ok(_) => {
+            session_manager.refresh_files(session_id).await;
+            session_manager.emit_summary_completed(session_id).await;
+            // Refresh recordings index with new summary description
+            let recordings_dir = files_db.recordings_dir().to_path_buf();
+            let mut sessions = session_manager.session_entries().await;
+            crate::markdown::write_recordings_index(&recordings_dir, &mut sessions);
+            info!("[{}] Auto-summary generated", session_id);
+        }
+        Err(e) => {
+            error!("[{}] Auto-summary failed: {}", session_id, e);
+            session_manager.emit_summary_failed(session_id, &e).await;
+        }
+    }
+}
+
+
+/// Poll a standalone RunPod job. Gday tasks use their own OAuth-authenticated API.
+async fn poll_extraction_job(
+    client: &ExtractionClient,
+    job_id: &str,
+    session_id: &str,
+    session_manager: &SessionManager,
+) -> Result<ExtractionOutput, String> {
+    let mut delay = std::time::Duration::from_secs(2);
+    let max_delay = std::time::Duration::from_secs(15);
+    loop {
+        tokio::time::sleep(delay).await;
+        match client.poll_status(job_id).await? {
+            Some(output) => return Ok(output),
+            None => {
+                session_manager.emit_transcription_progress(session_id, "extracting");
+                delay = (delay * 2).min(max_delay);
+            }
+        }
+    }
+}
+
+/// Resume polling for any sessions with in-progress extraction jobs.
+/// Called once on daemon startup.
+pub async fn resume_pending_extractions(
+    session_manager: SessionManager,
+    people_manager: PeopleManager,
+    files_db: FilesDb,
+    settings: SharedSettings,
+    llm_secrets: SharedSecrets,
+    tags_manager: TagsManager,
+    gday_auth: std::sync::Arc<super::gday_auth::GdayAuth>,
+) {
+    let pending = session_manager.get_pending_extractions().await;
+    if pending.is_empty() { return; }
+
+    info!("Resuming {} pending extraction job(s)...", pending.len());
+
+    for (session_id, job) in pending {
+        let s = settings.read().await;
+        let extraction_url = job.extraction_url.clone().or_else(|| s.audio_extraction_url.clone());
+        let extraction_key = s.audio_extraction_api_key.clone();
+        drop(s);
+        let client = extraction_url.zip(extraction_key)
+            .map(|(url, key)| ExtractionClient::new(url, key));
+        if client.is_none() && job.platform_task.is_none() {
+            warn!("No extraction credentials or durable task for session {}", session_id);
+            continue;
+        }
+
+        let sm = session_manager.clone();
+        let pm = people_manager.clone();
+        let fdb = files_db.clone();
+        let stg = settings.clone();
+        let secrets = llm_secrets.clone();
+        let tm = tags_manager.clone();
+        let auth = gday_auth.clone();
+
+        info!("Resuming extraction job {} for session {}", job.job_id, session_id);
+
+        tokio::spawn(async move {
+            let result = if let Some(task) = &job.platform_task {
+                // Previously saved Gday tasks also require the owning user's login.
+                let platform = PlatformClient::for_user(&task.base_url, auth.clone());
+                match ensure_gday_task(&platform, &session_id, task.clone(), &sm).await {
+                    Ok(task) => poll_gday_task(&platform, &task.task_id, &session_id, &sm).await,
+                    Err(error) => Err(error),
+                }
+            } else {
+                poll_extraction_job(
+                    client.as_ref().expect("standalone credentials checked"),
+                    &job.job_id, &session_id, &sm,
+                ).await
+            };
+
+            match result {
+                Ok(output) => {
+                    info!("[{}] Resumed extraction completed, processing results...", session_id);
+
+                    // Get session info for the pipeline continuation
+                    let (session_dir, _language, source_meta) = match sm
+                        .get_session_extraction_info(&session_id)
+                        .await
+                    {
+                        Ok(info) => info,
+                        Err(e) => {
+                            error!("[{}] Failed to get session info for resumed job: {}", session_id, e);
+                            if job.platform_task.is_none() {
+                                sm.set_audio_extraction(&session_id, None).await;
+                            }
+                            return;
+                        }
+                    };
+
+                    let stg_r = stg.read().await;
+                    let people_recognition = stg_r.people_recognition;
+                    let match_threshold = stg_r.speaker_match_threshold;
+                    drop(stg_r);
+
+                    // Process the output (same as post-extraction in the pipeline)
+                    let result = process_extraction_output(
+                        &session_id, &session_dir, &source_meta,
+                        output, people_recognition, match_threshold,
+                        &sm, &pm, &fdb,
+                    ).await;
+
+                    match result {
+                        Ok(unconfirmed) => {
+                            sm.set_processing_state(&session_id, None).await;
+                            sm.emit_transcription_completed(&session_id, unconfirmed);
+                            info!("[{}] Resumed transcription completed", session_id);
+
+                            maybe_auto_summarize(&session_id, &sm, &stg, &secrets, &tm, &pm, &fdb).await;
+                        }
+                        Err(e) => {
+                            error!("[{}] Resumed transcription post-processing failed: {}", session_id, e);
+                            sm.set_processing_state(&session_id, None).await;
+                            sm.emit_transcription_failed(&session_id, &e);
+                            if job.platform_task.is_none() {
+                                sm.set_audio_extraction(&session_id, None).await;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("[{}] Resumed extraction job failed: {}", session_id, e);
+                    sm.set_processing_state(&session_id, None).await;
+                    sm.emit_transcription_failed(&session_id, &e);
+                    // Keep the durable location when either service is unavailable.
+                    // A later restart can still recover an expired RunPod response.
+                    if job.platform_task.is_none() {
+                        sm.set_audio_extraction(&session_id, None).await;
+                    }
+                }
+            }
+        });
+    }
+}
+
+// --- Conversation routes ---
+
+pub fn conversation_routes() -> Router<AppState> {
+    Router::new()
+        .route("/conversations", get(list_conversations))
+        .route("/conversations", post(create_conversation))
+        .route("/conversations/{id}", get(get_conversation))
+        .route("/conversations/{id}", delete(delete_conversation))
+        .route("/conversations/{id}/messages", post(send_message))
+        .route("/conversations/{id}/messages/{msg_id}", delete(delete_message))
+        .route("/conversations/{id}/claude-sync", post(sync_claude_messages))
+        .route("/conversations/{id}/export-prompt", get(export_prompt))
+        .route("/llm/models", get(list_models))
+}
+
+async fn list_conversations(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let manager = state.conversation_manager;
+    let summaries = crate::storage::blocking(move || manager.list(10)).await;
+    Json(json!({ "conversations": summaries }))
+}
+
+async fn create_conversation(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let title = body.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let chat_backend = body.get("chat_backend").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let mut conv = state.conversation_manager.create(title)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    if chat_backend.is_some() {
+        conv.chat_backend = chat_backend;
+        state.conversation_manager.save(&conv)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }
+    Ok((StatusCode::CREATED, Json(serde_json::to_value(&conv).unwrap_or_default())))
+}
+
+async fn get_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let manager = state.conversation_manager;
+    let conv = crate::storage::blocking(move || manager.get_transformed(&id)).await
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+    Ok(Json(conv))
+}
+
+async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    state.conversation_manager.delete(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SendMessageBody {
+    content: String,
+    #[serde(default)]
+    mentions: Vec<Mention>,
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SendMessageBody>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)> {
+    // Load conversation
+    let mut conv = state.conversation_manager.get(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+
+    let now = chrono::Utc::now();
+
+    // Append user message
+    let user_msg_id = format!("msg_{}", now.timestamp_nanos_opt().unwrap_or(0));
+    conv.messages.push(Message::User {
+        id: user_msg_id,
+        content: body.content.clone(),
+        mentions: body.mentions.clone(),
+        timestamp: now,
+    });
+
+    // Auto-title from first user message
+    if conv.title.is_empty() {
+        conv.title = body.content.chars().take(60).collect();
+    }
+
+    // Resolve all remembered source criteria against current files on every
+    // turn. Historical snapshots are retained for display, never used as truth.
+    let mut criteria = ContextCriteria::default();
+    for message in &conv.messages {
+        if let Message::ContextResult { criteria: previous, .. } = message { criteria.merge(previous); }
+    }
+    criteria.merge(&ContextCriteria::from_mentions(&body.mentions));
+    let context_chunks = crate::llm::context::retrieve_context(
+        &criteria, &state.files_db, &state.session_manager, &state.tags_manager, &state.people_manager,
+    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    let previous = conv.messages.iter().rev().find_map(|message| {
+        if let Message::ContextResult { chunks, .. } = message { Some(chunks) } else { None }
+    });
+    let changed = previous.map(|chunks| serde_json::to_value(chunks).ok())
+        != Some(serde_json::to_value(&context_chunks).ok());
+    if changed && (!context_chunks.is_empty() || previous.is_some()) {
+        conv.messages.push(Message::ContextResult {
+            id: format!("ctx_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+            criteria,
+            chunks: context_chunks.clone(),
+            timestamp: chrono::Utc::now(),
+        });
+    }
+
+    conv.updated_at = chrono::Utc::now();
+
+    // Save conversation with user message (and possibly context)
+    state.conversation_manager.save(&conv)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    // Prepare LLM request
+    let context_str = crate::llm::prompt::format_context(&context_chunks);
+
+    let settings = state.settings.read().await;
+    let host = settings.llm_host.clone();
+    let model = settings.llm_model.clone();
+    let openrouter_sort = settings.openrouter_sort.clone();
+    let self_intro = settings.chat_self_intro.clone();
+    drop(settings);
+
+    let llm_messages = crate::llm::prompt::build_messages(&conv, &context_str, self_intro.as_deref());
+
+    let secrets = state.llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    let chunk_count = context_chunks.len();
+    let session_count = {
+        let mut sids = std::collections::HashSet::new();
+        for c in &context_chunks { sids.insert(&c.source_id); }
+        sids.len()
+    };
+
+    let conv_manager = state.conversation_manager.clone();
+    let conv_id = id.clone();
+
+    // Build SSE stream
+    let stream = async_stream::stream! {
+        // Emit context loaded event if applicable
+        if chunk_count > 0 {
+            yield Ok(Event::default()
+                .event("context_loaded")
+                .data(json!({"chunk_count": chunk_count, "session_count": session_count}).to_string()));
+        }
+
+        if api_key.is_empty() {
+            yield Ok(Event::default()
+                .event("error")
+                .data(json!({"error": "LLM API key not configured. Set it in Settings > Services."}).to_string()));
+            return;
+        }
+
+        // Stream from LLM
+        let model_name = model.clone();
+        let client = LlmClient::new(host, api_key, model)
+            .with_provider_sort(openrouter_sort);
+        match client.stream_chat(llm_messages).await {
+            Ok(llm_stream) => {
+                let mut full_content = String::new();
+                let mut usage_value: Option<Value> = None;
+                let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+
+                futures::pin_mut!(llm_stream);
+
+                while let Some(result) = llm_stream.next().await {
+                    match result {
+                        Ok(content) => {
+                            if let Some(thinking) = content.strip_prefix('\x01') {
+                                yield Ok(Event::default()
+                                    .event("thinking")
+                                    .data(json!({"content": thinking}).to_string()));
+                            } else if let Some(usage_str) = content.strip_prefix('\x02') {
+                                if let Ok(u) = serde_json::from_str::<Value>(usage_str) {
+                                    let prompt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let completion = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    let total = u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt + completion);
+                                    let cost = u.get("cost").and_then(|v| v.as_f64());
+                                    let cost_str = cost.map(|c| format!(", cost ${:.4}", c)).unwrap_or_default();
+                                    info!(
+                                        "[{}] Chat {} — {} prompt + {} completion = {} tokens{}",
+                                        conv_id, model_name, prompt, completion, total, cost_str
+                                    );
+                                }
+                                usage_value = serde_json::from_str(usage_str).ok();
+                                yield Ok(Event::default()
+                                    .event("usage")
+                                    .data(usage_str.to_string()));
+                            } else {
+                                full_content.push_str(&content);
+                                yield Ok(Event::default()
+                                    .event("delta")
+                                    .data(json!({"content": content}).to_string()));
+                            }
+                        }
+                        Err(e) => {
+                            yield Ok(Event::default()
+                                .event("error")
+                                .data(json!({"error": e}).to_string()));
+                            return;
+                        }
+                    }
+                }
+
+                // Save assistant message (skip if empty, e.g. client cancelled before any content)
+                if !full_content.is_empty() {
+                    if let Some(mut conv) = conv_manager.get(&conv_id) {
+                        conv.messages.push(Message::Assistant {
+                            id: assistant_msg_id.clone(),
+                            content: full_content,
+                            timestamp: chrono::Utc::now(),
+                            usage: usage_value,
+                        });
+                        conv.updated_at = chrono::Utc::now();
+                        if let Err(e) = conv_manager.save(&conv) {
+                            warn!("Failed to save assistant message: {}", e);
+                        }
+                    }
+                }
+
+                yield Ok(Event::default()
+                    .event("done")
+                    .data(json!({"message_id": assistant_msg_id}).to_string()));
+            }
+            Err(e) => {
+                yield Ok(Event::default()
+                    .event("error")
+                    .data(json!({"error": e}).to_string()));
+            }
+        }
+    };
+
+    Ok(Sse::new(stream))
+}
+
+/// Sync messages from a Claude Code session into an app conversation.
+/// Receives user + assistant messages and the claude session_id.
+async fn sync_claude_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut conv = state.conversation_manager.get(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+
+    if let Some(sid) = body.get("claude_session_id").and_then(|v| v.as_str()) {
+        conv.claude_session_id = Some(sid.to_string());
+    }
+
+    if let Some(messages) = body.get("messages").and_then(|v| v.as_array()) {
+        let now = chrono::Utc::now();
+        for msg in messages {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let msg_id = msg.get("id").and_then(|v| v.as_str())
+                .unwrap_or(&format!("msg_{}", now.timestamp_nanos_opt().unwrap_or(0)))
+                .to_string();
+
+            if content.is_empty() { continue; }
+
+            match role {
+                "user" => {
+                    // Parse mentions if present
+                    let mentions: Vec<crate::chat::types::Mention> = msg.get("mentions")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+                    conv.messages.push(Message::User {
+                        id: msg_id, content, mentions, timestamp: now,
+                    });
+                }
+                "assistant" => {
+                    conv.messages.push(Message::Assistant {
+                        id: msg_id, content, timestamp: now, usage: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    conv.updated_at = chrono::Utc::now();
+    if conv.title.is_empty() {
+        if let Some(first_user) = conv.messages.iter().find(|m| matches!(m, Message::User { .. })) {
+            if let Message::User { content, .. } = first_user {
+                conv.title = content.chars().take(60).collect();
+            }
+        }
+    }
+
+    state.conversation_manager.save(&conv)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_message(
+    State(state): State<AppState>,
+    Path((id, msg_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    state.conversation_manager.delete_message(&id, &msg_id)
+        .map_err(|e| {
+            let status = if e.contains("not found") { StatusCode::NOT_FOUND } else { StatusCode::INTERNAL_SERVER_ERROR };
+            (status, Json(json!({"error": e})))
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn export_prompt(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, [(axum::http::header::HeaderName, &'static str); 1], String), (StatusCode, Json<Value>)> {
+    let conv = state.conversation_manager.get(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "conversation not found"}))))?;
+
+    // Get context from the most recent context_result
+    let context_chunks: Vec<crate::chat::types::ContextChunk> = conv.messages.iter().rev()
+        .find_map(|m| {
+            if let Message::ContextResult { chunks, .. } = m { Some(chunks.clone()) }
+            else { None }
+        })
+        .unwrap_or_default();
+
+    let context_str = crate::llm::prompt::format_context(&context_chunks);
+    let self_intro = state.settings.read().await.chat_self_intro.clone();
+    let text = crate::llm::prompt::format_as_text(&conv, &context_str, self_intro.as_deref());
+
+    Ok((
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        text,
+    ))
+}
+
+// --- Claude Code routes ---
+
+pub fn claude_routes() -> Router<AppState> {
+    Router::new()
+        .route("/claude/status", get(claude_status))
+        .route("/claude/send", post(claude_send))
+        .route("/claude/stop", post(claude_stop))
+        .route("/claude/sessions", get(claude_list_sessions))
+        .route("/claude/sessions/{id}", get(claude_get_session))
+        .route("/claude/approve-tools", post(claude_approve_tools))
+}
+
+async fn claude_status(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let available = ClaudeCodeRunner::is_available().await;
+    let running = state.claude_runner.is_running().await;
+    Json(json!({
+        "available": available,
+        "running": running,
+    }))
+}
+
+async fn claude_send(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<Value>)> {
+    let prompt = body.get("prompt").and_then(|v| v.as_str())
+        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "prompt is required"}))))?
+        .to_string();
+    let session_id = body.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    // Resolve @ mentions to detailed context for Claude Code
+    let mentions_context = if let Some(mentions) = body.get("mentions").and_then(|v| v.as_array()) {
+        let mut lines = Vec::new();
+        for m in mentions {
+            let mtype = m.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let label = m.get("label").and_then(|v| v.as_str()).unwrap_or(id);
+            match mtype {
+                "session" => {
+                    lines.push(format!("- Session \"{}\" (id: {})", label, id));
+                }
+                "person" => {
+                    let person = state.people_manager.get_person(id).await;
+                    let name = person.as_ref().map(|p| p.name.as_str()).unwrap_or(label);
+                    lines.push(format!("- Person \"{}\" (id: {})", name, id));
+                }
+                "tag" => {
+                    let tag = state.tags_manager.get_tag(label).await;
+                    let notes = tag.as_ref().and_then(|t| t.notes.as_deref()).unwrap_or("");
+                    if notes.is_empty() {
+                        lines.push(format!("- Tag \"{}\"", label));
+                    } else {
+                        lines.push(format!("- Tag \"{}\": {}", label, notes));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(format!("Referenced:\n{}", lines.join("\n")))
+        }
+    } else {
+        None
+    };
+
+    let claude_model = state.settings.read().await.claude_code_model.clone();
+
+    // Mentions context prepended to the prompt
+    let combined_context = mentions_context;
+
+    // Build the full prompt so we can include it in the stream for export
+    let full_prompt = match &combined_context {
+        Some(ctx) => format!("{}\n\n---\n{}", ctx, prompt),
+        None => prompt.clone(),
+    };
+
+    let mut rx = state.claude_runner.run(
+        &prompt,
+        session_id.as_deref(),
+        combined_context.as_deref(),
+        claude_model.as_deref(),
+    ).await.map_err(|e| (StatusCode::CONFLICT, Json(json!({"error": e}))))?;
+
+    let stream = async_stream::stream! {
+        // Emit the full prompt (with resolved mentions) so the frontend can export it
+        yield Ok(Event::default().event("prompt").data(json!({"full_prompt": full_prompt}).to_string()));
+
+        while let Some(event) = rx.recv().await {
+            let (event_name, data) = match &event {
+                crate::llm::claude_code::ClaudeEvent::Init { .. } => ("init", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::Delta { .. } => ("delta", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::ToolUse { .. } => ("tool_use", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::Done { .. } => ("done", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::Error { .. } => ("error", serde_json::to_string(&event).unwrap()),
+                crate::llm::claude_code::ClaudeEvent::PermissionRequest { .. } => ("permission_request", serde_json::to_string(&event).unwrap()),
+            };
+            yield Ok(Event::default().event(event_name).data(data));
+        }
+    };
+
+    Ok(Sse::new(stream))
+}
+
+async fn claude_stop(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let stopped = state.claude_runner.stop().await;
+    Json(json!({ "stopped": stopped }))
+}
+
+async fn claude_approve_tools(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let tools: Vec<String> = body.get("tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let scope = body.get("scope").and_then(|v| v.as_str()).unwrap_or(
+        if body.get("permanent").and_then(|v| v.as_bool()).unwrap_or(false) { "permanent" } else { "once" }
+    );
+
+    if tools.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "no tools specified"}))));
+    }
+
+    match scope {
+        "permanent" => {
+            state.claude_runner.approve_tools_permanent(&tools)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+            state.claude_runner.approve_tools_session(&tools).await;
+        }
+        "session" => {
+            state.claude_runner.approve_tools_session(&tools).await;
+        }
+        _ => {
+            // "once": add to session list so the immediate retry works,
+            // removed automatically after the next run completes.
+            state.claude_runner.approve_tools_once(&tools).await;
+        }
+    }
+
+    Ok(Json(json!({ "approved": tools, "scope": scope })))
+}
+
+async fn claude_list_sessions(
+    State(state): State<AppState>,
+) -> Json<Value> {
+    let sessions = state.claude_runner.list_sessions();
+    Json(json!({ "sessions": sessions }))
+}
+
+async fn claude_get_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let messages = state.claude_runner.load_session(&id)
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "session not found"}))))?;
+    Ok(Json(json!({ "session_id": id, "messages": messages })))
+}
+
+async fn list_models(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let settings = state.settings.read().await;
+    let host = settings.llm_host.clone();
+    drop(settings);
+
+    let secrets = state.llm_secrets.read().await;
+    let api_key = secrets.get_api_key(&host).cloned().unwrap_or_default();
+    drop(secrets);
+
+    if api_key.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "LLM API key not configured"}))));
+    }
+
+    let result = LlmClient::list_models(&host, &api_key).await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"error": e}))))?;
+
+    Ok(Json(result))
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn standalone_transcription_does_not_probe_gday_or_create_platform_tasks() {
+        use axum::http::HeaderMap;
+        async fn unexpected() -> StatusCode {
+            panic!("Standalone transcription called a Gday endpoint");
+        }
+        let app = Router::new()
+            .route(
+                "/upload",
+                post(|headers: HeaderMap| async move {
+                    assert_eq!(headers["authorization"], "Bearer filedrop-key");
+                    Json(json!({"url":"/d/audio.opus"}))
+                }),
+            )
+            .route(
+                "/run",
+                post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                    assert_eq!(headers["authorization"], "Bearer runpod-key");
+                    assert!(body["input"].get("result_sink").is_none());
+                    assert_eq!(body["input"]["tracks"][0]["track_name"], "mic");
+                    Json(json!({"id":"standalone-job","status":"IN_QUEUE"}))
+                }),
+            )
+            .route(
+                "/status/standalone-job",
+                get(|| async {
+                    Json(json!({"id":"standalone-job","status":"COMPLETED","output":{
+                        "tracks":{},"language":"en","model":"standalone"
+                    }}))
+                }),
+            )
+            .fallback(unexpected);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let directory =
+            std::env::temp_dir().join(format!("standalone-transcription-{}", Uuid::new_v4()));
+        let manager = SessionManager::new(directory.join("recordings"));
+        let info = manager
+            .create_session(crate::session::config::SessionConfig::default())
+            .await;
+        let session_dir = manager.session_dir(&info.id);
+        std::fs::write(session_dir.join("mic.opus"), b"fixture").unwrap();
+        let sources = vec![crate::session::session::SourceMetadata {
+            filename: "mic.opus".into(),
+            source_type: crate::audio::source::SourceType::Mic,
+            source_label: "mic".into(),
+            channels: 1,
+            raw_sample_rate: 48000,
+        }];
+        let people = PeopleManager::new(&directory);
+        let files = FilesDb::new(directory.join("recordings"));
+        run_transcription_pipeline(
+            &info.id,
+            &session_dir,
+            "en",
+            &sources,
+            &url,
+            "runpod-key",
+            &url,
+            "filedrop-key",
+            false,
+            false,
+            0.75,
+            &manager,
+            &people,
+            &files,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(std::fs::read_to_string(session_dir.join("transcript.json"))
+            .unwrap()
+            .contains("standalone"));
+
+        // An old Gday record cannot be resumed with the standalone file-drop key.
+        let old_task = serde_json::from_value(json!({
+            "base_url":url,"task_id":"previous-gday-task","user_auth":false
+        }))
+        .unwrap();
+        manager
+            .persist_audio_extraction(
+                &info.id,
+                Some(crate::session::session::AudioExtractionJob {
+                    job_id: String::new(),
+                    status: "in_progress".into(),
+                    submitted_at: None,
+                    extraction_url: None,
+                    platform_task: Some(old_task),
+                }),
+            )
+            .await
+            .unwrap();
+        let error = run_transcription_pipeline(
+            &info.id,
+            &session_dir,
+            "en",
+            &sources,
+            &url,
+            "runpod-key",
+            &url,
+            "filedrop-key",
+            false,
+            false,
+            0.75,
+            &manager,
+            &people,
+            &files,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Sign in"));
+        assert_eq!(manager.get_pending_extractions().await.len(), 1);
+        server.abort();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn media_upload_extensions_are_allowlisted_case_insensitively() {
+        assert!(is_supported_media_filename("meeting.MP4"));
+        assert!(is_supported_media_filename("audio.opus"));
+        assert!(!is_supported_media_filename("notes.txt"));
+        assert!(!is_supported_media_filename("recording"));
+    }
+
+    #[test]
+    fn opus_output_names_are_sanitized() {
+        let dir =
+            std::env::temp_dir().join(format!("meeting-notes-name-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            unique_opus_filename(&dir, "Quarterly Meeting (final).mp4"),
+            "quarterly_meeting__final.opus"
+        );
+        std::fs::write(dir.join("quarterly_meeting__final.opus"), b"existing").unwrap();
+        assert_eq!(
+            unique_opus_filename(&dir, "Quarterly Meeting (final).mp4"),
+            "quarterly_meeting__final-2.opus"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

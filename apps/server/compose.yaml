@@ -1,0 +1,28 @@
+services:
+  server:
+    image: meeting-notes-server:local
+    build: .
+    ports:
+      - '127.0.0.1:3000:3000'
+    environment:
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET in .env}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-500000000}
+      SERVER_URL: ${SERVER_URL:-http://localhost:3000}
+      DATABASE_ADAPTER: ${DATABASE_ADAPTER:-sqlite}
+      DATABASE_URI: ${DATABASE_URI:-file:/app/data/gday.db}
+      AUTH_DATABASE_URI: ${AUTH_DATABASE_URI:-}
+      OIDC_UPSTREAM_ISSUER: ${OIDC_UPSTREAM_ISSUER:-}
+      OIDC_UPSTREAM_CLIENT_ID: ${OIDC_UPSTREAM_CLIENT_ID:-}
+      OIDC_UPSTREAM_CLIENT_SECRET: ${OIDC_UPSTREAM_CLIENT_SECRET:-}
+      DATA_DIR: /app/data
+      TRANSCRIPTION_PROVIDER: ${TRANSCRIPTION_PROVIDER:-runpod}
+      LOCAL_WORKER_URL: ${LOCAL_WORKER_URL:-}
+      LOCAL_WORKER_API_TOKEN: ${LOCAL_WORKER_API_TOKEN:-}
+      SERVER_INTERNAL_URL: ${SERVER_INTERNAL_URL:-}
+      RUNPOD_ENDPOINT_URL: ${RUNPOD_ENDPOINT_URL:-}
+      RUNPOD_API_KEY: ${RUNPOD_API_KEY:-}
+    volumes:
+      - gday-data:/app/data
+    restart: unless-stopped
+volumes:
+  gday-data:

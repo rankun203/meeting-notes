@@ -1,0 +1,36 @@
+import { LoginForm } from './form'
+import { serverEnv } from '../../../lib/env'
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { getBrowserPrincipal, authIssuer } from '../../../server/auth'
+export const metadata = {
+  title: 'Sign in · Meeting Notes Server',
+  robots: { index: false, follow: false },
+}
+export default async function SignIn({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(await searchParams)) {
+    if (Array.isArray(value)) value.forEach((item) => params.append(key, item))
+    else if (value !== undefined) params.append(key, value)
+  }
+  if (
+    params.has('sig') &&
+    (await getBrowserPrincipal(
+      new Request(authIssuer(), { headers: await headers() }),
+    ))
+  )
+    redirect('/api/auth/oauth2/authorize?' + params.toString())
+  return (
+    <main className="oauth">
+      <p className="eyebrow">MEETING NOTES / SERVER</p>
+      <h1>Welcome back.</h1>
+      <p>Sign in with your Meeting Notes Server account to continue.</p>
+      <LoginForm upstream={Boolean(serverEnv().OIDC_UPSTREAM_ISSUER)} />
+      <p>Need an account? Ask your Meeting Notes Server administrator.</p>
+    </main>
+  )
+}

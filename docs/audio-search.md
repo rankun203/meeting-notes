@@ -57,7 +57,7 @@ Improve Whisper's accuracy for known vocabulary so the transcript is correct fro
 
 ## Existing Pipeline State
 
-The current audio extraction pipeline (`apps/audio-extraction/`) already returns:
+The current audio extraction pipeline (`apps/worker-audio-extraction/`) already returns:
 - Word-level timestamps with confidence scores from WhisperX
 - Speaker diarization with speaker identity embeddings (256-dim, pyannote) — useful for speaker matching, not content search
 - Per-word `score` field that can flag likely transcription errors

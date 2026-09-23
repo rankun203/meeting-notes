@@ -1,0 +1,4 @@
+services:
+  server:
+    image: meeting-notes-server:local
+    build: .

@@ -40,7 +40,7 @@ if [[ -f "$executable" ]] && /usr/sbin/lsof -t "$executable" >/dev/null 2>&1; th
     exit 1
 fi
 
-cargo build --manifest-path "$repo_dir/Cargo.toml" --target-dir "$repo_dir/target" --release
+cargo build --manifest-path "$repo_dir/Cargo.toml" --package meeting-notes-daemon --target-dir "$repo_dir/target" --release
 mkdir -p "$app_path/Contents/MacOS"
 cp "$repo_dir/target/release/meeting-notes-daemon" "$executable"
 cp "$repo_dir/packaging/macos/Info.plist" "$app_path/Contents/Info.plist"

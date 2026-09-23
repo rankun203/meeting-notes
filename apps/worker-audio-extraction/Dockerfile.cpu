@@ -1,0 +1,16 @@
+FROM python:3.12-slim-bookworm
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 libgomp1 && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir uv
+COPY pyproject.toml .
+COPY src/ src/
+# Match WhisperX 3.8's torch ABI using the CPU wheel index, never CUDA wheels.
+RUN uv pip install --system torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu && \
+    uv pip freeze --system > /tmp/cpu-constraints.txt && \
+    uv pip install --system --constraint /tmp/cpu-constraints.txt .
+RUN useradd --uid 10001 --create-home worker && mkdir /data /cache && chown worker:worker /data /cache
+USER worker
+ENV WORKER_MODE=http WHISPER_DEVICE=cpu WHISPER_MODEL_SIZE=small WHISPER_COMPUTE_TYPE=int8 WHISPER_BATCH_SIZE=1 \
+    SEGMENTATION_BATCH_SIZE=1 EMBEDDING_BATCH_SIZE=1 OMP_NUM_THREADS=4 HF_HOME=/cache/huggingface TORCH_HOME=/cache/torch WORKER_DATA_DIR=/data
+EXPOSE 8000
+CMD ["python", "-m", "audio_extraction"]

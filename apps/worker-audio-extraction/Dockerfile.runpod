@@ -1,0 +1,87 @@
+FROM runpod/pytorch:1.0.3-cu1281-torch280-ubuntu2404
+
+WORKDIR /app
+RUN useradd --uid 10001 --create-home worker && mkdir -p /data /cache
+ENV HF_HOME=/cache/huggingface TORCH_HOME=/cache/torch WORKER_DATA_DIR=/data \
+    ORT_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=0 HF_HUB_DISABLE_TELEMETRY=1
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg htop && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast dependency resolution
+RUN pip install --no-cache-dir uv
+
+# Ubuntu 24.04 marks system Python as externally managed (PEP 668).
+# The base image sets PIP_BREAK_SYSTEM_PACKAGES for pip; uv needs its own env var.
+ENV UV_BREAK_SYSTEM_PACKAGES=1
+
+# Install dependencies first (layer cached unless pyproject.toml changes).
+# Pin torch* to base image versions so uv doesn't try to upgrade them.
+COPY pyproject.toml .
+RUN pip freeze | grep -iE '^(torch|torchaudio|torchvision)==' > /tmp/torch-constraints.txt && \
+    cat /tmp/torch-constraints.txt && \
+    uv pip compile pyproject.toml --constraint /tmp/torch-constraints.txt -o /tmp/requirements.txt && \
+    uv pip install --system -r /tmp/requirements.txt
+
+# ---------------------------------------------------------------------------
+# Pre-download ALL models at build time so cold starts are near-instant.
+# GPU is not available during docker build, so we load on CPU.
+# These layers are ~5 GB and rarely change — placed BEFORE COPY src/
+# so code changes don't trigger multi-GB re-downloads.
+# ---------------------------------------------------------------------------
+
+ARG WHISPER_MODEL_SIZE=large-v2
+
+# 1. Whisper model (~3 GB for large-v2) + upgrade Lightning checkpoint
+RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cpu', compute_type='int8')" && \
+    python -c "\
+from lightning.pytorch.utilities.migration.utils import migrate_checkpoint; \
+import torch, pathlib; \
+p = next(pathlib.Path('/usr/local/lib').glob('python3.*/dist-packages/whisperx/assets/pytorch_model.bin')); \
+ckpt = torch.load(p, map_location='cpu', weights_only=False); \
+migrated, _ = migrate_checkpoint(ckpt); \
+torch.save(migrated, p); \
+print('Lightning checkpoint upgraded in-place')" 2>/dev/null || true
+
+# 2. Alignment models for common languages (~400 MB each)
+RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
+RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
+
+# 3. Pyannote diarization + speaker embedding models (~600 MB total)
+#    RunPod's GitHub integration does NOT pass the HF token at build time.
+#    These gated models download on first diarization request at runtime
+#    using the HF_TOKEN env var set in RunPod endpoint settings.
+#    For manual builds, pass --build-arg HF_TOKEN=hf_... to pre-cache.
+ARG HF_TOKEN=""
+RUN python <<'PYEOF' || echo 'Pyannote model pre-cache skipped — will download at runtime'
+import os, sys
+token = os.environ.get('HF_TOKEN') or None
+if not token:
+    print('HF_TOKEN not available at build time (expected for RunPod GitHub builds)')
+    print('Pyannote models will download on first diarization request using runtime HF_TOKEN')
+    sys.exit(0)
+print('HF_TOKEN found, pre-caching pyannote models...')
+from pyannote.audio import Pipeline
+Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', token=token)
+print('Diarization pipeline cached (includes segmentation + embedding sub-models)')
+PYEOF
+
+# ---------------------------------------------------------------------------
+# Copy source code last — code changes only rebuild this layer (~KB)
+# ---------------------------------------------------------------------------
+
+COPY src/ src/
+RUN uv pip install --system --no-deps -e .
+
+# Runtime configuration (override via RunPod env vars)
+ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+ENV WHISPER_DEVICE=cuda
+ENV WHISPER_COMPUTE_TYPE=float16
+ENV WHISPER_BATCH_SIZE=16
+
+# Match the CPU image owner so switching Compose variants can reuse volumes.
+RUN chown -R worker:worker /data /cache
+USER worker
+CMD ["python", "-m", "audio_extraction"]

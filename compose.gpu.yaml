@@ -1,0 +1,14 @@
+services:
+  worker-audio-extraction:
+    image: meeting-notes-worker-audio-extraction:gpu-local
+    platform: linux/amd64
+    build:
+      context: ./apps/worker-audio-extraction
+      dockerfile: Dockerfile.runpod
+    gpus: all
+    environment:
+      WORKER_MODE: http
+      WHISPER_DEVICE: cuda
+      WHISPER_COMPUTE_TYPE: float16
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-large-v2}
+      WHISPER_BATCH_SIZE: ${WHISPER_BATCH_SIZE:-16}

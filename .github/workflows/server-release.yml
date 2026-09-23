@@ -1,0 +1,150 @@
+name: Publish server container
+
+on:
+  push:
+    tags:
+      - 'server-v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (for example server-v0.4.0)
+        required: true
+        type: string
+
+concurrency:
+  group: server-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: apps/server
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      revision: ${{ steps.version.outputs.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Verify release version and notes
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^server-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" = "server-v$(node -p "require('./package.json').version")"
+          test -s ".github/release-notes/${RELEASE_TAG#server-}.md"
+          echo "version=${RELEASE_TAG#server-v}" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - run: npm install --global pnpm@12.5.1
+      - run: pnpm install --frozen-lockfile
+      - name: Verify generated admin import map
+        env:
+          PAYLOAD_SECRET: build-only-placeholder-at-least-32-characters
+        run: |
+          pnpm generate:importmap
+          git diff --exit-code -- 'src/app/(payload)/admin/importMap.ts'
+      - run: pnpm exec next typegen
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  container:
+    name: Build ${{ matrix.arch }} image
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.revision }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: apps/server
+          file: apps/server/Dockerfile
+          push: true
+          platforms: linux/${{ matrix.arch }}
+          tags: ghcr.io/${{ github.repository_owner }}/meeting-notes-server:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+          sbom: false
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.verify.outputs.version }}
+            REVISION=${{ needs.verify.outputs.revision }}
+
+      - name: Verify admin dashboard and file lifecycle as non-root
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/meeting-notes-server:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
+        run: |
+          docker pull "$IMAGE"
+          docker run -d --name gday-upload-smoke -p 127.0.0.1:37139:3000 \
+            -e SERVER_URL=http://127.0.0.1:37139 \
+            -e PAYLOAD_SECRET=synthetic-ci-upload-secret-at-least-thirty-two "$IMAGE"
+          trap 'docker logs gday-upload-smoke; docker rm -f -v gday-upload-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:37139/sign-in >/dev/null; then break; fi
+            sleep 2
+          done
+          node tests/container-upload.mjs
+
+  release:
+    needs: [verify, container]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish and verify multi-platform tags
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/meeting-notes-server
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" \
+            "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          docker buildx imagetools inspect "$IMAGE:$VERSION" --raw | \
+            jq -e '.manifests | map(.platform.os + "/" + .platform.architecture) | sort == ["linux/amd64", "linux/arm64"]'
+      - name: Publish release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+              --notes-file ".github/release-notes/${RELEASE_TAG#server-}.md"
+          fi
