@@ -75,12 +75,12 @@ mkfifo "$run_dir/output"
 (
     # Keep printing finalization logs after Ctrl+C reaches the terminal group.
     trap '' INT HUP
-    exec tee -a "$log_path" < "$run_dir/output"
+    exec cat < "$run_dir/output"
 ) &
 log_pid=$!
 
 echo "Starting Gday Meetings. Press Ctrl+C to stop and finalize recordings."
-echo "Logs are also saved to $log_path"
+echo "Logs are also saved to $log_dir"
 # Preserve access to developer tools (e.g. the Claude CLI) when LaunchServices
 # starts the daemon outside the terminal's process tree.
 (
@@ -88,6 +88,7 @@ echo "Logs are also saved to $log_path"
     exec /usr/bin/open -n -W -a "$app_path" \
         --stdout "$run_dir/output" --stderr "$run_dir/output" \
         --env "PATH=$PATH" \
+        --env "GDAY_MEETINGS_LOG_DIR=$log_dir" \
         --env "RUST_LOG=${RUST_LOG:-gday_meetings_client=info}" \
         --env "RUST_BACKTRACE=${RUST_BACKTRACE:-1}" \
         --args serve --web-ui --open "$@"

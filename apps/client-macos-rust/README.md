@@ -63,9 +63,19 @@ This builds and signs `apps/client-macos-rust/target/macos/Gday Meetings.app`, t
 through macOS LaunchServices. Allow **Gday Meetings** to use your microphone and
 record system audio when you start a recording. The launcher stays in the
 foreground and streams daemon logs to your terminal (also saved in
-`apps/client-macos-rust/target/macos/gday-meetings.log`). Press **Ctrl+C** to stop the daemon and finalize
+`~/Library/Logs/Gday Meetings/client.YYYY-MM-DD.log`). Press **Ctrl+C** to stop the daemon and finalize
 active recordings; press it again to force quit if shutdown is stuck. Stop any
 existing daemon before launching the app on the same port.
+
+The client itself saves logs for Finder, CLI and development launches. Open the
+folder with `open "$HOME/Library/Logs/Gday Meetings"`, or Finder's **Go → Go to
+Folder**. Logs rotate daily (UTC dates), retain up to 14 files, and contain plain
+text without terminal color codes. This limits file count, not the size of an
+individual day's log. `RUST_LOG` controls verbosity; `GDAY_MEETINGS_LOG_DIR`
+overrides the folder for testing. New log directories are private to your user.
+If the folder cannot be opened, the client warns on stderr and continues.
+Rust panic diagnostics are logged; abrupt OS termination or native crashes are
+not guaranteed to produce a final log entry.
 
 To stop an instance from another terminal (including one started by the older
 development launcher), run `make stop`. This requests a graceful

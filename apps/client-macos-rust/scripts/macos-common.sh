@@ -10,7 +10,7 @@ target_dir="$client_dir/target"
 bundle_dir="${GDAY_MEETINGS_BUNDLE_DIR:-$target_dir/macos}"
 app_path="$bundle_dir/Gday Meetings.app"
 executable="$app_path/Contents/MacOS/gday-meetings-client"
-log_path="$bundle_dir/gday-meetings.log"
+log_dir="${GDAY_MEETINGS_LOG_DIR:-$HOME/Library/Logs/Gday Meetings}"
 
 require_stopped_app() {
     local candidate="$1/Contents/MacOS/gday-meetings-client"

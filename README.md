@@ -31,6 +31,8 @@ make help        # List client, server and worker commands
 
 `make start` opens the browser UI and streams logs until Ctrl+C. It neither installs to Applications nor starts Docker. `make install` opens a folder containing the app and an Applications shortcut; drag the app onto the shortcut, then open it from Applications. The installed app starts the client and opens its UI without needing the repository. This is a local ad-hoc signed build, not a notarized public binary release.
 
+All client launches save daily logs under `~/Library/Logs/Gday Meetings/`, retaining up to 14 files. This includes double-clicking the installed app in Finder.
+
 The server and worker are deployed independently and can live on different hosts. Each owns its Dockerfiles, Compose files and `.env.example`. Follow [deployment](docs/deployment.md), then use **Settings → Services → Login to Gday Meetings Server** in the client to connect to your server URL. Complete first-user setup at the server's `/admin` page first. The native client currently supports macOS; Make reports unsupported client platforms explicitly.
 
 CPU execution takes longer than GPU execution. Model downloads require network access initially; speaker diarization additionally requires access to gated Hugging Face models. Once the required models are cached, processing can remain local. Local deployment does not require RunPod.

@@ -906,6 +906,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "gday-meetings-client"
+version = "0.2.1"
+dependencies = [
+ "async-stream",
+ "axum",
+ "block2",
+ "chrono",
+ "clap",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "crossbeam-channel",
+ "dirs",
+ "env_logger",
+ "futures",
+ "hound",
+ "libc",
+ "log",
+ "mime_guess",
+ "mp3lame-encoder",
+ "objc2",
+ "objc2-foundation",
+ "ogg",
+ "openidconnect",
+ "opus",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symphonia",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1508,50 +1553,6 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
-
-[[package]]
-name = "gday-meetings-client"
-version = "0.2.1"
-dependencies = [
- "async-stream",
- "axum",
- "block2",
- "chrono",
- "clap",
- "core-foundation 0.10.1",
- "core-foundation-sys",
- "crossbeam-channel",
- "dirs",
- "env_logger",
- "futures",
- "hound",
- "libc",
- "log",
- "mime_guess",
- "mp3lame-encoder",
- "objc2",
- "objc2-foundation",
- "ogg",
- "openidconnect",
- "opus",
- "rand 0.8.5",
- "regex",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "sha2",
- "symphonia",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "memchr"
@@ -2780,6 +2781,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
+
+[[package]]
 name = "symphonia"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3246,6 +3253,19 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-appender"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
+dependencies = [
+ "crossbeam-channel",
+ "symlink",
+ "thiserror 2.0.18",
+ "time",
+ "tracing-subscriber",
 ]
 
 [[package]]

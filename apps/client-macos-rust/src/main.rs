@@ -105,18 +105,13 @@ fn parse_cli(mut args: Vec<OsString>, executable: &Path) -> Result<Cli, clap::Er
 async fn main() {
     install_signal_handlers();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "gday_meetings_client=info".into()),
-        )
-        .init();
-
     let cli = parse_cli(
         std::env::args_os().collect(),
         &std::env::current_exe().unwrap_or_default(),
     )
     .unwrap_or_else(|error| error.exit());
+
+    gday_meetings_client::logging::init();
 
     match cli.command {
         Commands::Serve { port, host, data_dir, web_ui, open_browser } => {

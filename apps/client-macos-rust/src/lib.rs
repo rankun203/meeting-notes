@@ -2,6 +2,7 @@ pub mod audio;
 pub mod chat;
 pub mod filesdb;
 pub mod llm;
+pub mod logging;
 pub mod markdown;
 pub mod people;
 pub mod server;
