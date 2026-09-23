@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. Server running with `--web-ui` flag
+1. Client running with `--web-ui --port 33487` for the fixed URLs below (the normal default chooses an available port)
 2. At least one session with a transcript available
 3. An OpenRouter API key (or any OpenAI-compatible API)
 

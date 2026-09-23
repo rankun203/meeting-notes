@@ -29,7 +29,7 @@ make install     # Build and open Finder for drag-to-Applications installation
 make help        # List client, server and worker commands
 ```
 
-`make start` opens the browser UI and streams logs until Ctrl+C. It neither installs to Applications nor starts Docker. `make install` opens a folder containing the app and an Applications shortcut; drag the app onto the shortcut, then open it from Applications. The installed app starts the client and opens its UI without needing the repository. This is a local ad-hoc signed build, not a notarized public binary release.
+`make start` lets macOS choose an available port, opens the browser UI at that address, and streams logs until Ctrl+C. It neither installs to Applications nor starts Docker. `make install` opens a folder containing the app and an Applications shortcut; drag the app onto the shortcut, then open it from Applications. The installed app starts the client and opens its UI without needing the repository. This is a local ad-hoc signed build, not a notarized public binary release.
 
 All client launches save daily logs under `~/Library/Logs/Gday Meetings/`, retaining up to 14 files. This includes double-clicking the installed app in Finder.
 
@@ -52,7 +52,7 @@ Makefile                  Common commands delegating to independent components
 
 A future native UI can live under `apps/client-macos-app/`; that application is not implemented yet. The client binary is `gday-meetings-client` and the macOS bundle is `Gday Meetings.app`. Existing local data paths and macOS app identity are preserved. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
 
-The GitHub repository URL still uses `meeting-notes`. The internal bundle identifier and data directory remain `org.rankun.meeting-notes` so existing recordings and permissions stay associated with the app. Stop and remove the old app bundle when replacing it with Gday Meetings; both use the same library and listening port. Historical worklogs and release notes retain their original names.
+The GitHub repository URL still uses `meeting-notes`. The internal bundle identifier and data directory remain `org.rankun.meeting-notes` so existing recordings and permissions stay associated with the app. Stop and remove the old app bundle when replacing it with Gday Meetings; both use the same library. Historical worklogs and release notes retain their original names.
 
 ## Deployment and development
 

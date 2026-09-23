@@ -43,7 +43,11 @@ gday-meetings-client serve --web-ui
 gday-meetings-client serve --port 8080 --data-dir ~/my-recordings --web-ui
 ```
 
-Open `http://127.0.0.1:33487` in your browser.
+By default, the OS selects an available port (`--port 0`). Finder launches and
+`make start` open the browser at the assigned URL automatically. For CLI launches,
+use the URL printed in the logs or add `--open`. Specify `--port 8080` (or another
+fixed port) when an integration needs a stable address; an occupied explicit port
+causes startup to fail.
 
 For durable transcription results and a shared recordings admin, connect
 [Gday Meetings Server](../server). See the

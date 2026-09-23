@@ -64,8 +64,8 @@ struct Cli {
 enum Commands {
     /// Start the HTTP API server
     Serve {
-        /// Port to listen on
-        #[arg(short, long, default_value = "33487")]
+        /// Port to listen on (0 lets the OS choose an available port)
+        #[arg(short, long, default_value = "0")]
         port: u16,
 
         /// Host to bind to
@@ -119,6 +119,7 @@ async fn main() {
             // Reserve the listener before loading data or resuming background jobs.
             let addr = format!("{}:{}", host, port);
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+            let addr = listener.local_addr().expect("bound listener has a local address");
             let data_dir = data_dir.unwrap_or_else(default_data_dir);
             let recordings_dir = data_dir.join("recordings");
             std::fs::create_dir_all(&recordings_dir)
@@ -245,7 +246,7 @@ async fn main() {
                 #[cfg(target_os = "macos")]
                 {
                     let browser_host = if host == "0.0.0.0" { "127.0.0.1" } else { &host };
-                    let url = format!("http://{}:{}", browser_host, listener.local_addr().unwrap().port());
+                    let url = format!("http://{}:{}", browser_host, addr.port());
                     tokio::spawn(async move {
                         match tokio::process::Command::new("/usr/bin/open").arg(&url).status().await {
                             Ok(status) if status.success() => {}
@@ -314,7 +315,7 @@ mod cli_tests {
             Path::new("/Applications/Gday Meetings.app/Contents/MacOS/gday-meetings-client"),
         ).unwrap();
         assert!(matches!(cli.command, Commands::Serve {
-            port: 33487, web_ui: true, open_browser: true, data_dir: None, ..
+            port: 0, web_ui: true, open_browser: true, data_dir: None, ..
         }));
     }
 
@@ -329,12 +330,12 @@ mod cli_tests {
     #[test]
     fn explicit_bundle_arguments_preserve_isolated_launch_options() {
         let cli = parse_cli(
-            ["gday-meetings-client", "serve", "--port", "0", "--data-dir", "/tmp/test-meetings", "--web-ui"]
+            ["gday-meetings-client", "serve", "--port", "8080", "--data-dir", "/tmp/test-meetings", "--web-ui"]
                 .map(OsString::from).to_vec(),
             Path::new("/Applications/Gday Meetings.app/Contents/MacOS/gday-meetings-client"),
         ).unwrap();
         assert!(matches!(cli.command, Commands::Serve {
-            port: 0, web_ui: true, open_browser: false, data_dir: Some(_), ..
+            port: 8080, web_ui: true, open_browser: false, data_dir: Some(_), ..
         }));
     }
 }
