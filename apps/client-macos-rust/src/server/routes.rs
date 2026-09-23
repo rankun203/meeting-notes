@@ -1274,7 +1274,7 @@ async fn transcribe_session(
     if state.gday_auth.connected_origin().await.is_none() && !settings.is_extraction_configured() {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Sign in to Meeting Notes Server or configure local audio extraction in Services."})),
+            Json(json!({"error": "Sign in to Gday Meetings Server or configure local audio extraction in Services."})),
         ));
     }
     let extraction_url = settings.audio_extraction_url.clone().unwrap_or_default();
@@ -1423,7 +1423,7 @@ async fn run_gday_extraction(
         .and_then(|(_, job)| job.platform_task);
     let task = if let Some(task) = pending {
         if task.base_url != origin {
-            return Err("Sign in to the Meeting Notes Server that owns the pending task".into());
+            return Err("Sign in to the Gday Meetings Server that owns the pending task".into());
         }
         task
     } else {
@@ -1556,7 +1556,7 @@ pub(super) async fn run_transcription_pipeline(
         .iter()
         .any(|(id, job)| id == session_id && job.platform_task.is_some())
     {
-        return Err("Sign in to the Meeting Notes Server that owns this meeting's pending task".into());
+        return Err("Sign in to the Gday Meetings Server that owns this meeting's pending task".into());
     }
     // This is the separate standalone file-drop + RunPod workflow.
     // Step 1: Upload audio files to file-drop
@@ -2914,7 +2914,7 @@ mod upload_tests {
     #[test]
     fn opus_output_names_are_sanitized() {
         let dir =
-            std::env::temp_dir().join(format!("meeting-notes-name-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("gday-meetings-name-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(
             unique_opus_filename(&dir, "Quarterly Meeting (final).mp4"),

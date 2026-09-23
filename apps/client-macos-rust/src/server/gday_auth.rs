@@ -169,7 +169,7 @@ impl GdayAuth {
             .http
             .post(registration)
             .json(&json!({
-                "client_name":"Meeting Notes Desktop", "application_type":"native",
+                "client_name":"Gday Meetings Desktop", "application_type":"native",
                 "redirect_uris":[redirect], "grant_types":["authorization_code","refresh_token"],
                 "response_types":["code"], "token_endpoint_auth_method":"none", "scope":SCOPES
             }))
@@ -331,9 +331,9 @@ impl GdayAuth {
     }
     pub async fn access_token(&self, expected_origin: &str) -> Result<String, String> {
         let mut saved = self.session.lock().await;
-        let session = saved.as_mut().ok_or("Sign in to Meeting Notes Server")?;
+        let session = saved.as_mut().ok_or("Sign in to Gday Meetings Server")?;
         if session.origin != expected_origin {
-            return Err("Sign in to the Meeting Notes Server that owns this task".into());
+            return Err("Sign in to the Gday Meetings Server that owns this task".into());
         }
         if session.expires_at <= chrono::Utc::now().timestamp() + 30 {
             let refresh = session

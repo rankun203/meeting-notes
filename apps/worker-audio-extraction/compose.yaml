@@ -1,7 +1,8 @@
+# Keep the existing project identity so upgrades reuse worker data/cache volumes.
 name: meeting-notes-worker
 services:
   worker-audio-extraction:
-    image: meeting-notes-worker-audio-extraction:cpu-local
+    image: gday-meetings-worker-audio-extraction:cpu-local
     build:
       context: .
       dockerfile: Dockerfile.cpu

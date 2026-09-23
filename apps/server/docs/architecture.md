@@ -1,6 +1,6 @@
 # Architecture and operations
 
-Meeting Notes Server is one deployable Next.js + Payload application, inspired by the single-root CMS architecture in ase-user-study. SQLite and Postgres share the same collection definitions, UUID IDs, generated types, and committed migrations.
+Gday Meetings Server is one deployable Next.js + Payload application, inspired by the single-root CMS architecture in ase-user-study. SQLite and Postgres share the same collection definitions, UUID IDs, generated types, and committed migrations.
 
 **User workflow:** sign in; upload a recording; submit an idempotent task linked to a meeting; the server sends audio URLs and a task-only callback capability to its configured worker; persist the raw typed result; download it to the client; search the indexed transcript. Payload Admin is the control panel for inspecting meetings, task state, inputs, output JSON, and upload inventory.
 

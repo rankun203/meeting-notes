@@ -1,14 +1,14 @@
 ---
 name: teams-meeting-import
-description: "Import an authorized Microsoft Teams meeting into meeting-notes using the best available source: directly download the video and retain its audio, reconstruct the streamed recording when download is unavailable, or fall back to the Teams transcript. Use when the user provides a Teams, SharePoint, OneDrive, Stream, or Clipchamp meeting link, HAR capture, or transcript file."
+description: "Import an authorized Microsoft Teams meeting into Gday Meetings using the best available source: directly download the video and retain its audio, reconstruct the streamed recording when download is unavailable, or fall back to the Teams transcript. Use when the user provides a Teams, SharePoint, OneDrive, Stream, or Clipchamp meeting link, HAR capture, or transcript file."
 ---
 
 # Import a Teams meeting
 
 Preserve the richest usable source available. Unless the user explicitly asks for a transcript only, use this priority order:
 
-1. **Direct recording download:** use Microsoft's visible Download action, verify that the video contains readable audio, and import that media into meeting-notes so the app retains the audio.
-2. **Stream reconstruction:** if direct download is unavailable but playback works, reconstruct the recording from the current player's observed media traffic, verify the result, and import its audio into meeting-notes.
+1. **Direct recording download:** use Microsoft's visible Download action, verify that the video contains readable audio, and import that media into Gday Meetings so the app retains the audio.
+2. **Stream reconstruction:** if direct download is unavailable but playback works, reconstruct the recording from the current player's observed media traffic, verify the result, and import its audio into Gday Meetings.
 3. **Transcript-only fallback:** if no usable recording can be obtained, recover or download the Teams transcript and import a transcript-only session.
 
 Do not fall back merely because the first approach needs a signed-in browser or a fresh HAR. Fall back when the richer source is unavailable, the user declines the required capture, or current evidence shows it cannot be recovered. A user's explicit request for only a particular artifact overrides this ladder.
@@ -30,4 +30,4 @@ Do not fall back merely because the first approach needs a signed-in browser or 
 
 ## Completion
 
-Report the chosen acquisition tier and each created artifact with a clickable path. Say whether the meeting-notes session contains imported recording audio or only a supplied transcript. Include the recording verification details or transcript speaker-mapping caveats required by the relevant workflow.
+Report the chosen acquisition tier and each created artifact with a clickable path. Say whether the Gday Meetings session contains imported recording audio or only a supplied transcript. Include the recording verification details or transcript speaker-mapping caveats required by the relevant workflow.

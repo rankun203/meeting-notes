@@ -111,7 +111,7 @@ export function ChatPanel({ conversations, activeConv, activeId, onSelectConvers
                 children: jsx(SparkleIcon, { className: 'w-4 h-4 text-white' }),
               }),
               jsxs('div', { children: [
-                jsx('div', { className: 'text-sm font-semibold leading-tight', children: chatBackend === 'claude_code' ? 'Claude Code' : 'Meeting Notes' }),
+                jsx('div', { className: 'text-sm font-semibold leading-tight', children: chatBackend === 'claude_code' ? 'Claude Code' : 'Gday Meetings' }),
                 jsxs('div', {
                   className: 'flex items-center gap-1 text-[10px] text-blue-100',
                   children: [

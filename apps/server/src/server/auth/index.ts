@@ -93,7 +93,7 @@ export async function requireAccess(
   const result = await authenticateAccess(request, options.resource)
   const challenge = `Bearer resource_metadata="${authOrigin()}/.well-known/oauth-protected-resource/${options.resource === 'mcp' ? 'mcp' : 'api/platform'}"`
   if (!result)
-    throw new HttpError(401, 'Sign in to Meeting Notes Server', {
+    throw new HttpError(401, 'Sign in to Gday Meetings Server', {
       'WWW-Authenticate': challenge,
     })
   if (options.scopes.some((scope) => !result.scopes.has(scope)))

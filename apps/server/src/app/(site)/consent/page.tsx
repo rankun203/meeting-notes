@@ -5,7 +5,7 @@ import { authOrigin } from '../../../server/auth/config'
 import { ConsentForm } from './form'
 export const dynamic = 'force-dynamic'
 export const metadata = {
-  title: 'Authorize access · Meeting Notes Server',
+  title: 'Authorize access · Gday Meetings Server',
   robots: { index: false, follow: false },
 }
 export default async function Consent({
@@ -37,14 +37,14 @@ export default async function Consent({
     'mcp:read': 'Search and read meeting transcripts',
     'meetings:read': 'Read recordings and transcription results',
     'meetings:write': 'Upload recordings and request transcription',
-    openid: 'Identify your Meeting Notes Server account',
+    openid: 'Identify your Gday Meetings Server account',
     profile: 'Read your profile',
     email: 'Read your email address',
     offline_access: 'Stay connected using refresh tokens',
   }
   return (
     <main className="oauth">
-      <p className="eyebrow">MEETING NOTES / SERVER</p>
+      <p className="eyebrow">GDAY MEETINGS / SERVER</p>
       <h1>Allow access?</h1>
       <p>You are signed in as {principal.user.email}.</p>
       <p>

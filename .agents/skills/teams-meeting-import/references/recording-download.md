@@ -1,13 +1,13 @@
 # Acquire a Teams recording
 
-Acquire an authorized Teams meeting recording, preserve its audio in meeting-notes, and save the source or reconstructed video to `~/Downloads`. Assume FFmpeg is installed. Treat the user as unfamiliar with browser developer tools. When a HAR is required, provide the complete capture procedure in one message and ask the user to return only after the HAR has been saved.
+Acquire an authorized Teams meeting recording, preserve its audio in Gday Meetings, and save the source or reconstructed video to `~/Downloads`. Assume FFmpeg is installed. Treat the user as unfamiliar with browser developer tools. When a HAR is required, provide the complete capture procedure in one message and ask the user to return only after the HAR has been saved.
 
 ## Workflow
 
 1. Open the supplied meeting or recording link using the available browser-control skill.
 2. Find the recording and look for a visible **Download** action in its title menu or **More options** menu.
 3. If Microsoft permits the normal download, use it and save the file in `~/Downloads`. Verify with `ffprobe` that it has a readable audio stream, then perform a full FFmpeg audio decode check.
-4. Import the downloaded audio or video through meeting-notes' media-upload flow. The app accepts common video files, extracts the first audio stream, and stores it as Opus. Verify that the resulting session has its audio file and `metadata.json` before continuing to transcription or summarization.
+4. Import the downloaded audio or video through Gday Meetings' media-upload flow. The app accepts common video files, extracts the first audio stream, and stores it as Opus. Verify that the resulting session has its audio file and `metadata.json` before continuing to transcription or summarization.
 5. If the page is view-only or omits Download, inspect the current page and network behavior and reconstruct the streamed recording as described below.
 6. Fall back to the transcript workflow only when direct download and reconstruction cannot produce a usable recording, the user declines the required capture, or the user explicitly requests transcript-only import.
 
@@ -68,7 +68,7 @@ Keep the player advancing continuously at 2x when SharePoint only emits media UR
 
 Use FFmpeg to remux compatible tracks without re-encoding. Choose a collision-safe `.mp4` filename based on the recording title and write it to `~/Downloads`. Request filesystem approval when required.
 
-Verify the result with both `ffprobe` and a full FFmpeg decode pass, including confirmation of a readable audio stream. Import the reconstructed video through meeting-notes' media-upload flow and verify the session's Opus audio file and `metadata.json`. Remove the temporary program and segment directory after success, but do not delete the user's HAR without permission.
+Verify the result with both `ffprobe` and a full FFmpeg decode pass, including confirmation of a readable audio stream. Import the reconstructed video through Gday Meetings' media-upload flow and verify the session's Opus audio file and `metadata.json`. Remove the temporary program and segment directory after success, but do not delete the user's HAR without permission.
 
 ## Troubleshooting
 
@@ -81,4 +81,4 @@ Verify the result with both `ffprobe` and a full FFmpeg decode pass, including c
 
 ## Completion details
 
-Report the clickable video path, meeting-notes session, verified duration, audio/video codecs, resolution, and file size. State whether the recording was downloaded directly or reconstructed. If reconstructed from streamed tracks, explain that the result is a remux and may not be byte-identical to Microsoft's source container.
+Report the clickable video path, Gday Meetings session, verified duration, audio/video codecs, resolution, and file size. State whether the recording was downloaded directly or reconstructed. If reconstructed from streamed tracks, explain that the result is a remux and may not be byte-identical to Microsoft's source container.

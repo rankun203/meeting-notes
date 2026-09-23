@@ -24,16 +24,16 @@ export function GdaySettings() {
     finally { setBusy(false); }
   }
   return jsxs('div', { className: 'space-y-3 border-b border-gray-200 dark:border-gray-700 pb-6', children: [
-    jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Meeting Notes Server' }),
-    jsx('p', { className: 'text-xs text-gray-500', children: 'Sign in to upload recordings and have Meeting Notes Server transcribe them. Results stay available when this app is closed.' }),
+    jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Gday Meetings Server' }),
+    jsx('p', { className: 'text-xs text-gray-500', children: 'Sign in to upload recordings and have Gday Meetings Server transcribe them. Results stay available when this app is closed.' }),
     account?.connected ? jsxs('div', { className: 'space-y-2', children: [
       jsx('p', { className: 'text-sm', children: `Signed in as ${account.email || account.subject}` }),
       jsx('p', { className: 'text-xs text-gray-500', children: account.url }),
       jsx('button', { type: 'button', disabled: busy, onClick: logout, className: 'text-sm text-blue-600 disabled:opacity-50', children: busy ? 'Signing out…' : 'Sign out' }),
     ] }) : jsxs('div', { className: 'space-y-2', children: [
-      jsx('label', { className: LABEL_CLS, htmlFor: 'gday-url', children: 'Meeting Notes Server URL' }),
+      jsx('label', { className: LABEL_CLS, htmlFor: 'gday-url', children: 'Gday Meetings Server URL' }),
       jsx('input', { id: 'gday-url', className: INPUT_CLS, type: 'url', value: url, placeholder: 'https://meetings.example.com', onChange: event => setUrl(event.target.value) }),
-      jsx('button', { type: 'button', disabled: busy || !url.trim(), onClick: login, className: 'rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50', children: busy ? 'Opening sign-in…' : 'Login to Meeting Notes Server' }),
+      jsx('button', { type: 'button', disabled: busy || !url.trim(), onClick: login, className: 'rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50', children: busy ? 'Opening sign-in…' : 'Login to Gday Meetings Server' }),
     ] }),
     error && jsx('p', { role: 'alert', className: 'text-sm text-red-600', children: error }),
     account?.connected && jsx(GdayMigration, {}, account.url),
@@ -98,8 +98,8 @@ function GdayMigration() {
   const running = Boolean(status?.running);
   const results = status?.results || [];
   return jsxs('div', { className: 'space-y-2 border-t border-gray-200 dark:border-gray-700 pt-3', children: [
-    jsx('p', { className: 'text-sm font-medium', children: 'Copy existing meetings to Meeting Notes Server' }),
-    jsx('p', { className: 'text-xs text-gray-500', children: 'Copy recordings and existing results to your signed-in Meeting Notes Server account. Local files stay as a backup; this does not delete files or start transcription.' }),
+    jsx('p', { className: 'text-sm font-medium', children: 'Copy existing meetings to Gday Meetings Server' }),
+    jsx('p', { className: 'text-xs text-gray-500', children: 'Copy recordings and existing results to your signed-in Gday Meetings Server account. Local files stay as a backup; this does not delete files or start transcription.' }),
     preview ? jsx('p', { className: 'text-sm', children: `${preview.ready} of ${preview.total} meetings ready · ${(preview.audioBytes / (1024 * 1024)).toFixed(1)} MiB audio` })
       : jsx('p', { className: 'text-xs text-gray-500', children: error ? 'Preview unavailable.' : 'Checking local meetings…' }),
     preview?.blocked?.length > 0 && jsxs('div', { className: 'text-sm', children: [
@@ -111,7 +111,7 @@ function GdayMigration() {
     jsxs('div', { className: 'flex flex-wrap gap-3 items-center', children: [
       jsx('button', { type: 'button', className: buttonClass,
         disabled: busy || running || !status || !preview?.ready, onClick: start,
-        children: running ? 'Copying meetings…' : busy ? 'Please wait…' : results.length ? 'Retry copying meetings' : 'Copy existing meetings to Meeting Notes Server',
+        children: running ? 'Copying meetings…' : busy ? 'Please wait…' : results.length ? 'Retry copying meetings' : 'Copy existing meetings to Gday Meetings Server',
       }),
       jsx('button', { type: 'button', disabled: busy || running, onClick: refresh,
         className: 'text-sm text-blue-600 disabled:opacity-50', children: 'Refresh preview',

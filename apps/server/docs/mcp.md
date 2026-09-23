@@ -1,10 +1,10 @@
 # Shared login and MCP
 
-Meeting Notes Server owns user management. Administrators create and manage users in Payload Admin. The identity layer provides standard OpenID Connect/OAuth, using those canonical accounts. Optional external providers are linked sign-in methods; they do not grant application permissions or create administrators.
+Gday Meetings Server owns user management. Administrators create and manage users in Payload Admin. The identity layer provides standard OpenID Connect/OAuth, using those canonical accounts. Optional external providers are linked sign-in methods; they do not grant application permissions or create administrators.
 
 An OAuth-capable Streamable HTTP MCP client connects to `https://your-host/mcp`. Discovery starts browser login and consent. The single `mcp:read` permission grants `search_meetings`, which applies the authorizing user's Payload collection access rules. The client needs no local MCP process or deployment-wide secret.
 
-The Rust meeting-notes client uses the same login but requests `meetings:read` and `meetings:write` for the platform API. These permissions allow uploads and submission of server-managed transcription tasks. An MCP search token cannot upload files or start processing.
+The Rust gday-meetings client uses the same login but requests `meetings:read` and `meetings:write` for the platform API. These permissions allow uploads and submission of server-managed transcription tasks. An MCP search token cannot upload files or start processing.
 
 The authorization issuer is `SERVER_URL/api/auth`. OpenID Connect metadata is available at `/api/auth/.well-known/openid-configuration`. MCP resource metadata is at `/.well-known/oauth-protected-resource/mcp`. Clients use discovery rather than constructing authorization/token URLs themselves. Public clients use PKCE S256 and exact resource audiences; refresh tokens must be saved after rotation.
 

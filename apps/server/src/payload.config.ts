@@ -31,7 +31,7 @@ export default buildConfig({
   serverURL: env.SERVER_URL,
   admin: {
     user: 'users',
-    meta: { titleSuffix: ' · Meeting Notes Server' },
+    meta: { titleSuffix: ' · Gday Meetings Server' },
     importMap: {
       importMapFile: path.resolve('src/app/(payload)/admin/importMap.ts'),
     },

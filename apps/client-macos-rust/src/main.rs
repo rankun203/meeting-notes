@@ -4,16 +4,16 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use tracing::info;
 
-use meeting_notes_daemon::chat::manager::ConversationManager;
-use meeting_notes_daemon::filesdb::FilesDb;
-use meeting_notes_daemon::llm::secrets::LlmSecrets;
-use meeting_notes_daemon::people::PeopleManager;
-use meeting_notes_daemon::server;
+use gday_meetings_client::chat::manager::ConversationManager;
+use gday_meetings_client::filesdb::FilesDb;
+use gday_meetings_client::llm::secrets::LlmSecrets;
+use gday_meetings_client::people::PeopleManager;
+use gday_meetings_client::server;
 #[cfg(target_os = "macos")]
-use meeting_notes_daemon::session::AutoStopTrigger;
-use meeting_notes_daemon::session::SessionManager;
-use meeting_notes_daemon::settings::AppSettings;
-use meeting_notes_daemon::tags::TagsManager;
+use gday_meetings_client::session::AutoStopTrigger;
+use gday_meetings_client::session::SessionManager;
+use gday_meetings_client::settings::AppSettings;
+use gday_meetings_client::tags::TagsManager;
 
 fn install_signal_handlers() {
     unsafe {
@@ -42,6 +42,7 @@ extern "C" fn crash_handler(sig: libc::c_int) {
     }
 }
 
+// Stable on-disk identity: rebranding must not hide existing recordings/settings.
 const APP_NAME: &str = "org.rankun.meeting-notes";
 
 fn default_data_dir() -> PathBuf {
@@ -52,7 +53,7 @@ fn default_data_dir() -> PathBuf {
 }
 
 #[derive(Parser)]
-#[command(name = "meeting-notes-daemon", version)]
+#[command(name = "gday-meetings-client", version)]
 #[command(about = "System-level audio recorder and meeting notes processor")]
 struct Cli {
     #[command(subcommand)]
@@ -107,7 +108,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "meeting_notes_daemon=info".into()),
+                .unwrap_or_else(|_| "gday_meetings_client=info".into()),
         )
         .init();
 
@@ -119,7 +120,7 @@ async fn main() {
 
     match cli.command {
         Commands::Serve { port, host, data_dir, web_ui, open_browser } => {
-            info!("Meeting Notes daemon starting on port {}...", port);
+            info!("Gday Meetings daemon starting on port {}...", port);
             // Reserve the listener before loading data or resuming background jobs.
             let addr = format!("{}:{}", host, port);
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
@@ -136,7 +137,7 @@ async fn main() {
             manager.start_file_size_ticker();
 
             #[cfg(target_os = "macos")]
-            match meeting_notes_daemon::system_events::start() {
+            match gday_meetings_client::system_events::start() {
                 Ok((mut system_events, support)) => {
                     info!(
                         "macOS auto-stop events enabled (screen lock: {}, system sleep: {})",
@@ -146,7 +147,7 @@ async fn main() {
                     tokio::spawn(async move {
                         while let Some(event) = system_events.recv().await {
                             match event {
-                                meeting_notes_daemon::system_events::SystemEvent::ScreenLocked => {
+                                gday_meetings_client::system_events::SystemEvent::ScreenLocked => {
                                     info!("macOS screen-lock event received");
                                     let stopped = event_manager
                                         .auto_stop_recordings(AutoStopTrigger::ScreenLock)
@@ -155,7 +156,7 @@ async fn main() {
                                         info!("Screen locked — auto-stopped {} recording(s)", stopped);
                                     }
                                 }
-                                meeting_notes_daemon::system_events::SystemEvent::SystemWillSleep(request) => {
+                                gday_meetings_client::system_events::SystemEvent::SystemWillSleep(request) => {
                                     info!("macOS system-sleep event received");
                                     let stopped = tokio::time::timeout(
                                         std::time::Duration::from_secs(25),
@@ -199,10 +200,10 @@ async fn main() {
             // Generate CLAUDE.md and markdown index files
             {
                 let self_intro = shared_settings.read().await.chat_self_intro.clone();
-                meeting_notes_daemon::markdown::write_claude_md(&data_dir, self_intro.as_deref());
+                gday_meetings_client::markdown::write_claude_md(&data_dir, self_intro.as_deref());
             }
             {
-                use meeting_notes_daemon::markdown;
+                use gday_meetings_client::markdown;
                 let mut sessions = manager.session_entries().await;
                 let mut people = people_manager.person_entries().await;
                 let people_dir = people_manager.people_dir().to_path_buf();
@@ -231,7 +232,7 @@ async fn main() {
                 shared_secrets.clone(), tags_manager.clone(), gday_auth.clone(),
             ).await;
 
-            let claude_runner = meeting_notes_daemon::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
+            let claude_runner = gday_meetings_client::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
 
             let shutdown_manager = manager.clone();
             let app = server::create_router(
@@ -314,8 +315,8 @@ mod cli_tests {
     #[cfg(target_os = "macos")]
     fn finder_launch_starts_the_ui_and_browser() {
         let cli = parse_cli(
-            vec!["meeting-notes-daemon".into()],
-            Path::new("/Applications/Meeting Notes.app/Contents/MacOS/meeting-notes-daemon"),
+            vec!["gday-meetings-client".into()],
+            Path::new("/Applications/Gday Meetings.app/Contents/MacOS/gday-meetings-client"),
         ).unwrap();
         assert!(matches!(cli.command, Commands::Serve {
             port: 33487, web_ui: true, open_browser: true, data_dir: None, ..
@@ -325,17 +326,17 @@ mod cli_tests {
     #[test]
     fn standalone_cli_still_requires_a_subcommand() {
         assert!(parse_cli(
-            vec!["meeting-notes-daemon".into()],
-            Path::new("/usr/local/bin/meeting-notes-daemon"),
+            vec!["gday-meetings-client".into()],
+            Path::new("/usr/local/bin/gday-meetings-client"),
         ).is_err());
     }
 
     #[test]
     fn explicit_bundle_arguments_preserve_isolated_launch_options() {
         let cli = parse_cli(
-            ["meeting-notes-daemon", "serve", "--port", "0", "--data-dir", "/tmp/test-meetings", "--web-ui"]
+            ["gday-meetings-client", "serve", "--port", "0", "--data-dir", "/tmp/test-meetings", "--web-ui"]
                 .map(OsString::from).to_vec(),
-            Path::new("/Applications/Meeting Notes.app/Contents/MacOS/meeting-notes-daemon"),
+            Path::new("/Applications/Gday Meetings.app/Contents/MacOS/gday-meetings-client"),
         ).unwrap();
         assert!(matches!(cli.command, Commands::Serve {
             port: 0, web_ui: true, open_browser: false, data_dir: Some(_), ..

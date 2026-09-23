@@ -348,7 +348,7 @@ fn get_tap_format(tap_id: AudioObjectID) -> Result<AudioStreamBasicDescription, 
 
 fn create_aggregate_device(tap_uid: &str) -> Result<AudioObjectID, AudioError> {
     let uid = CFString::new(&format!("org.rankun.meeting-notes.agg.{}", uuid::Uuid::new_v4()));
-    let name = CFString::new("Meeting Notes System Audio");
+    let name = CFString::new("Gday Meetings System Audio");
 
     let mut desc_dict = CFMutableDictionary::new();
     desc_dict.set(CFString::new(AGGREGATE_DEVICE_UID_KEY).as_CFType(), uid.as_CFType());

@@ -5,7 +5,7 @@
 """Isolated daemon/API/browser regression test.
 
 Run from the workspace root:
-uv run --no-project apps/client-macos-rust/tests/filesystem_e2e.py [--binary /path/to/meeting-notes-daemon]
+uv run --no-project apps/client-macos-rust/tests/filesystem_e2e.py [--binary /path/to/gday-meetings-client]
 No production credentials, audio devices, or external AI services are used.
 """
 import argparse
@@ -72,13 +72,13 @@ def wait_for(fn, timeout=10):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--binary', default=Path(__file__).resolve().parents[1] / 'target/release/meeting-notes-daemon')
+    parser.add_argument('--binary', default=Path(__file__).resolve().parents[1] / 'target/release/gday-meetings-client')
     parser.add_argument('--artifacts', default=Path(__file__).resolve().parents[1] / 'target/filesystem-e2e')
     args = parser.parse_args()
     binary = Path(args.binary).resolve()
     artifacts = Path(args.artifacts).resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='meeting-notes-e2e-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='gday-meetings-e2e-') as tmp:
         root = Path(tmp)
         for index in range(75):
             fixture(root, f'session{index:03}', index)

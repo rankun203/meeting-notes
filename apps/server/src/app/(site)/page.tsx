@@ -1,7 +1,7 @@
 export default function Home() {
   return (
     <main>
-      <p className="eyebrow">MEETING NOTES / SERVER</p>
+      <p className="eyebrow">GDAY MEETINGS / SERVER</p>
       <h1>
         Every meeting.
         <br />A lasting record.
@@ -39,7 +39,7 @@ export default function Home() {
           </p>
         </article>
       </section>
-      <footer>Meeting Notes Server · Your meeting memory</footer>
+      <footer>Gday Meetings Server · Your meeting memory</footer>
     </main>
   )
 }

@@ -1,6 +1,6 @@
 # Client, server and worker
 
-Meeting Notes is one repository with three separately installed and deployed components. Component names describe their role; language and platform suffixes distinguish implementations. The native Rust implementation is client-macos-rust. A future client-macos-app can offer another UI without changing the server/worker contracts.
+Gday Meetings is one repository with three separately installed and deployed components. Component names describe their role; language and platform suffixes distinguish implementations. The native Rust implementation is client-macos-rust. A future client-macos-app can offer another UI without changing the server/worker contracts.
 
 | Boundary | Client | Server | Worker |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ CPU mode does not require CUDA. Docker Desktop on a Mac does not provide the NVI
 
 The root Makefile delegates to independent components. client-macos-rust owns its Cargo manifest/lockfile, scripts, macOS packaging and generated build directory. apps/server has its own pnpm lockfile, environment template and container configuration. worker-audio-extraction owns its Python package, environment template and CPU/GPU Compose files. The root has no language package manifest or Docker deployment files. Separate dependency trees avoid shipping the ML stack with a recorder or requiring a GPU to run the CMS.
 
-Future server releases use server-vX.Y.Z tags and publish ghcr.io/rankun203/meeting-notes-server, with AMD64 and ARM64 manifests. Existing ghcr.io/rankun203/gday-meetings images are earlier standalone releases, not builds of uncommitted monorepo changes. The original external repository is retained as history; this repository is the source for ongoing component work. Worker deployment can build its own image or use RunPod's repository integration and the component-specific Docker context.
+Future server releases use server-vX.Y.Z tags and publish ghcr.io/rankun203/gday-meetings-server, with AMD64 and ARM64 manifests. Existing ghcr.io/rankun203/gday-meetings images are earlier standalone releases, not builds of uncommitted monorepo changes. The original external repository is retained as history; this repository is the source for ongoing component work. Worker deployment can build its own image or use RunPod's repository integration and the component-specific Docker context.
 
 ## Deferred data modeling
 

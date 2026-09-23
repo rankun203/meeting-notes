@@ -1,5 +1,5 @@
 {
-  "name": "@meeting-notes/server",
+  "name": "@gday-meetings/server",
   "version": "0.3.7",
   "private": true,
   "type": "module",

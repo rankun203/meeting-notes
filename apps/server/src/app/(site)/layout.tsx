@@ -1,6 +1,6 @@
 import './style.css'
 export const metadata = {
-  title: 'Meeting Notes Server',
+  title: 'Gday Meetings Server',
   description: 'Your recordings, tasks, and transcripts — durably together.',
 }
 export default function Layout({ children }: { children: React.ReactNode }) {

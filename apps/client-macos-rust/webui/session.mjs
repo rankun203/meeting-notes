@@ -356,7 +356,7 @@ export function SessionDetail({ session, onRefresh, onDeleted, onBack, isMobile,
   // Update page title to reflect current session
   useEffect(() => {
     const prev = document.title;
-    if (session?.name) document.title = `Meeting Notes - ${session.name}`;
+    if (session?.name) document.title = `Gday Meetings - ${session.name}`;
     return () => { document.title = prev; };
   }, [session?.name]);
 

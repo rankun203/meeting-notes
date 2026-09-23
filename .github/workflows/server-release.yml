@@ -88,7 +88,7 @@ jobs:
           file: apps/server/Dockerfile
           push: true
           platforms: linux/${{ matrix.arch }}
-          tags: ghcr.io/${{ github.repository_owner }}/meeting-notes-server:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
+          tags: ghcr.io/${{ github.repository_owner }}/gday-meetings-server:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
           cache-from: type=gha,scope=server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
           sbom: false
@@ -99,7 +99,7 @@ jobs:
 
       - name: Verify admin dashboard and file lifecycle as non-root
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/meeting-notes-server:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/gday-meetings-server:${{ needs.verify.outputs.version }}-${{ matrix.arch }}
         run: |
           docker pull "$IMAGE"
           docker run -d --name gday-upload-smoke -p 127.0.0.1:37139:3000 \
@@ -130,7 +130,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish and verify multi-platform tags
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/meeting-notes-server
+          IMAGE: ghcr.io/${{ github.repository_owner }}/gday-meetings-server
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" \

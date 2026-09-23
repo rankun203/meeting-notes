@@ -4,7 +4,7 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { getBrowserPrincipal, authIssuer } from '../../../server/auth'
 export const metadata = {
-  title: 'Sign in · Meeting Notes Server',
+  title: 'Sign in · Gday Meetings Server',
   robots: { index: false, follow: false },
 }
 export default async function SignIn({
@@ -26,11 +26,11 @@ export default async function SignIn({
     redirect('/api/auth/oauth2/authorize?' + params.toString())
   return (
     <main className="oauth">
-      <p className="eyebrow">MEETING NOTES / SERVER</p>
+      <p className="eyebrow">GDAY MEETINGS / SERVER</p>
       <h1>Welcome back.</h1>
-      <p>Sign in with your Meeting Notes Server account to continue.</p>
+      <p>Sign in with your Gday Meetings Server account to continue.</p>
       <LoginForm upstream={Boolean(serverEnv().OIDC_UPSTREAM_ISSUER)} />
-      <p>Need an account? Ask your Meeting Notes Server administrator.</p>
+      <p>Need an account? Ask your Gday Meetings Server administrator.</p>
     </main>
   )
 }

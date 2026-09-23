@@ -1,6 +1,6 @@
 services:
   server:
-    image: meeting-notes-server:local
+    image: gday-meetings-server:local
     build: .
     ports:
       - '${SERVER_BIND_ADDRESS:-127.0.0.1}:${SERVER_PORT:-3000}:3000'

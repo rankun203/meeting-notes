@@ -115,7 +115,7 @@ async fn start(State(state): State<AppState>, headers: HeaderMap) -> Response {
         return fail(error, StatusCode::FORBIDDEN);
     }
     let Some(origin) = state.gday_auth.connected_origin().await else {
-        return fail("Sign in to Meeting Notes Server first", StatusCode::UNAUTHORIZED);
+        return fail("Sign in to Gday Meetings Server first", StatusCode::UNAUTHORIZED);
     };
     if let Err(error) = state.gday_auth.access_token(&origin).await {
         return fail(error, StatusCode::UNAUTHORIZED);

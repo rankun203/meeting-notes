@@ -1,8 +1,8 @@
-# Meeting Notes Server
+# Gday Meetings Server
 
-The server component of the Meeting Notes monorepo, built with Payload CMS and Next.js. Audio, processing tasks, and typed outputs live together. RunPod workers persist results to the server before completing provider jobs. Local workers also retain completed output for recovery through polling if callback delivery fails.
+The server component of the Gday Meetings monorepo, built with Payload CMS and Next.js. Audio, processing tasks, and typed outputs live together. RunPod workers persist results to the server before completing provider jobs. Local workers also retain completed output for recovery through polling if callback delivery fails.
 
-The package is `@meeting-notes/server`. This directory owns its environment and Docker configuration. The server and worker are deployed independently; see [deployment and networking](../../docs/deployment.md). `make server-start` at the repository root delegates to this component's Compose file.
+The package is `@gday-meetings/server`. This directory owns its environment and Docker configuration. The server and worker are deployed independently; see [deployment and networking](../../docs/deployment.md). `make server-start` at the repository root delegates to this component's Compose file.
 
 ## Start locally
 
@@ -15,7 +15,7 @@ pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3000/admin and create your first administrator. SQLite is the default; no database server is needed. Finish first-admin setup on a trusted network before exposing the app publicly. Meeting Notes Server is the source of user management. Administrators manage accounts in Payload; members can work with recordings in the shared workspace. Existing accounts retain their previous administrator access when upgrading.
+Open http://localhost:3000/admin and create your first administrator. SQLite is the default; no database server is needed. Finish first-admin setup on a trusted network before exposing the app publicly. Gday Meetings Server is the source of user management. Administrators manage accounts in Payload; members can work with recordings in the shared workspace. Existing accounts retain their previous administrator access when upgrading.
 
 The workspace contains **Meetings**, **Tasks**, **Outputs**, and **Audio files**. A meeting groups recording attempts; every task has its own input files and durable output list. `TRANSCRIPT_OUTPUT` bodies retain the complete worker JSON and project track segments into searchable meeting text. Repeat callbacks return the original stored output instead of duplicating it. Audio and outputs have no automatic expiry.
 
@@ -42,19 +42,19 @@ For production without Docker, run `pnpm build && pnpm start` with the same envi
 
 Releases are published by pushing a `server-vX.Y.Z` tag matching `package.json`, with
 notes in `.github/release-notes/vX.Y.Z.md`. The workflow validates source, publishes
-`ghcr.io/rankun203/meeting-notes-server` under `X.Y.Z` and `latest`, and creates the GitHub release.
+`ghcr.io/rankun203/gday-meetings-server` under `X.Y.Z` and `latest`, and creates the GitHub release.
 To retry publication of an existing tag without changing it, run
 `gh workflow run server-release.yml --ref master -f tag=server-vX.Y.Z`.
 
 ## Client and worker contract
 
-See [API reference](docs/api.md). Configure the meeting-notes client with this platform origin and sign in through Meeting Notes Server. User OAuth tokens authorize uploads and task submissions. Every task requires a stable `idempotencyKey`; the server queues and executes it using the configured local worker or RunPod. Callback capabilities stay between the server and the worker. Clients poll durable task outputs and download the transcript when ready.
+See [API reference](docs/api.md). Configure the gday-meetings client with this platform origin and sign in through Gday Meetings Server. User OAuth tokens authorize uploads and task submissions. Every task requires a stable `idempotencyKey`; the server queues and executes it using the configured local worker or RunPod. Callback capabilities stay between the server and the worker. Clients poll durable task outputs and download the transcript when ready.
 
 ## MCP
 
 The hosted **Streamable HTTP** endpoint is `https://meetings.example.com/mcp`. It runs inside the app/container. Connect with an OAuth-capable MCP client using this URL; no local process, shared MCP secret, or custom Authorization header is needed.
 
-The client discovers authorization, registers, opens your Meeting Notes Server login, and asks you to allow meeting search. Only tokens issued after an authenticated workspace user grants consent can call MCP. The single `mcp:read` permission allows searching and reading workspace meetings; members share the workspace, while user management is restricted to administrators.
+The client discovers authorization, registers, opens your Gday Meetings Server login, and asks you to allow meeting search. Only tokens issued after an authenticated workspace user grants consent can call MCP. The single `mcp:read` permission allows searching and reading workspace meetings; members share the workspace, while user management is restricted to administrators.
 
 `search_meetings` takes a required `query` string and searches titles, transcript text, and external IDs, returning up to 30 recently updated matches. Search runs with the authorizing user's Payload access rules.
 

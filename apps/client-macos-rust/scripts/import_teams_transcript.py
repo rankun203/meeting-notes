@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import a Microsoft Teams meeting transcript as a meeting-notes session.
+"""Import a Microsoft Teams meeting transcript as a gday-meetings session.
 
 Teams transcripts carry real speaker names but no audio and no voice
 embeddings, so the imported session is transcript-only: the AI overview,

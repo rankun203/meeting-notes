@@ -1,6 +1,6 @@
-# Meeting Notes
+# Gday Meetings
 
-Meeting Notes has three independently runnable components: a native **client**, a **server** for users and meeting storage, and an audio-processing **worker**. They share this repository so their HTTP contracts and deployment instructions stay together. Each has its own dependencies and release lifecycle.
+Gday Meetings has three independently runnable components: a native **client**, a **server** for users and meeting storage, and an audio-processing **worker**. They share this repository so their HTTP contracts and deployment instructions stay together. Each has its own dependencies and release lifecycle.
 
 | Component | Source | Runs where | Responsibility |
 | --- | --- | --- | --- |
@@ -31,7 +31,7 @@ make help        # List client, server and worker commands
 
 `make start` opens the browser UI and streams logs until Ctrl+C. It neither installs to Applications nor starts Docker. `make install` opens a folder containing the app and an Applications shortcut; drag the app onto the shortcut, then open it from Applications. The installed app starts the client and opens its UI without needing the repository. This is a local ad-hoc signed build, not a notarized public binary release.
 
-The server and worker are deployed independently and can live on different hosts. Each owns its Dockerfiles, Compose files and `.env.example`. Follow [deployment](docs/deployment.md), then use **Settings → Services → Login to Meeting Notes Server** in the client to connect to your server URL. Complete first-user setup at the server's `/admin` page first. The native client currently supports macOS; Make reports unsupported client platforms explicitly.
+The server and worker are deployed independently and can live on different hosts. Each owns its Dockerfiles, Compose files and `.env.example`. Follow [deployment](docs/deployment.md), then use **Settings → Services → Login to Gday Meetings Server** in the client to connect to your server URL. Complete first-user setup at the server's `/admin` page first. The native client currently supports macOS; Make reports unsupported client platforms explicitly.
 
 CPU execution takes longer than GPU execution. Model downloads require network access initially; speaker diarization additionally requires access to gated Hugging Face models. Once the required models are cached, processing can remain local. Local deployment does not require RunPod.
 
@@ -48,7 +48,9 @@ docs/                     Architecture, deployment, and worklogs
 Makefile                  Common commands delegating to independent components
 ```
 
-A future native UI can live under `apps/client-macos-app/`; that application is not implemented yet. The current client binary remains `meeting-notes-daemon`, preserving installation commands, local data paths and macOS app identity. The server source was brought back from the GdayMeetings repository; existing database names and previously published images retain their identities.
+A future native UI can live under `apps/client-macos-app/`; that application is not implemented yet. The client binary is `gday-meetings-client` and the macOS bundle is `Gday Meetings.app`. Existing local data paths and macOS app identity are preserved. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
+
+The GitHub repository URL still uses `meeting-notes`. The internal bundle identifier and data directory remain `org.rankun.meeting-notes` so existing recordings and permissions stay associated with the app. Stop and remove the old app bundle when replacing it with Gday Meetings; both use the same library and listening port. Historical worklogs and release notes retain their original names.
 
 ## Deployment and development
 

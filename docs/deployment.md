@@ -34,7 +34,7 @@ From the repository root, `make server-start`, `make server-stop` and `make serv
 
 SQLite is the default. The named volume `gday-meetings-data` retains the database and managed audio under `/app/data`. Set SERVER_DATA_VOLUME if your existing installation uses another volume. Preserve its PAYLOAD_SECRET and stop the old server before reusing its volume. If upgrading from the previous component Compose default, point SERVER_DATA_VOLUME at its existing project-prefixed `gday-data` volume instead of creating an empty library. No data is copied automatically.
 
-Open the server's `/admin` page for first-admin setup. In the client, use **Settings → Services → Login to Meeting Notes Server** with that public origin. Existing meetings can be copied through the client's migration controls after signing in.
+Open the server's `/admin` page for first-admin setup. In the client, use **Settings → Services → Login to Gday Meetings Server** with that public origin. Existing meetings can be copied through the client's migration controls after signing in.
 
 For PostgreSQL, set POSTGRES_PASSWORD and run from the server directory:
 
@@ -108,4 +108,4 @@ Configure the **server** with TRANSCRIPTION_PROVIDER=runpod, RUNPOD_ENDPOINT_URL
 
 ## Releases
 
-Server releases use `server-vX.Y.Z` tags matching `apps/server/package.json`. The repository-root GitHub workflow builds AMD64 and ARM64 from that component and publishes `ghcr.io/rankun203/meeting-notes-server`, verifying dashboard/file handling before updating latest. Earlier GdayMeetings images predate the independent local-worker source changes. Worker images have their own build contexts. The Rust client is a native app/binary and has no container deployment.
+Server releases use `server-vX.Y.Z` tags matching `apps/server/package.json`. The repository-root GitHub workflow builds AMD64 and ARM64 from that component and publishes `ghcr.io/rankun203/gday-meetings-server`, verifying dashboard/file handling before updating latest. Earlier Gday Meetings images predate the independent local-worker source changes. Worker images have their own build contexts. The Rust client is a native app/binary and has no container deployment.

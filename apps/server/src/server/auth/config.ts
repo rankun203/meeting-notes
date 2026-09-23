@@ -291,7 +291,7 @@ export function createAuthOptions(): BetterAuthOptions {
     )
   }
   return {
-    appName: 'Meeting Notes Server',
+    appName: 'Gday Meetings Server',
     baseURL: authOrigin(),
     basePath: '/api/auth',
     secret: env.PAYLOAD_SECRET,

@@ -1,4 +1,4 @@
-# Import a Teams transcript into meeting-notes
+# Import a Teams transcript into Gday Meetings
 
 Teams transcripts have real speaker names and timestamps but no audio. The app supports transcript-only sessions: they render, summarize, and jump to timestamps normally, while omitting the player.
 

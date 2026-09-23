@@ -199,7 +199,7 @@ export interface Meeting {
   createdAt: string;
 }
 /**
- * Upload recordings up to 500 MB. Prefer compressed audio: Opus, M4A or MP3. WAV is also supported. Meeting Notes Server manages storage and metadata automatically.
+ * Upload recordings up to 500 MB. Prefer compressed audio: Opus, M4A or MP3. WAV is also supported. Gday Meetings Server manages storage and metadata automatically.
  *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "audio-files".

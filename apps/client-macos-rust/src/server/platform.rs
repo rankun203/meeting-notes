@@ -1,4 +1,4 @@
-//! OAuth-authenticated GdayMeetings transcription tasks.
+//! OAuth-authenticated Gday Meetings transcription tasks.
 use crate::session::session::PlatformTask;
 use crate::understanding::{ExtractionOutput, TrackInput};
 use serde_json::{json, Value};
@@ -114,7 +114,7 @@ impl PlatformClient {
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .map_err(|_| "Unable to contact Meeting Notes Server")?;
+            .map_err(|_| "Unable to contact Gday Meetings Server")?;
         if !response.status().is_success() {
             return Err(format!(
                 "Server capability check failed ({})",
@@ -126,7 +126,7 @@ impl PlatformClient {
             .await
             .map_err(|_| "Invalid server capabilities")?;
         if value["meetingImports"] != true {
-            return Err("Upgrade Meeting Notes Server to a version supporting existing-meeting imports before migrating".into());
+            return Err("Upgrade Gday Meetings Server to a version supporting existing-meeting imports before migrating".into());
         }
         Ok(())
     }
@@ -252,10 +252,10 @@ impl PlatformClient {
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .map_err(|e| format!("Meeting Notes Server capability check failed: {e}"))?;
+            .map_err(|e| format!("Gday Meetings Server capability check failed: {e}"))?;
         let value: Value = response
             .error_for_status()
-            .map_err(|e| format!("Meeting Notes Server capability check failed: {e}"))?
+            .map_err(|e| format!("Gday Meetings Server capability check failed: {e}"))?
             .json()
             .await
             .map_err(|e| format!("Invalid platform capabilities: {e}"))?;

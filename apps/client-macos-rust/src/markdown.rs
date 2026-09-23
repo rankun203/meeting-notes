@@ -218,7 +218,7 @@ pub fn write_claude_md(data_dir: &Path, self_intro: Option<&str>) {
     use tracing::info;
     let path = data_dir.join("CLAUDE.md");
 
-    let mut content = String::from(r#"# Meeting Notes Data Directory
+    let mut content = String::from(r#"# Gday Meetings Data Directory
 
 You are invoked from a meeting notes app to help analyze meeting data.
 

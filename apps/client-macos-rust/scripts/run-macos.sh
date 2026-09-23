@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch through LaunchServices so TCC attributes permission to Meeting Notes,
+# Launch through LaunchServices so TCC attributes permission to Gday Meetings,
 # not the terminal. Directly executing Contents/MacOS/... does not do this.
 set -euo pipefail
 
@@ -13,13 +13,13 @@ fi
 if [[ "${1:-}" == --stop ]]; then
     app_pids="$(/usr/sbin/lsof -t "$executable" 2>/dev/null)" || true
     if [[ -z "$app_pids" ]]; then
-        echo "Meeting Notes is not running from $app_path"
+        echo "Gday Meetings is not running from $app_path"
         exit 0
     fi
     while IFS= read -r app_pid; do
         kill -INT "$app_pid"
     done <<< "$app_pids"
-    echo "Shutdown requested. Meeting Notes will stop and finalize active recordings."
+    echo "Shutdown requested. Gday Meetings will stop and finalize active recordings."
     exit 0
 fi
 
@@ -79,7 +79,7 @@ mkfifo "$run_dir/output"
 ) &
 log_pid=$!
 
-echo "Starting Meeting Notes. Press Ctrl+C to stop and finalize recordings."
+echo "Starting Gday Meetings. Press Ctrl+C to stop and finalize recordings."
 echo "Logs are also saved to $log_path"
 # Preserve access to developer tools (e.g. the Claude CLI) when LaunchServices
 # starts the daemon outside the terminal's process tree.
@@ -88,7 +88,7 @@ echo "Logs are also saved to $log_path"
     exec /usr/bin/open -n -W -a "$app_path" \
         --stdout "$run_dir/output" --stderr "$run_dir/output" \
         --env "PATH=$PATH" \
-        --env "RUST_LOG=${RUST_LOG:-meeting_notes_daemon=info}" \
+        --env "RUST_LOG=${RUST_LOG:-gday_meetings_client=info}" \
         --env "RUST_BACKTRACE=${RUST_BACKTRACE:-1}" \
         --args serve --web-ui --open "$@"
 ) &
@@ -109,7 +109,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 
 if [[ -z "$daemon_pid" ]]; then
-    echo "Meeting Notes exited before startup completed. See the logs above." >&2
+    echo "Gday Meetings exited before startup completed. See the logs above." >&2
     kill -TERM "$launch_pid" 2>/dev/null || true
     exit 1
 fi

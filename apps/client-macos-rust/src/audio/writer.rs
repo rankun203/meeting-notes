@@ -403,7 +403,7 @@ impl OpusAudioWriter {
         // OpusTags packet
         let mut tags = Vec::new();
         tags.extend_from_slice(b"OpusTags");
-        let vendor = b"meeting-notes";
+        let vendor = b"gday-meetings";
         tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
         tags.extend_from_slice(vendor);
         tags.extend_from_slice(&0u32.to_le_bytes()); // 0 user comments

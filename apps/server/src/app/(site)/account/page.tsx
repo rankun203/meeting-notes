@@ -11,7 +11,7 @@ export default async function Account() {
   if (!principal) redirect('/sign-in')
   return (
     <main className="oauth">
-      <p className="eyebrow">MEETING NOTES / SERVER</p>
+      <p className="eyebrow">GDAY MEETINGS / SERVER</p>
       <h1>Your account</h1>
       <p>{principal.user.email}</p>
       <p>Access: {principal.user.role}</p>

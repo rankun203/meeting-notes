@@ -1462,7 +1462,7 @@ fn update_source_notices(
                             Some(
                                 "macOS may have denied microphone access. \
                                 Check System Settings > Privacy & Security > Microphone \
-                                and allow Meeting Notes (or your terminal app when running the CLI)."
+                                and allow Gday Meetings (or your terminal app when running the CLI)."
                                     .to_string(),
                             ),
                         )
@@ -1495,9 +1495,9 @@ fn update_source_notices(
                     };
                     let details = if platform == "macos" {
                         "If sound is playing, check System Settings > Privacy & Security > \
-                        Screen & System Audio Recording and allow Meeting Notes (or your terminal app \
+                        Screen & System Audio Recording and allow Gday Meetings (or your terminal app \
                         when running the CLI), then restart recording. If no permission dialog appears, \
-                        launch Meeting Notes with make start as described in the README."
+                        launch Gday Meetings with make start as described in the README."
                     } else {
                         "If sound is playing, check the system audio source, output device, and recording permissions."
                     };
@@ -1567,7 +1567,7 @@ mod tests {
     #[tokio::test]
     async fn dismissed_live_notice_stays_hidden_until_condition_resolves() {
         let dir = std::env::temp_dir().join(format!(
-            "meeting-notes-notice-test-{}-{}",
+            "gday-meetings-notice-test-{}-{}",
             std::process::id(),
             Utc::now().timestamp_nanos_opt().unwrap_or_default(),
         ));
@@ -1681,7 +1681,7 @@ mod tests {
     #[tokio::test]
     async fn completed_media_import_becomes_a_stopped_opus_session() {
         let dir = std::env::temp_dir().join(format!(
-            "meeting-notes-import-test-{}-{}",
+            "gday-meetings-import-test-{}-{}",
             std::process::id(),
             Utc::now().timestamp_nanos_opt().unwrap_or_default(),
         ));

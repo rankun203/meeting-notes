@@ -22,7 +22,7 @@ import urllib.request
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', required=True, type=Path)
-    parser.add_argument('--binary', default=Path(__file__).resolve().parents[1] / 'target/release/meeting-notes-daemon', type=Path)
+    parser.add_argument('--binary', default=Path(__file__).resolve().parents[1] / 'target/release/gday-meetings-client', type=Path)
     parser.add_argument('--artifacts', default=Path(__file__).resolve().parents[1] / 'target/filesystem-benchmark', type=Path)
     parser.add_argument('--cycles', default=3, type=int)
     parser.add_argument('--scale', default=1, type=int)

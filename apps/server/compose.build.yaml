@@ -1,4 +1,4 @@
 services:
   server:
-    image: meeting-notes-server:local
+    image: gday-meetings-server:local
     build: .

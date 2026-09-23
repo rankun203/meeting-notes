@@ -1,8 +1,8 @@
 # Shared identity and recording flow
 
-Meeting Notes Server is the source of users and access permissions. Payload Admin manages those accounts. The hosted identity module provides standard OpenID Connect/OAuth login; optional external identity providers are linked sign-in methods for existing server users, not a separate source of application permissions.
+Gday Meetings Server is the source of users and access permissions. Payload Admin manages those accounts. The hosted identity module provides standard OpenID Connect/OAuth login; optional external identity providers are linked sign-in methods for existing server users, not a separate source of application permissions.
 
-The Rust meeting-notes app is a public OAuth client. It discovers the server's issuer, opens browser login with PKCE, and stores refresh/access credentials in the daemon's private server-side storage. The browser UI receives connection status, not tokens. The same hosted login serves MCP clients with a separate read scope and resource audience.
+The Rust gday-meetings app is a public OAuth client. It discovers the server's issuer, opens browser login with PKCE, and stores refresh/access credentials in the daemon's private server-side storage. The browser UI receives connection status, not tokens. The same hosted login serves MCP clients with a separate read scope and resource audience.
 
 After login, the desktop app uploads recording tracks and submits an idempotent transcription task. The server persists the task before contacting its configured worker, owns execution and status recovery, and retains typed outputs. The daemon downloads the durable result for its existing local transcript interface. Local worker or RunPod credentials belong to server deployment configuration for this flow.
 

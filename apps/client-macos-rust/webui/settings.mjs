@@ -481,7 +481,7 @@ export function SettingsPage({ category, onSelectSession }) {
   const categoryContent = {
     services: jsxs('div', { className: 'space-y-6', children: [
       jsx(GdaySettings, {}),
-      jsx('p', { className: 'text-xs text-gray-500', children: 'The direct RunPod settings below are used when you are signed out of Meeting Notes Server.' }),
+      jsx('p', { className: 'text-xs text-gray-500', children: 'The direct RunPod settings below are used when you are signed out of Gday Meetings Server.' }),
       jsxs('div', { className: 'space-y-4', children: [
         jsx('p', { className: 'text-sm font-medium text-gray-700 dark:text-gray-300', children: 'Audio Extraction (RunPod)' }),
         jsxs('div', { children: [

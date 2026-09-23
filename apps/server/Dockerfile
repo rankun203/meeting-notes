@@ -13,7 +13,7 @@ WORKDIR /app
 ARG VERSION=development
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/rankun203/meeting-notes" \
-      org.opencontainers.image.title="Meeting Notes Server" \
+      org.opencontainers.image.title="Gday Meetings Server" \
       org.opencontainers.image.description="Recordings, durable transcription tasks, and HTTP meeting-search MCP" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version=$VERSION \

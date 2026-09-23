@@ -1,6 +1,6 @@
 services:
   worker-audio-extraction:
-    image: meeting-notes-worker-audio-extraction:gpu-local
+    image: gday-meetings-worker-audio-extraction:gpu-local
     platform: linux/amd64
     build:
       context: .

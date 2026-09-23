@@ -68,7 +68,7 @@ pub fn write_lock(path: &Path) -> std::sync::MutexGuard<'static, ()> {
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("file has no parent")?;
-    let temp = parent.join(format!(".meeting-notes-{}.tmp", uuid::Uuid::new_v4()));
+    let temp = parent.join(format!(".gday-meetings-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);

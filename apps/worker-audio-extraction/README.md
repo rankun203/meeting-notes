@@ -20,10 +20,10 @@ LOCAL_WORKER_URL to reach this host and LOCAL_WORKER_API_TOKEN to match WORKER_A
 No shared Docker network is created. To build the CPU image directly instead:
 
 ```sh
-docker build -f Dockerfile.cpu -t meeting-notes-worker-audio-extraction:cpu-local .
+docker build -f Dockerfile.cpu -t gday-meetings-worker-audio-extraction:cpu-local .
 docker run --rm --env-file worker.env \
   -p 127.0.0.1:8000:8000 -v meeting-notes-worker-data:/data -v meeting-notes-worker-cache:/cache \
-  meeting-notes-worker-audio-extraction:cpu-local
+  gday-meetings-worker-audio-extraction:cpu-local
 ```
 
 Set a strong `WORKER_API_TOKEN` in `worker.env` (do not commit it). Local mode accepts
@@ -246,10 +246,10 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/JOB_ID \
 Build `Dockerfile.runpod`, then select the authenticated local transport explicitly:
 
 ```sh
-docker build -f Dockerfile.runpod -t meeting-notes-worker-audio-extraction:gpu-local .
+docker build -f Dockerfile.runpod -t gday-meetings-worker-audio-extraction:gpu-local .
 docker run --rm --gpus all --env-file worker.env -e WORKER_MODE=http \
   -p 127.0.0.1:8000:8000 -v meeting-notes-worker-data:/data -v meeting-notes-worker-cache:/cache \
-  -e HF_HOME=/cache/huggingface meeting-notes-worker-audio-extraction:gpu-local
+  -e HF_HOME=/cache/huggingface gday-meetings-worker-audio-extraction:gpu-local
 ```
 
 Use the same authenticated `/run` and `GET /status/<id>` endpoints as CPU mode.

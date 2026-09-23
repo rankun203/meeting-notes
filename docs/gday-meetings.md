@@ -1,6 +1,6 @@
 # Client/server integration
 
-The CMS now lives in [apps/server](../apps/server) as Meeting Notes Server. It defaults to SQLite and supports PostgreSQL. See [deployment](deployment.md) for local CPU/GPU and cloud options. Existing gday protocol identifiers and stored login paths are retained.
+The CMS now lives in [apps/server](../apps/server) as Gday Meetings Server. It defaults to SQLite and supports PostgreSQL. See [deployment](deployment.md) for local CPU/GPU and cloud options. Existing gday protocol identifiers and stored login paths are retained.
 
 ## Deploy and connect
 
@@ -9,7 +9,7 @@ The CMS now lives in [apps/server](../apps/server) as Meeting Notes Server. It d
    result sink and cannot guarantee durable outputs.
 3. Configure the local worker or RunPod endpoint **on the server**. In this daemon's
    web UI open **Settings → Services**, enter the server origin and click
-   **Login to Meeting Notes Server**. Sign in and approve recording read/write access.
+   **Login to Gday Meetings Server**. Sign in and approve recording read/write access.
 4. Transcribe or retry a meeting. Audio uploads under your user grant; the server submits
    the worker job and stores the transcript. Local RunPod credentials are not needed
    while signed in. Existing direct RunPod settings are used when signed out.
@@ -41,12 +41,12 @@ outstanding. If sign-in expires or is revoked, sign in again and retry the meeti
 Migration needs the deployed server URL and your OAuth login. Building the app or
 previewing the plan does not transfer any data. Deploy the migration-capable server
 and daemon, sign in to the intended server account under **Settings → Services**, then
-review **Copy existing meetings to Meeting Notes Server**.
+review **Copy existing meetings to Gday Meetings Server**.
 
 The preview lists the number of local meetings ready to copy, their audio size, and
 blocked meetings with the reason each cannot be copied. Resolve those issues or start
 with the ready meetings; blocked meetings are skipped. Click **Copy existing meetings
-to Meeting Notes Server** to transfer recordings and their existing results. This imports existing
+to Gday Meetings Server** to transfer recordings and their existing results. This imports existing
 content without automatically transcribing it again.
 
 Progress shows the current meeting, processed count, and per-meeting outcomes:
@@ -94,7 +94,7 @@ node apps/server/node_modules/tsx/dist/cli.mjs \
   apps/client-macos-rust/tests/fixtures/gday-provider.mts
 ```
 
-It prints `READY http://127.0.0.1:PORT`. In the meeting-notes checkout run:
+It prints `READY http://127.0.0.1:PORT`. In the gday-meetings checkout run:
 
 ```bash
 GDAY_TEST_ORIGIN=http://127.0.0.1:PORT \

@@ -56,14 +56,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     })
   }
   const server = new McpServer({
-    name: 'meeting-notes-server',
+    name: 'gday-meetings-server',
     version: packageJSON.version,
   })
   server.registerTool(
     'search_meetings',
     {
       description:
-        'Search Meeting Notes Server by meeting title, transcript, or external ID. Returns up to 30 most recently updated matches.',
+        'Search Gday Meetings Server by meeting title, transcript, or external ID. Returns up to 30 most recently updated matches.',
       inputSchema: { query: z.string().trim().min(1).max(500) },
       annotations: {
         readOnlyHint: true,
