@@ -6,8 +6,18 @@ Takes audio files in, returns transcripts with word-level timestamps, speaker la
 
 ## Local CPU deployment
 
-The repository root Compose stack connects the server to this worker without RunPod.
-To build just the CPU worker:
+This directory owns the worker's Compose files and environment template. It can run
+on a different host from the server. To start it from this directory:
+
+```sh
+cp .env.example .env
+# Set WORKER_API_TOKEN; optionally set HF_TOKEN for diarization.
+docker compose up --build -d
+```
+
+The root `make worker-start` command delegates here. Configure the server's
+LOCAL_WORKER_URL to reach this host and LOCAL_WORKER_API_TOKEN to match WORKER_API_TOKEN.
+No shared Docker network is created. To build the CPU image directly instead:
 
 ```sh
 docker build -f Dockerfile.cpu -t meeting-notes-worker-audio-extraction:cpu-local .
@@ -18,8 +28,9 @@ docker run --rm --env-file worker.env \
 
 Set a strong `WORKER_API_TOKEN` in `worker.env` (do not commit it). Local mode accepts
 only authenticated server-to-worker requests; this token is not a user login credential.
-Keep port 8000 on the internal Compose network in a full deployment. For development,
-bind its host port only to loopback. Use TLS if crossing an untrusted network.
+Compose binds port 8000 to host loopback by default. Set WORKER_BIND_ADDRESS and
+WORKER_PORT for a trusted private binding, or put a TLS reverse proxy in front for
+remote access. Use TLS if crossing an untrusted network.
 
 The CPU image installs CPU PyTorch wheels and uses `WHISPER_DEVICE=cpu`,
 `WHISPER_MODEL_SIZE=small`, `WHISPER_COMPUTE_TYPE=int8`, `WHISPER_BATCH_SIZE=1`, and
@@ -71,10 +82,10 @@ remain idempotent. RunPod mode retains its separate callback-before-success beha
 capabilities in the private job database; completed/failed inputs are cleared. Treat
 worker volumes as private data, alongside the server database and audio volume.
 
-The server validates ownership of audio and callback locations. In Compose it supplies
-its internal `http://server:3000` origin via `SERVER_INTERNAL_URL`, while public OAuth
-continues to use `SERVER_URL`. `localhost` inside a worker container means the worker,
-not the server. The worker accepts HTTP for this trusted internal network and never
+The server validates ownership of audio and callback locations. It can supply a reachable
+private server origin via `SERVER_INTERNAL_URL`, while public OAuth continues to use
+`SERVER_URL`. No cross-project service DNS is assumed. `localhost` inside a worker
+container means the worker, not the server. The worker accepts HTTP on trusted private networks and never
 rewrites URLs. Only the trusted server should possess the worker machine token.
 
 ## Lightweight checks
@@ -242,8 +253,9 @@ docker run --rm --gpus all --env-file worker.env -e WORKER_MODE=http \
 ```
 
 Use the same authenticated `/run` and `GET /status/<id>` endpoints as CPU mode.
-RunPod credentials and its SDK debug server are not used. In the full local deployment,
-use the root Compose GPU override so the server and worker share an internal network.
+RunPod credentials and its SDK debug server are not used. Alternatively run
+`docker compose -f compose.yaml -f compose.gpu.yaml up --build -d` from this directory,
+or `make worker-start-gpu` at the repository root. The server remains independently deployed.
 
 ## Historical GPU tuning measurements
 

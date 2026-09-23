@@ -3,7 +3,7 @@ services:
     image: meeting-notes-worker-audio-extraction:gpu-local
     platform: linux/amd64
     build:
-      context: ./apps/worker-audio-extraction
+      context: .
       dockerfile: Dockerfile.runpod
     gpus: all
     environment:

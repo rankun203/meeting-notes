@@ -45,7 +45,7 @@ If neither usable copy is present, ask the user to capture again with the Recap 
 Run the repository importer with `--dry-run` first:
 
 ```bash
-python3 scripts/import_teams_transcript.py TRANSCRIPT.json \
+uv run --no-project apps/client-macos-rust/scripts/import_teams_transcript.py TRANSCRIPT.json \
     --name "Meeting name" \
     --started-at 2026-07-28T07:11:51Z \
     --language zh \

@@ -11,6 +11,7 @@ build/
 # Virtual environments
 .venv/
 venv/
+worker-data/
 
 # uv
 uv.lock
@@ -18,6 +19,7 @@ uv.lock
 # Environment / secrets
 .env
 .env.*
+!.env.example
 
 # Model cache
 *.bin

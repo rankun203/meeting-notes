@@ -98,7 +98,7 @@ It prints `READY http://127.0.0.1:PORT`. In the meeting-notes checkout run:
 
 ```bash
 GDAY_TEST_ORIGIN=http://127.0.0.1:PORT \
-  cargo test maintained_gday_provider_contract -- --ignored --nocapture
+  cargo test --manifest-path apps/client-macos-rust/Cargo.toml maintained_gday_provider_contract -- --ignored --nocapture
 ```
 
 The fixture creates temporary SQLite databases and one synthetic user. It verifies

@@ -19,16 +19,19 @@ flowchart LR
 
 The client must run in the host OS to receive microphone and system-audio permissions. The server needs ordinary CPU resources and persistent storage. The worker has a separate Python/ML runtime and can use CPU or GPU hardware. Keeping these as separate packages means installing the client does not install the CMS or model stack, and replacing a worker does not move the meeting database.
 
-## Start locally
+## Start the native client
 
-1. Follow [local deployment](docs/deployment.md) to start the server and CPU worker with Docker Compose. Their data and downloaded models use persistent volumes.
-2. Start the native client from the repository root:
+From the repository root on macOS:
 
-   ```sh
-   bash scripts/run-macos.sh
-   ```
+```sh
+make start       # Build and launch the .app from the client build directory
+make install     # Build and open Finder for drag-to-Applications installation
+make help        # List client, server and worker commands
+```
 
-3. Open the client at `http://127.0.0.1:33487`. Under **Settings → Services**, use `http://localhost:3033` and **Login to Meeting Notes Server**. Complete first-user setup at the server's `/admin` page before signing in.
+`make start` opens the browser UI and streams logs until Ctrl+C. It neither installs to Applications nor starts Docker. `make install` opens a folder containing the app and an Applications shortcut; drag the app onto the shortcut, then open it from Applications. The installed app starts the client and opens its UI without needing the repository. This is a local ad-hoc signed build, not a notarized public binary release.
+
+The server and worker are deployed independently and can live on different hosts. Each owns its Dockerfiles, Compose files and `.env.example`. Follow [deployment](docs/deployment.md), then use **Settings → Services → Login to Meeting Notes Server** in the client to connect to your server URL. Complete first-user setup at the server's `/admin` page first. The native client currently supports macOS; Make reports unsupported client platforms explicitly.
 
 CPU execution takes longer than GPU execution. Model downloads require network access initially; speaker diarization additionally requires access to gated Hugging Face models. Once the required models are cached, processing can remain local. Local deployment does not require RunPod.
 
@@ -36,14 +39,13 @@ CPU execution takes longer than GPU execution. Model downloads require network a
 
 ```text
 apps/
-  client-macos-rust/       Rust client, embedded browser UI and client tests
+  client-macos-rust/       Rust client, UI, Cargo files, scripts and macOS packaging
   server/                 Payload/Next.js CMS, auth, APIs and server tests
   worker-audio-extraction/ Python ML worker, local HTTP and RunPod adapters
 integrations/             Reserved Logseq and Obsidian integrations
-scripts/                  Native macOS launcher and import utilities
 tools/file-drop/           Optional helper for the direct RunPod workflow
 docs/                     Architecture, deployment, and worklogs
-Cargo.toml                Cargo workspace; the native client is the default member
+Makefile                  Common commands delegating to independent components
 ```
 
 A future native UI can live under `apps/client-macos-app/`; that application is not implemented yet. The current client binary remains `meeting-notes-daemon`, preserving installation commands, local data paths and macOS app identity. The server source was brought back from the GdayMeetings repository; existing database names and previously published images retain their identities.
@@ -58,4 +60,4 @@ A future native UI can live under `apps/client-macos-app/`; that application is 
 - [Client/server login and existing-meeting migration](docs/gday-meetings.md)
 - [Deferred Payload collection redesign](docs/worklogs/2026-09-23-server-data-model-proposal.md)
 
-Each component's README describes its own install and test commands. From the repository root, `cargo build` and `cargo test --lib` select the Rust client; no server or worker is bundled into it. Server container releases use `server-vX.Y.Z` tags and the independent package version in `apps/server/package.json`.
+Each component's README describes its own install and test commands. `make test-client`, `make test-server` and `make test-worker` run the respective suites. There is no root Cargo workspace, package manifest or Docker stack. Server container releases use `server-vX.Y.Z` tags and the independent package version in `apps/server/package.json`.

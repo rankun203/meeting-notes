@@ -106,7 +106,7 @@ Benchmark a disposable JSON-only copy of a real library:
 
 ```sh
 uv run --no-project tests/filesystem_benchmark.py --source /path/to/data
-uv run --no-project tests/filesystem_benchmark.py --source /path/to/data --scale 10 --cycles 1 --artifacts target/filesystem-benchmark-scale10
+uv run --no-project apps/client-macos-rust/tests/filesystem_benchmark.py --source /path/to/data --scale 10 --cycles 1 --artifacts apps/client-macos-rust/target/filesystem-benchmark-scale10
 ```
 
 The macOS benchmark records physical footprint (including compressed memory),

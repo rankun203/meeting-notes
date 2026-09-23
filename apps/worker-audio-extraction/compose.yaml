@@ -1,0 +1,27 @@
+name: meeting-notes-worker
+services:
+  worker-audio-extraction:
+    image: meeting-notes-worker-audio-extraction:cpu-local
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    ports:
+      - '${WORKER_BIND_ADDRESS:-127.0.0.1}:${WORKER_PORT:-8000}:8000'
+    environment:
+      WORKER_MODE: http
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:?Set WORKER_API_TOKEN in the worker .env}
+      WORKER_DATA_DIR: /data
+      HF_HOME: /cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+      WHISPER_BATCH_SIZE: ${WHISPER_BATCH_SIZE:-1}
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
+    volumes:
+      - worker-data:/data
+      - worker-cache:/cache
+    restart: unless-stopped
+volumes:
+  worker-data:
+  worker-cache:

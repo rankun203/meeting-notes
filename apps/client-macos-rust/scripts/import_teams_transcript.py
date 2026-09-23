@@ -12,7 +12,7 @@ Anything that doesn't match keeps its Teams name and is left unlinked — the
 web UI shows it as an unconfirmed speaker you can assign with one click.
 
 Usage:
-    python3 scripts/import_teams_transcript.py TRANSCRIPT.json \\
+    uv run --no-project apps/client-macos-rust/scripts/import_teams_transcript.py TRANSCRIPT.json \\
         --name "Engineering Solution Discussion" \\
         --started-at 2026-07-28T07:11:51Z \\
         [--duration-secs 6075] [--tags work,cms] [--language zh] \\

@@ -23,9 +23,9 @@ The client can disconnect while the server and worker complete a submitted job. 
 
 ## Local networking and trust
 
-SERVER_URL is the public browser/OAuth origin. In local Compose it is http://localhost:3033. A container's localhost refers to itself, so the worker cannot use that origin to reach the server. SERVER_INTERNAL_URL=http://server:3000 is an explicit server-configured worker origin. The server validates owned, signed input URLs against its public origin before rewriting only their origin for local execution. Callback URLs use the same internal origin. RunPod uses the reachable public server origin.
+SERVER_URL is the public browser/OAuth origin. The server and worker have independent Compose projects and may run on different hosts; no shared network or service DNS is assumed. A container's localhost refers to itself. SERVER_INTERNAL_URL optionally supplies an explicit server origin reachable from the worker. The server validates owned, signed input URLs against its public origin before rewriting only their origin for standalone HTTP execution. Callback URLs use the same internal origin. RunPod uses the reachable public server origin.
 
-LOCAL_WORKER_API_TOKEN authenticates server-to-worker machine requests. It is not a client login token and grants no user access to CMS/MCP. The server passes a separate task-scoped callback token to the worker. Local worker ports remain internal to Compose. A remote worker endpoint should use TLS and be reachable from the server; it must also reach the server's download and callback origin.
+LOCAL_WORKER_API_TOKEN authenticates server-to-worker machine requests. It is not a client login token and grants no user access to CMS/MCP. The server passes a separate task-scoped callback token to the worker. Worker Compose publishes to host loopback by default; configure a reachable TLS endpoint or trusted private bind for remote deployment. The worker must also reach the server's download and callback origin.
 
 ## CPU and GPU
 
@@ -35,7 +35,7 @@ CPU mode does not require CUDA. Docker Desktop on a Mac does not provide the NVI
 
 ## Independent packaging
 
-The root Cargo workspace builds only client-macos-rust by default. apps/server has its own pnpm lockfile and container context. worker-audio-extraction has its own Python package and CPU/GPU image definitions. Separate dependency trees avoid shipping the ML stack with a recorder or requiring a GPU to run the CMS.
+The root Makefile delegates to independent components. client-macos-rust owns its Cargo manifest/lockfile, scripts, macOS packaging and generated build directory. apps/server has its own pnpm lockfile, environment template and container configuration. worker-audio-extraction owns its Python package, environment template and CPU/GPU Compose files. The root has no language package manifest or Docker deployment files. Separate dependency trees avoid shipping the ML stack with a recorder or requiring a GPU to run the CMS.
 
 Future server releases use server-vX.Y.Z tags and publish ghcr.io/rankun203/meeting-notes-server, with AMD64 and ARM64 manifests. Existing ghcr.io/rankun203/gday-meetings images are earlier standalone releases, not builds of uncommitted monorepo changes. The original external repository is retained as history; this repository is the source for ongoing component work. Worker deployment can build its own image or use RunPod's repository integration and the component-specific Docker context.
 

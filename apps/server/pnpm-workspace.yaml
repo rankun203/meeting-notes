@@ -1,3 +1,4 @@
+storeDir: .pnpm-store
 allowBuilds:
   sharp: true
   esbuild: true

@@ -2,7 +2,7 @@
 
 The server component of the Meeting Notes monorepo, built with Payload CMS and Next.js. Audio, processing tasks, and typed outputs live together. RunPod workers persist results to the server before completing provider jobs. Local workers also retain completed output for recovery through polling if callback delivery fails.
 
-The package is `@meeting-notes/server`. Start the complete local stack using the monorepo root Compose instructions; the commands below run this component alone.
+The package is `@meeting-notes/server`. This directory owns its environment and Docker configuration. The server and worker are deployed independently; see [deployment and networking](../../docs/deployment.md). `make server-start` at the repository root delegates to this component's Compose file.
 
 ## Start locally
 
@@ -27,7 +27,7 @@ docker compose up --build -d
 
 This component Compose file builds the server from this directory. For a fully local server and CPU/GPU worker, use [the repository-root deployment guide](../../docs/deployment.md). Earlier published `ghcr.io/rankun203/gday-meetings` images predate the monorepo local-worker integration.
 
-The default binds to localhost:3000. Put an HTTPS reverse proxy in front, set `SERVER_URL` to the public origin reachable by workers, and configure the proxy for long audio uploads/downloads and the appropriate maximum body size. Named volume `gday-data` stores SQLite and audio. Back it up together and preserve `PAYLOAD_SECRET`: changing the secret invalidates all existing audio and callback capability URLs. Use a single app replica with SQLite and local audio storage.
+The default binds to localhost:3000. Set `SERVER_PORT` and `SERVER_BIND_ADDRESS` for a different Docker host binding. Put an HTTPS reverse proxy in front, set `SERVER_URL` to the public origin reachable by workers, and configure the proxy for long audio uploads/downloads and the appropriate maximum body size. Named volume `gday-meetings-data` stores SQLite and audio; use `SERVER_DATA_VOLUME` to select an existing differently named volume, including the old project-prefixed `gday-data` Compose volume. Back it up together and preserve `PAYLOAD_SECRET`: changing the secret invalidates all existing audio and callback capability URLs. Use a single app replica with SQLite and local audio storage.
 
 Postgres deployment:
 

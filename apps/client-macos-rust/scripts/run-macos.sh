@@ -3,23 +3,12 @@
 # not the terminal. Directly executing Contents/MacOS/... does not do this.
 set -euo pipefail
 
-if [[ "$(uname -s)" != Darwin ]]; then
-    echo "This launcher requires macOS." >&2
-    exit 1
-fi
-
-repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$(dirname -- "${BASH_SOURCE[0]}")/macos-common.sh"
 build_only=false
 if [[ "${1:-}" == --build-only ]]; then
     build_only=true
     shift
 fi
-
-# Use a predictable local location regardless of Cargo's configured target dir.
-bundle_dir="${MEETING_NOTES_BUNDLE_DIR:-$repo_dir/target/macos}"
-app_path="$bundle_dir/Meeting Notes.app"
-executable="$app_path/Contents/MacOS/meeting-notes-daemon"
-log_path="$bundle_dir/meeting-notes.log"
 
 if [[ "${1:-}" == --stop ]]; then
     app_pids="$(/usr/sbin/lsof -t "$executable" 2>/dev/null)" || true
@@ -34,23 +23,7 @@ if [[ "${1:-}" == --stop ]]; then
     exit 0
 fi
 
-# Do not overwrite an executable that is currently recording.
-if [[ -f "$executable" ]] && /usr/sbin/lsof -t "$executable" >/dev/null 2>&1; then
-    echo "Meeting Notes is running. Stop recordings and quit the daemon before rebuilding." >&2
-    exit 1
-fi
-
-cargo build --manifest-path "$repo_dir/Cargo.toml" --package meeting-notes-daemon --target-dir "$repo_dir/target" --release
-mkdir -p "$app_path/Contents/MacOS"
-cp "$repo_dir/target/release/meeting-notes-daemon" "$executable"
-cp "$repo_dir/packaging/macos/Info.plist" "$app_path/Contents/Info.plist"
-/usr/bin/plutil -lint "$app_path/Contents/Info.plist"
-# Ad-hoc signing is sufficient for a local development bundle. Rebuilds may
-# require granting permission again; distribution needs a proper signing identity.
-/usr/bin/codesign --force --sign - "$app_path"
-/usr/bin/codesign --verify --strict "$app_path"
-
-echo "Built $app_path"
+bash "$client_dir/scripts/build-macos.sh"
 if "$build_only"; then
     exit 0
 fi
@@ -117,7 +90,7 @@ echo "Logs are also saved to $log_path"
         --env "PATH=$PATH" \
         --env "RUST_LOG=${RUST_LOG:-meeting_notes_daemon=info}" \
         --env "RUST_BACKTRACE=${RUST_BACKTRACE:-1}" \
-        --args serve --web-ui "$@"
+        --args serve --web-ui --open "$@"
 ) &
 launch_pid=$!
 

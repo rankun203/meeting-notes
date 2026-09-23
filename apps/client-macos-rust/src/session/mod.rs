@@ -1497,7 +1497,7 @@ fn update_source_notices(
                         "If sound is playing, check System Settings > Privacy & Security > \
                         Screen & System Audio Recording and allow Meeting Notes (or your terminal app \
                         when running the CLI), then restart recording. If no permission dialog appears, \
-                        launch Meeting Notes with bash scripts/run-macos.sh as described in the README."
+                        launch Meeting Notes with make start as described in the README."
                     } else {
                         "If sound is playing, check the system audio source, output device, and recording permissions."
                     };

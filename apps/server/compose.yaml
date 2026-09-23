@@ -3,7 +3,7 @@ services:
     image: meeting-notes-server:local
     build: .
     ports:
-      - '127.0.0.1:3000:3000'
+      - '${SERVER_BIND_ADDRESS:-127.0.0.1}:${SERVER_PORT:-3000}:3000'
     environment:
       PAYLOAD_SECRET: ${PAYLOAD_SECRET:?Set PAYLOAD_SECRET in .env}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-500000000}
@@ -26,3 +26,4 @@ services:
     restart: unless-stopped
 volumes:
   gday-data:
+    name: ${SERVER_DATA_VOLUME:-gday-meetings-data}

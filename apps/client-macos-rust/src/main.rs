@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use tracing::info;
@@ -77,7 +78,26 @@ enum Commands {
         /// Enable built-in web UI
         #[arg(long)]
         web_ui: bool,
+
+        /// Open the web UI in the default browser (macOS)
+        #[arg(long = "open", requires = "web_ui")]
+        open_browser: bool,
     },
+}
+
+fn parse_cli(mut args: Vec<OsString>, executable: &Path) -> Result<Cli, clap::Error> {
+    // Finder supplies no subcommand. Keep ordinary CLI invocation unchanged.
+    let macos = executable.parent();
+    let contents = macos.and_then(Path::parent);
+    let bundle = contents.and_then(Path::parent);
+    let in_app = cfg!(target_os = "macos")
+        && macos.and_then(Path::file_name).is_some_and(|name| name == "MacOS")
+        && contents.and_then(Path::file_name).is_some_and(|name| name == "Contents")
+        && bundle.and_then(Path::extension).is_some_and(|extension| extension == "app");
+    if in_app && args.len() == 1 {
+        args.extend(["serve", "--web-ui", "--open"].map(OsString::from));
+    }
+    Cli::try_parse_from(args)
 }
 
 #[tokio::main]
@@ -91,11 +111,18 @@ async fn main() {
         )
         .init();
 
-    let cli = Cli::parse();
+    let cli = parse_cli(
+        std::env::args_os().collect(),
+        &std::env::current_exe().unwrap_or_default(),
+    )
+    .unwrap_or_else(|error| error.exit());
 
     match cli.command {
-        Commands::Serve { port, host, data_dir, web_ui } => {
+        Commands::Serve { port, host, data_dir, web_ui, open_browser } => {
             info!("Meeting Notes daemon starting on port {}...", port);
+            // Reserve the listener before loading data or resuming background jobs.
+            let addr = format!("{}:{}", host, port);
+            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
             let data_dir = data_dir.unwrap_or_else(default_data_dir);
             let recordings_dir = data_dir.join("recordings");
             std::fs::create_dir_all(&recordings_dir)
@@ -212,13 +239,26 @@ async fn main() {
                 conversation_manager, shared_secrets, claude_runner, web_ui, gday_auth.clone(),
             );
 
-            let addr = format!("{}:{}", host, port);
-            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
             info!("Server listening on http://{}", addr);
             info!("Data directory: \"{}\"", data_dir.display());
             info!("Recordings directory: \"{}\"", recordings_dir.display());
             if web_ui {
                 info!("Web UI available at http://{}", addr);
+            }
+            if open_browser {
+                #[cfg(target_os = "macos")]
+                {
+                    let browser_host = if host == "0.0.0.0" { "127.0.0.1" } else { &host };
+                    let url = format!("http://{}:{}", browser_host, listener.local_addr().unwrap().port());
+                    tokio::spawn(async move {
+                        match tokio::process::Command::new("/usr/bin/open").arg(&url).status().await {
+                            Ok(status) if status.success() => {}
+                            result => tracing::warn!("Could not open browser at {}: {:?}", url, result),
+                        }
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                tracing::warn!("Automatic browser opening is currently supported on macOS only");
             }
 
             // Graceful shutdown: stop all recording sessions on SIGINT/SIGTERM
@@ -263,6 +303,43 @@ async fn main() {
 
             info!("Server stopped");
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn finder_launch_starts_the_ui_and_browser() {
+        let cli = parse_cli(
+            vec!["meeting-notes-daemon".into()],
+            Path::new("/Applications/Meeting Notes.app/Contents/MacOS/meeting-notes-daemon"),
+        ).unwrap();
+        assert!(matches!(cli.command, Commands::Serve {
+            port: 33487, web_ui: true, open_browser: true, data_dir: None, ..
+        }));
+    }
+
+    #[test]
+    fn standalone_cli_still_requires_a_subcommand() {
+        assert!(parse_cli(
+            vec!["meeting-notes-daemon".into()],
+            Path::new("/usr/local/bin/meeting-notes-daemon"),
+        ).is_err());
+    }
+
+    #[test]
+    fn explicit_bundle_arguments_preserve_isolated_launch_options() {
+        let cli = parse_cli(
+            ["meeting-notes-daemon", "serve", "--port", "0", "--data-dir", "/tmp/test-meetings", "--web-ui"]
+                .map(OsString::from).to_vec(),
+            Path::new("/Applications/Meeting Notes.app/Contents/MacOS/meeting-notes-daemon"),
+        ).unwrap();
+        assert!(matches!(cli.command, Commands::Serve {
+            port: 0, web_ui: true, open_browser: false, data_dir: Some(_), ..
+        }));
     }
 }
 

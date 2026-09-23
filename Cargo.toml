@@ -1,5 +1,0 @@
-[workspace]
-members = ["apps/client-macos-rust"]
-default-members = ["apps/client-macos-rust"]
-exclude = ["tools/file-drop"]
-resolver = "2"

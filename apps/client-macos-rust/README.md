@@ -4,7 +4,7 @@ The native macOS Rust client in the [Meeting Notes client/server/worker architec
 
 **meeting-notes** is a local-first meeting recorder and transcription tool. It captures microphone and system audio as separate tracks, transcribes and summarizes meetings, and exposes everything via a REST API with a built-in web UI.
 
-![demo](../../demo.png)
+![demo](demo.png)
 
 ## Features
 
@@ -19,16 +19,24 @@ The native macOS Rust client in the [Meeting Notes client/server/worker architec
 
 ## Installation
 
-Requires [Rust toolchain](https://rustup.rs).
+Requires macOS, the [Rust toolchain](https://rustup.rs) and Xcode Command Line Tools. From the repository root:
 
 ```bash
-cargo install --git https://github.com/rankun203/meeting-notes meeting-notes-daemon
+make install
 ```
+
+This builds an ad-hoc signed `Meeting Notes.app` and opens a Finder folder with an Applications shortcut. Drag the app onto Applications, then double-click the installed app. It starts the local server and opens the browser UI. The app uses the same existing data directory and macOS bundle identity. The installer folder is a separate copy, so dragging it away does not remove the development build. Close a running installed app before replacing it in Finder.
+
+This workflow uses built-in `ditto`, `codesign` and Finder; it does not need a DMG builder or copy over `/Applications` automatically. For command-line-only installation, `cargo install --git https://github.com/rankun203/meeting-notes meeting-notes-daemon` remains available.
 
 ## Usage
 
 ```bash
-# Start the daemon with web UI
+# Build and run the local app without installing it
+make start
+make start CLIENT_ARGS="--port 8080"
+
+# CLI use after cargo install (terminal permissions apply)
 meeting-notes-daemon serve --web-ui
 
 # Custom port and data directory
@@ -46,21 +54,21 @@ For durable transcription results and a shared recordings admin, connect
 When running from this repository, use the macOS launcher:
 
 ```bash
-bash scripts/run-macos.sh
+make start
 # Optional server arguments:
-bash scripts/run-macos.sh --port 8080 --data-dir ~/my-recordings
+make start CLIENT_ARGS="--port 8080 --data-dir ~/my-recordings"
 ```
 
-This builds and signs a local `target/macos/Meeting Notes.app`, then launches it
+This builds and signs `apps/client-macos-rust/target/macos/Meeting Notes.app`, then launches it
 through macOS LaunchServices. Allow **Meeting Notes** to use your microphone and
 record system audio when you start a recording. The launcher stays in the
 foreground and streams daemon logs to your terminal (also saved in
-`target/macos/meeting-notes.log`). Press **Ctrl+C** to stop the daemon and finalize
+`apps/client-macos-rust/target/macos/meeting-notes.log`). Press **Ctrl+C** to stop the daemon and finalize
 active recordings; press it again to force quit if shutdown is stuck. Stop any
 existing daemon before launching the app on the same port.
 
 To stop an instance from another terminal (including one started by the older
-background launcher), run `./scripts/run-macos.sh --stop`. This requests a graceful
+development launcher), run `make stop`. This requests a graceful
 shutdown and finalizes active recordings without rebuilding the app.
 
 The bundle includes `NSAudioCaptureUsageDescription` and
@@ -75,7 +83,7 @@ executing the binary inside the `.app` directly does not.
 If access was denied, enable **Meeting Notes** in **System Settings → Privacy &
 Security → Microphone / Screen & System Audio Recording**, then restart the daemon
 and recording. Local ad-hoc builds may need permission again after rebuilding.
-Use `bash scripts/run-macos.sh --build-only` to prepare the bundle without launching
+Use `make build` to prepare the bundle without launching
 it or interrupting an existing CLI recording.
 
 Live capture warnings measure incoming audio, independently of compressed file
@@ -120,6 +128,15 @@ This package captures and retains local audio, embeds the browser UI, and expose
 ## Development
 
 ```bash
-# Run with debug logging
-RUST_BACKTRACE=1 RUST_LOG=meeting_notes_daemon=debug cargo run -- serve --web-ui
+# Run the app with debug logging
+RUST_BACKTRACE=1 RUST_LOG=meeting_notes_daemon=debug make start
+make test-client
+
+# Or work directly inside this independent Cargo package
+cd apps/client-macos-rust
+cargo test --locked
+bash scripts/build-macos.sh
+bash scripts/run-macos.sh --port 8080
 ```
+
+Finder launches without arguments default to `serve --web-ui --open`. Explicit CLI arguments retain their usual behavior. The app currently uses the browser UI and runs in the background; closing the browser does not stop it. Use Activity Monitor to quit an installed copy, or `make stop` for the development copy. Ordinary CLI invocation still requires a subcommand.
