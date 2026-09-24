@@ -23,9 +23,12 @@ The client must run in the host OS to receive microphone and system-audio permis
 
 ## Start the native client
 
+Building from source requires macOS 14.2+, Xcode Command Line Tools (Git/Make/Clang/SDK), stable Rust/Cargo, and CMake. Signing is automatic and needs no Apple Developer account. See [macOS setup and troubleshooting](docs/macos-setup.md) for installation commands and runtime permissions.
+
 From the repository root on macOS:
 
 ```sh
+make doctor      # Check prerequisites before building
 make start       # Build and launch the .app from the client build directory
 make install     # Build and open Finder for drag-to-Applications installation
 make help        # List client, server and worker commands

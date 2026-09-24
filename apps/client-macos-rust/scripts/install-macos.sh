@@ -9,12 +9,15 @@ require_stopped_app "$staged_app"
 mkdir -p "$installer_dir"
 # A separate copy keeps development launches working after the installer app is dragged away.
 if [[ -e "$staged_app" ]]; then rm -rf "$staged_app"; fi
-/usr/bin/ditto "$app_path" "$staged_app"
+run_step "Prepare installer copy" "Check free disk space and write access to $installer_dir. Do not use sudo make." \
+    /usr/bin/ditto "$app_path" "$staged_app"
 if [[ ! -e "$installer_dir/Applications" && ! -L "$installer_dir/Applications" ]]; then
     ln -s /Applications "$installer_dir/Applications"
 fi
-/usr/bin/codesign --verify --strict "$staged_app"
+run_step "Verify installer copy" "Run make install again to recreate the installer from the signed build." \
+    /usr/bin/codesign --verify --strict "$staged_app"
 echo "Drag Gday Meetings.app onto Applications in the Finder window."
 echo "Then open Gday Meetings from Applications to start the client and its browser UI."
 echo "Installer folder: $installer_dir"
-/usr/bin/open "$installer_dir"
+run_step "Open installer in Finder" "A logged-in macOS desktop session is required. Your built app remains available at $staged_app; open the installer folder manually." \
+    /usr/bin/open "$installer_dir"

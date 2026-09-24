@@ -19,9 +19,10 @@ The native macOS Rust client in the [Gday Meetings client/server/worker architec
 
 ## Installation
 
-Requires macOS, the [Rust toolchain](https://rustup.rs) and Xcode Command Line Tools. From the repository root:
+Requires macOS 14.2+, the [stable Rust toolchain](https://rustup.rs), Xcode Command Line Tools (Git, Make, Clang and SDK), and CMake for the bundled Opus encoder. See [complete setup and troubleshooting](../../docs/macos-setup.md). From the repository root:
 
 ```bash
+make doctor
 make install
 ```
 

@@ -3,10 +3,11 @@ SHELL := /bin/bash
 HOST_OS := $(shell uname -s)
 CLIENT_DIR := apps/client-macos-rust
 
-.PHONY: help start build install stop server-start server-stop server-logs worker-start worker-start-gpu worker-stop worker-stop-gpu worker-logs test-client test-server test-worker
+.PHONY: help doctor start build install stop server-start server-stop server-logs worker-start worker-start-gpu worker-stop worker-stop-gpu worker-logs test-client test-server test-worker
 
 help:
 	@printf '%s\n' \
+	  'make doctor              Check native macOS build prerequisites' \
 	  'make start               Build and run the native client (macOS)' \
 	  'make build               Build the macOS .app without launching it' \
 	  'make install             Build and open a drag-to-Applications installer' \
@@ -26,6 +27,9 @@ help:
 	  'Example: make start CLIENT_ARGS="--port 8080"'
 
 ifeq ($(HOST_OS),Darwin)
+doctor:
+	bash "$(CLIENT_DIR)/scripts/doctor-macos.sh"
+
 start:
 	bash "$(CLIENT_DIR)/scripts/run-macos.sh" $(CLIENT_ARGS)
 
@@ -38,7 +42,7 @@ install:
 stop:
 	bash "$(CLIENT_DIR)/scripts/run-macos.sh" --stop
 else
-start build install stop:
+doctor start build install stop:
 	@printf 'The native client currently supports macOS only (host: %s). Server and worker targets can run independently.\n' "$(HOST_OS)" >&2
 	@exit 1
 endif

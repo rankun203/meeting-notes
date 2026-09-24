@@ -110,7 +110,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 
 if [[ -z "$daemon_pid" ]]; then
-    echo "Gday Meetings exited before startup completed. See the logs above." >&2
+    echo "Gday Meetings exited before startup completed. See the output above and daily logs in $log_dir. Check that you are in a logged-in desktop session; if using --port, try --port 0 to avoid a port conflict." >&2
     kill -TERM "$launch_pid" 2>/dev/null || true
     exit 1
 fi
