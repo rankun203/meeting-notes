@@ -39,7 +39,7 @@ struct WaveformTimeline: View {
                 }
                 .onEnded { _ in if let dragTime { seek(dragTime) }; dragTime = nil })
         }
-        .frame(height: 36)
+        .frame(height: 24)
         .overlay(alignment: .center) {
             if waveforms.isEmpty { Text("Waveform unavailable").font(.caption2).foregroundStyle(.secondary).allowsHitTesting(false) }
         }
@@ -73,15 +73,16 @@ struct PlaybackPosition: View {
     let seek: (Double) -> Void
 
     var body: some View {
-        VStack(spacing: 4) {
-            WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.time,
-                             label: label, dimmed: dimmed, seek: seek)
+        WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.time,
+                         label: label, dimmed: dimmed, seek: seek)
+        .overlay(alignment: .bottom) {
             if showsTimes {
                 HStack {
                     Text(playbackTime(progress.time))
                     Spacer()
                     Text("−" + playbackTime(max(0, duration - progress.time)))
                 }.font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                    .offset(y: 18)
             }
         }
     }

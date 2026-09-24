@@ -36,6 +36,7 @@ struct MeetingDetailView: View {
                 meetingContent(meeting)
             }
             .padding(24)
+            .modifier(AudioFileDrop(meetingID: meetingID))
             .navigationTitle(meeting.title)
             .toolbar {
                 Menu {
@@ -142,7 +143,8 @@ struct MeetingDetailView: View {
 
     private func audioSourceSummary(_ meeting: Meeting) -> String {
         let names = meeting.audioFiles.map { file in
-            file.hasPrefix("microphone") ? "Microphone" : file.hasPrefix("system") ? "System Audio" : "Imported Audio"
+            let name = URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
+            return name == "microphone" ? "Microphone" : name == "system" ? "System Audio" : name
         }
         return names.joined(separator: " · ")
     }

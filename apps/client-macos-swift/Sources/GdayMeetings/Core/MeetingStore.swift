@@ -231,29 +231,86 @@ final class MeetingStore: ObservableObject {
         while captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
         await stopRecording(transcribeAfter: false)
     }
-    @discardableResult func importAudio(url: URL) throws -> UUID {
+    /// A list drop creates one meeting per file; a detail drop appends aligned
+    /// tracks to one meeting. Commit metadata once, or remove all new copies.
+    @discardableResult func importAudioFiles(_ urls: [URL], into target: UUID? = nil) async throws -> [UUID] {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
-        guard ["opus","ogg","wav","m4a","mp3","mp4","aiff","aif","caf","flac","aac","mov"].contains(url.pathExtension.lowercased()) else { throw MeetingError.message("Choose an audio or video file: Opus, Ogg, WAV, M4A, MP3, MP4, AIFF, CAF, FLAC, AAC, or MOV.") }
-        let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-        var meeting = Meeting(title: url.deletingPathExtension().lastPathComponent)
-        let folder = directory(for: meeting.id)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let name = "imported.\(url.pathExtension.lowercased())"
-        try FileManager.default.copyItem(at: url, to: folder.appendingPathComponent(name))
-        meeting.audioFiles = [name]
-        if let player = try? AVAudioPlayer(contentsOf: folder.appendingPathComponent(name)) { meeting.duration = player.duration }
-        meetings.insert(meeting, at: 0); guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }
-        if ["opus", "ogg"].contains(url.pathExtension.lowercased()) {
-            let importedID = meeting.id
-            Task { [weak self] in
-                do {
-                    let metadata = try await AudioPlaybackPreparation.opusMetadata(folder.appendingPathComponent(name))
-                    guard let self, let index = self.meetings.firstIndex(where: { $0.id == importedID }) else { return }
-                    self.meetings[index].duration = metadata.duration; self.save()
-                } catch { self?.errorMessage = "The imported audio was retained, but its Opus metadata could not be read. \(error.localizedDescription)" }
-            }
+        guard !isBusy, !isStartingRecording, !isFinalizingRecording, recordingID == nil else {
+            throw MeetingError.message("Finish the current operation before importing audio.")
         }
-        return meeting.id
+        guard !urls.isEmpty else { return [] }
+        if let target {
+            guard let meeting = meetings.first(where: { $0.id == target }) else { throw MeetingError.message("This meeting no longer exists.") }
+            guard meeting.serverTranscription == nil else { throw MeetingError.message("Resume and finish this meeting’s pending transcription before adding tracks.") }
+        }
+        isBusy = true
+        defer { isBusy = false }
+        var copied: [URL] = []
+        var newFolders: [URL] = []
+        var additions: [(id: UUID, title: String, file: String, duration: Double)] = []
+        do {
+            for source in urls {
+                try Task.checkCancellation()
+                let ext = source.pathExtension.lowercased()
+                guard source.isFileURL, ["opus", "ogg", "wav", "m4a", "mp3", "mp4", "aiff", "aif", "caf", "flac", "aac", "mov"].contains(ext) else {
+                    throw MeetingError.message("Choose a supported audio or video file: \(source.lastPathComponent).")
+                }
+                let access = source.startAccessingSecurityScopedResource()
+                defer { if access { source.stopAccessingSecurityScopedResource() } }
+                guard try source.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                    throw MeetingError.message("Choose a file, not a folder: \(source.lastPathComponent).")
+                }
+                let id = target ?? UUID()
+                let folder = directory(for: id)
+                if !FileManager.default.fileExists(atPath: folder.path) {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    newFolders.append(folder)
+                }
+                let base = source.deletingPathExtension().lastPathComponent
+                let filenameBase = base.replacingOccurrences(of: "..", with: "_")
+                var destination = folder.appendingPathComponent(filenameBase).appendingPathExtension(ext)
+                var suffix = 2
+                while FileManager.default.fileExists(atPath: destination.path) {
+                    destination = folder.appendingPathComponent("\(filenameBase)-\(suffix)").appendingPathExtension(ext)
+                    suffix += 1
+                }
+                let copyTo = destination
+                copied.append(destination)
+                try await Task.detached(priority: .userInitiated) {
+                    try FileManager.default.copyItem(at: source, to: copyTo)
+                }.value
+                let duration: Double
+                if ["opus", "ogg"].contains(ext) {
+                    duration = try await AudioPlaybackPreparation.opusMetadata(destination).duration
+                } else {
+                    let asset = AVURLAsset(url: destination)
+                    guard !(try await asset.loadTracks(withMediaType: .audio)).isEmpty else {
+                        throw MeetingError.message("No audio track found in \(source.lastPathComponent).")
+                    }
+                    duration = try await asset.load(.duration).seconds
+                }
+                guard duration.isFinite, duration > 0 else { throw MeetingError.message("No playable audio in \(source.lastPathComponent).") }
+                additions.append((id, base, destination.lastPathComponent, duration))
+            }
+            try Task.checkCancellation()
+            if let target {
+                guard let index = meetings.firstIndex(where: { $0.id == target }) else { throw MeetingError.message("This meeting was deleted during import.") }
+                meetings[index].audioFiles += additions.map(\.file)
+                meetings[index].duration = max(meetings[index].duration, additions.map(\.duration).max() ?? 0)
+            } else {
+                let imported = additions.map { Meeting(id: $0.id, title: $0.title, duration: $0.duration, audioFiles: [$0.file]) }
+                meetings.insert(contentsOf: imported, at: 0)
+            }
+            guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }
+        } catch {
+            for file in copied { try? FileManager.default.removeItem(at: file) }
+            for folder in newFolders {
+                if (try? FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty) == true { try? FileManager.default.removeItem(at: folder) }
+            }
+            throw error
+        }
+        statusMessage = target == nil ? "Imported \(additions.count) meeting(s)" : "Added \(additions.count) track(s)"
+        return target.map { [$0] } ?? additions.map(\.id)
     }
     func importArchive(url: URL) throws {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }

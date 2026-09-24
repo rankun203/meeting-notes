@@ -231,7 +231,7 @@ final class MeetingPlayback: ObservableObject {
         waveforms = []; mutedTracks = track < 0 ? [] : Set(files.indices.filter { $0 != track })
         trackNames = files.map { file in
             let name = file.deletingPathExtension().lastPathComponent
-            return name.hasPrefix("microphone") ? "Microphone" : name.hasPrefix("system") ? "System Audio" : name
+            return name == "microphone" ? "Microphone" : name == "system" ? "System Audio" : name
         }
         errorMessage = nil; hasEnded = false; isSeeking = false
         duration = 0; currentTime = max(0, position.isFinite ? position : 0); pendingPosition = currentTime

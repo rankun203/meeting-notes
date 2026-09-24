@@ -56,6 +56,7 @@ Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme 
 
 - Search your local meeting titles, notes, summaries and transcripts.
 - Choose **New Recording** to name the meeting and select microphone/system sources. During capture, take notes beside real source meters, an elapsed timer, and **Stop & Save**. Recording controls remain available when browsing elsewhere.
+- Drop audio/video files onto the meetings list to create one meeting per file. Drop files onto a meeting detail to add separate tracks; imported tracks start together at time zero. Originals are copied, and a failed batch is rolled back. Finish recording or a pending transcription before changing tracks. Importing never automatically transcribes or uploads.
 - Play all tracks together or individual tracks in the persistent player. Continue browsing, searching, and editing other meetings while listening; use 15-second skips, speed selection, the scrubber, or transcript timestamps. Starting a recording pauses playback; it resumes only when you choose Play.
 - Edit transcripts, rename speakers, write notes, and generate/edit summaries and action items.
 - Organize meetings with people and tags, and chat using meeting, person or tag context.

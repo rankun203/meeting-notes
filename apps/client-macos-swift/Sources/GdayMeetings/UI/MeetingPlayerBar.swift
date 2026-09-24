@@ -86,7 +86,7 @@ struct MeetingPlayerBar: View {
                     .help("Choose microphone, system audio, or all tracks")
                 }
             }
-            .padding(.horizontal, 20).padding(.vertical, 12)
+            .padding(.horizontal, 20).padding(.vertical, 18)
             if tracksExpanded {
                 ScrollView {
                     VStack(spacing: 10) {

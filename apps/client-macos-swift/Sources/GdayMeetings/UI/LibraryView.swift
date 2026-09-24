@@ -89,6 +89,7 @@ struct LibraryView: View {
                     guard !files.isEmpty else { return }
                     playback.play(meeting: meeting, files: files)
                 }
+                .modifier(AudioFileDrop())
                 .searchable(text: $search, prompt: "Search meetings and transcripts")
                 .navigationTitle("Meetings")
                 .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
@@ -219,7 +220,8 @@ enum MeetingPanels {
         panel.canChooseDirectories = false
         panel.prompt = "Import"
         if panel.runModal() == .OK {
-            for url in panel.urls { do { _ = try store.importAudio(url: url) } catch { store.errorMessage = error.localizedDescription } }
+            let urls = panel.urls
+            Task { do { _ = try await store.importAudioFiles(urls) } catch { store.errorMessage = error.localizedDescription } }
         }
     }
     static func importLegacy(_ store: MeetingStore) {
