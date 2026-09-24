@@ -42,11 +42,22 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 let engine = AVAudioEngine()
                 self.engine = engine
                 let input = engine.inputNode
+                // Preserve the physical microphone rate before VoiceProcessingIO can
+                // expose a multichannel aggregate default. Its channels are not a
+                // supported mapping of processed speech to be averaged or truncated.
+                let microphoneDeviceFormat = input.outputFormat(forBus: 0)
+                guard microphoneDeviceFormat.sampleRate > 0, microphoneDeviceFormat.channelCount > 0 else {
+                    throw MeetingError.message("No microphone input is available.")
+                }
                 // Enable only while stopped. Both hardware I/O nodes participate; never feed
                 // captured system audio or microphone monitoring back to the speakers.
                 // https://developer.apple.com/videos/play/wwdc2019/510/
                 if voiceProcessingEnabled {
-                    try input.setVoiceProcessingEnabled(true)
+                    do { try input.setVoiceProcessingEnabled(true) }
+                    catch {
+                        let cause = error as NSError
+                        throw MeetingError.message("Could not enable Apple microphone voice processing (\(cause.domain) \(cause.code)): \(cause.localizedDescription)")
+                    }
                     voiceProcessing = input.isVoiceProcessingEnabled
                     guard voiceProcessing else { throw MeetingError.message("Apple voice processing is unavailable on this audio route. Disable it in Settings or choose another device.") }
                     // Other applications count as other audio. Minimum reduces but does not
@@ -55,8 +66,20 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                     input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
                     input.isVoiceProcessingAGCEnabled = true
                 }
-                let format = input.outputFormat(forBus: 0)
-                guard format.sampleRate > 0, format.channelCount > 0 else { throw MeetingError.message("No microphone input is available.") }
+                let format: AVAudioFormat
+                if voiceProcessing {
+                    // Request a mono processed-speech client from the Audio Unit itself.
+                    // installTap's explicit format configures this otherwise-unconnected
+                    // output bus; no application-side selection/downmix of aggregate
+                    // channels is performed. Raw capture keeps its device channel layout.
+                    // https://developer.apple.com/documentation/avfaudio/avaudionode/installtap(onbus:buffersize:format:block:)
+                    guard let speechFormat = AVAudioFormat(standardFormatWithSampleRate: microphoneDeviceFormat.sampleRate, channels: 1) else {
+                        throw MeetingError.message("Could not configure the mono voice-processing client format.")
+                    }
+                    format = speechFormat
+                } else {
+                    format = input.outputFormat(forBus: 0)
+                }
                 if voiceProcessing {
                     // Voice I/O needs an active hardware output. Render silence, never the
                     // captured meeting: this establishes I/O without monitoring or feedback.
@@ -67,7 +90,17 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                         return noErr
                     }
                     engine.attach(silence)
-                    engine.connect(silence, to: engine.mainMixerNode, format: format)
+                    // VoiceProcessingIO requires its client input and output formats
+                    // to match. A mainMixer's automatic output uses the hardware's stereo
+                    // format even when the built-in microphone is mono, causing -10875.
+                    // Connect the silent source directly to hardware I/O with the exact
+                    // microphone client format; the Audio Unit handles the device format.
+                    // https://developer.apple.com/documentation/avfaudio/avaudioionode/setvoiceprocessingenabled(_:)
+                    engine.connect(silence, to: engine.outputNode, format: format)
+                    let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+                    guard outputFormat == format else {
+                        throw MeetingError.message("Apple voice processing requires matching client formats. Microphone: \(format); output: \(outputFormat).")
+                    }
                 }
                 epoch = CMClockGetTime(CMClockGetHostTimeClock()).seconds
                 let url = directory.appendingPathComponent("microphone.wav")
@@ -81,8 +114,21 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                     catch { self?.report(error) }
                 }
                 microphoneTapInstalled = true
+                if voiceProcessing {
+                    let negotiatedInput = input.outputFormat(forBus: 0)
+                    let negotiatedOutput = engine.outputNode.inputFormat(forBus: 0)
+                    guard negotiatedInput == format, negotiatedOutput == format else {
+                        throw MeetingError.message("Apple voice processing did not accept the mono client format. Input: \(negotiatedInput); output: \(negotiatedOutput). The unprocessed recording option remains available.")
+                    }
+                }
                 engine.prepare()
-                try engine.start()
+                do { try engine.start() }
+                catch {
+                    let cause = error as NSError
+                    let mode = voiceProcessing ? "voice-processed" : "unprocessed"
+                    let output = voiceProcessing ? "; output client \(engine.outputNode.inputFormat(forBus: 0))" : ""
+                    throw MeetingError.message("Could not start \(mode) microphone capture (\(cause.domain) \(cause.code)). Input client \(format)\(output). \(cause.localizedDescription)")
+                }
                 guard engine.isRunning else { throw MeetingError.message("The microphone engine could not start on this route.") }
                 // A route change can change sample rate/channel count and stop the engine.
                 // Preserve the partial meeting, then require a deliberate new recording.
