@@ -9,9 +9,10 @@ import ScreenCaptureKit
 final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var stream: SCStream?
+    private var systemConsent: SystemAudioConsent?
     private var microphoneWriter: TimedAudioWriter?
     private var systemWriter: TimedAudioWriter?
-    private let queue = DispatchQueue(label: "net.gday.swift.system-audio")
+    private let queue = DispatchQueue(label: "com.gdaymeetings.macos.system-audio")
     private var systemURL: URL?
     private var configurationObserver: NSObjectProtocol?
     private var epoch: TimeInterval = 0
@@ -34,10 +35,8 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         expectedMicrophone = microphoneEnabled; expectedSystem = systemEnabled
         var files: [String] = []
         do {
-            let content = systemEnabled ? try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) : nil
-            if microphoneEnabled {
-                guard await AVCaptureDevice.requestAccess(for: .audio) else { throw MeetingError.message("Enable microphone access for Gday Meetings in System Settings → Privacy & Security.") }
-            }
+            let authorization = try await RecordingPermissions.request(microphone: microphoneEnabled, systemAudio: systemEnabled)
+            systemConsent = authorization?.session
             epoch = CMClockGetTime(CMClockGetHostTimeClock()).seconds
             if microphoneEnabled {
                 let engine = AVAudioEngine()
@@ -94,8 +93,7 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 files.append(url.lastPathComponent)
             }
             if systemEnabled {
-                guard let display = content?.displays.first else { throw MeetingError.message("No display is available for system audio capture.") }
-                let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+                guard let filter = authorization?.filter else { throw RecordingPermissionError(permission: .systemAudio) }
                 let configuration = SCStreamConfiguration()
                 configuration.capturesAudio = true
                 configuration.excludesCurrentProcessAudio = true
@@ -134,6 +132,8 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         var stopError: Error?
         if let stream { do { try await stream.stopCapture() } catch { stopError = error } }
         stream = nil
+        if let systemConsent { await systemConsent.close() }
+        systemConsent = nil
         // Flush only after delivery has stopped; disposal drains the async ring buffer.
         queue.sync {
             do { try systemWriter?.finish() } catch { stopError = error }

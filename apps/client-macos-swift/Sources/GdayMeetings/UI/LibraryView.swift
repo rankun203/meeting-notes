@@ -126,6 +126,14 @@ struct LibraryView: View {
         .alert("Unable to Complete Action", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
+        .alert(store.recordingPermissionNeeded?.title ?? "Recording Access Needed", isPresented: Binding(get: { store.recordingPermissionNeeded != nil }, set: { if !$0 { store.recordingPermissionNeeded = nil } })) {
+            Button("Request Access Again") {
+                Task { await store.startRecording(); selectedMeeting = store.recordingID; destination = .meetings }
+            }
+            Button("Cancel", role: .cancel) { store.recordingPermissionNeeded = nil }
+        } message: {
+            Text((store.recordingPermissionNeeded?.explanation ?? "") + " If macOS asks you to relaunch, reopen the app before recording. macOS may not show another prompt for an existing permission decision.")
+        }
         .confirmationDialog("Delete \(deleting?.title ?? "meeting")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("Delete Meeting", role: .destructive) { if let meeting = deleting { store.deleteMeeting(id: meeting.id); if selectedMeeting == meeting.id { selectedMeeting = nil } }; deleting = nil }
         } message: { Text("This deletes the meeting and its saved audio. This cannot be undone.") }

@@ -1,0 +1,15 @@
+---
+date: 2026-09-24
+task: in-app-recording-permissions
+status: implemented
+---
+
+**Problem:** The real recording attempt returned ScreenCaptureKit `userDeclined` (-3801) even though the user saw no consent prompt. The UI exposed raw TCC wording and incorrectly implied the person declined. Capture relied on shareable-content enumeration to trigger authorization.
+
+**Implemented solution:** Added foreground, user-initiated microphone authorization and system-owned `SCContentSharingPicker` session consent before capture. Capture uses the picker-provided filter without enumerating unrestricted content or requiring a persistent screen-capture grant. Typed permission failures show a native in-app explanation and retry action, without automatically opening Settings. ScreenCaptureKit's access error maps to unavailable access, not a claim about the user's choice. Picker cancellation aborts startup without an error alert.
+
+**Reasoning:** Apple documents picker selection as authorization for the selected content during that capture session, without a separate Screen Recording grant. Keep approvals owned by macOS. The user specifically requires requesting consent in the app and asked not to navigate Privacy settings manually.
+
+**Technical debt:** Ad-hoc builds do not have a stable developer signing identity, so rebuilding can invalidate TCC matching; accepted for the no-developer-account CLT build. Future remediation: optional stable development/release signing identity when available. Persistent microphone denial cannot be re-prompted with the public request API; the app explains unavailable access without resetting or bypassing macOS privacy decisions. System audio now uses explicit session consent instead of relying on that persistent grant. No TCC database edits, automatic resets, or weakened signing requirements are introduced.
+
+**Notes:** Evidence: installed SDK `CoreGraphics/CGWindow.h` authorization contract; [Apple request API](https://developer.apple.com/documentation/coregraphics/cgrequestscreencaptureaccess()), [DTS authorization guidance](https://developer.apple.com/forums/thread/839069?answerId=898801022), [DTS ad-hoc identity explanation](https://developer.apple.com/forums/thread/819406). The corrected app displayed the native microphone permission prompt; the user approved capture and confirmed recording works. Both source callbacks delivered audio. A real baseline recorded and finalized as separate mono microphone and stereo system Opus tracks. Removed the proposed RecordingPermissionTests because its trivial mapping/wording assertions did not validate the native permission interaction. Verification focuses on compilation, existing integration coverage, and the actual system picker/prompt. [Apple WWDC23 session-consent explanation](https://developer.apple.com/videos/play/wwdc2023/10053/). The existing 39 tests across 13 suites pass after picker integration; no claim is made that these tests exercise OS consent UI. CLT release/signature/installer checks passed. The user-assisted recording flow succeeded without manually opening Privacy settings.

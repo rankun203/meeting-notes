@@ -12,6 +12,7 @@ final class MeetingStore: ObservableObject {
     @Published var recordingID: UUID?
     @Published var isBusy = false
     @Published var errorMessage: String?
+    @Published var recordingPermissionNeeded: RecordingPermission?
     @Published var captureHealth = ""
     @Published var statusMessage = ""
     @Published var recordingStartedAt: Date?
@@ -118,6 +119,7 @@ final class MeetingStore: ObservableObject {
 
     func startRecording() async {
         guard recordingID == nil, !isBusy, canSave else { return }
+        recordingPermissionNeeded = nil
         isBusy = true; captureTransition = true
         activeRecordingFormat = settings.recordingFormat
         let meeting = Meeting(title: Date().formatted(date: .abbreviated, time: .shortened))
@@ -138,7 +140,11 @@ final class MeetingStore: ObservableObject {
             recorder = capture; recordingID = meeting.id; recordingStartedAt = Date()
             captureHealth = [settings.captureMicrophone ? (settings.microphoneVoiceProcessing ? "Microphone: Apple voice processing" : "Microphone: unprocessed") : nil, settings.captureSystemAudio ? "System audio: separate track" : nil].compactMap { $0 }.joined(separator: " · ")
             statusMessage = "Recording"
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            if error is CancellationError { statusMessage = "Recording cancelled" }
+            else if let permission = RecordingPermissions.permission(for: error) { recordingPermissionNeeded = permission }
+            else { errorMessage = error.localizedDescription }
+        }
         isBusy = false; captureTransition = false
     }
     func stopRecording(transcribeAfter: Bool = true) async {
@@ -201,6 +207,7 @@ final class MeetingStore: ObservableObject {
         for file in originals { try? FileManager.default.removeItem(at: file) }
     }
     func finalizeForQuit() async {
+        RecordingPermissions.cancelPendingSelection()
         while captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
         await stopRecording(transcribeAfter: false)
     }
