@@ -49,15 +49,11 @@ struct MeetingPlayerBar: View {
                     transportButton("Forward 15 Seconds", symbol: "goforward.15") { playback.skip(by: 15) }
                 }
 
-                VStack(spacing: 4) {
-                    WaveformTimeline(waveforms: audibleWaveforms, duration: playback.duration, time: playback.currentTime, dimmed: playback.mutedTracks.count == playback.trackNames.count, seek: playback.seek)
-                        .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
-                    HStack {
-                        Text(playbackTime(playback.currentTime))
-                        Spacer()
-                        Text("−" + playbackTime(max(0, playback.duration - (playback.currentTime))))
-                    }.font(.caption2).monospacedDigit().foregroundStyle(.secondary)
-                }.frame(minWidth: 130, maxWidth: .infinity)
+                PlaybackPosition(progress: playback.progress, waveforms: audibleWaveforms,
+                                 duration: playback.duration, dimmed: playback.mutedTracks.count == playback.trackNames.count,
+                                 showsTimes: true, seek: playback.seek)
+                    .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                    .frame(minWidth: 130, maxWidth: .infinity)
 
                 HStack(spacing: 10) {
                     Button { tracksExpanded.toggle() } label: {
@@ -107,9 +103,10 @@ struct MeetingPlayerBar: View {
                                         .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
                                         .disabled(playback.isLoading || playback.isPlaybackBlocked)
                                 }.frame(width: 160)
-                                WaveformTimeline(
+                                PlaybackPosition(
+                                    progress: playback.progress,
                                     waveforms: playback.waveforms.indices.contains(index) ? [playback.waveforms[index]].compactMap { $0 } : [],
-                                    duration: playback.duration, time: playback.currentTime,
+                                    duration: playback.duration,
                                     label: "\(name) playback position",
                                     dimmed: playback.mutedTracks.contains(index), seek: playback.seek)
                                     .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)

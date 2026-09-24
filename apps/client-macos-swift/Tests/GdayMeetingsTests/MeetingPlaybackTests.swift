@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Combine
 import Testing
 @testable import GdayMeetings
 
@@ -26,6 +27,20 @@ private actor PlaybackAttemptCounter {
 
 @MainActor
 struct MeetingPlaybackTests {
+    @Test func progressUpdatesDoNotInvalidatePlaybackControls() {
+        let playback = MeetingPlayback()
+        var controlUpdates = 0
+        var clockUpdates = 0
+        let controlSubscription = playback.objectWillChange.sink { controlUpdates += 1 }
+        let clockSubscription = playback.progress.objectWillChange.sink { clockUpdates += 1 }
+        for tick in 1...40 { playback.progress.update(Double(tick) / 4) }
+        playback.progress.update(10) // A repeated position should not redraw either.
+        #expect(playback.currentTime == 10)
+        #expect(clockUpdates == 40)
+        #expect(controlUpdates == 0)
+        withExtendedLifetime((controlSubscription, clockSubscription)) {}
+    }
+
     @Test func selectionLoadsPausedAndSwitchingTracksKeepsPosition() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

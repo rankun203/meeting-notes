@@ -68,16 +68,26 @@ struct LibraryView: View {
                             }.font(.caption).foregroundStyle(.secondary)
                             if !meeting.summary.isEmpty { Text(meeting.summary).lineLimit(2).font(.caption).foregroundStyle(.secondary) }
                         }.padding(.vertical, 4).tag(meeting.id)
-                        .contextMenu {
-                            if !meeting.audioFiles.isEmpty {
-                                Button("Play Recording", systemImage: "play.fill") { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
-                                    .disabled(recordingActive)
-                            }
-                            Button("Export Meeting…") { MeetingPanels.export(meeting, store: store) }
-                            Button("Delete Meeting…", role: .destructive) { deleting = meeting }
-                                .disabled(store.recordingID == meeting.id)
-                        }
                     }
+                }
+                // Native primary action: single click selects, double click plays.
+                // https://developer.apple.com/documentation/swiftui/view/contextmenu(forselectiontype:menu:primaryaction:)
+                .contextMenu(forSelectionType: UUID.self) { ids in
+                    if let id = ids.first, let meeting = store.meetings.first(where: { $0.id == id }) {
+                        if !meeting.audioFiles.isEmpty {
+                            Button("Play", systemImage: "play.fill") { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
+                                .disabled(recordingActive)
+                        }
+                        Button("Export Meeting…") { MeetingPanels.export(meeting, store: store) }
+                        Button("Delete Meeting…", role: .destructive) { deleting = meeting }
+                            .disabled(store.recordingID == meeting.id)
+                    }
+                } primaryAction: { ids in
+                    guard !recordingActive, let id = ids.first,
+                          let meeting = store.meetings.first(where: { $0.id == id }) else { return }
+                    let files = store.audioURLs(for: meeting)
+                    guard !files.isEmpty else { return }
+                    playback.play(meeting: meeting, files: files)
                 }
                 .searchable(text: $search, prompt: "Search meetings and transcripts")
                 .navigationTitle("Meetings")
@@ -95,9 +105,9 @@ struct LibraryView: View {
                 ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
             } else {
                 ContentUnavailableView {
-                    Label("Room for the conversation", systemImage: "waveform")
+                    Label("No meeting selected", systemImage: "waveform")
                 } description: {
-                    Text("Record a meeting, capture the important details, and return to any moment.")
+                    Text("Select a meeting, start a recording, or import audio.")
                 } actions: {
                     Button("New Recording", systemImage: "record.circle") { store.presentsRecordingSetup = true }
                         .buttonStyle(.borderedProminent).disabled(store.isBusy || recordingActive)

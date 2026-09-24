@@ -134,10 +134,10 @@ struct MeetingDetailView: View {
     }
 
     private var playbackActionTitle: String {
-        guard playback.meetingID == meetingID else { return "Play Recording" }
+        guard playback.meetingID == meetingID else { return "Play" }
         if playback.isLoading { return "Loading…" }
         if playback.isPlaying { return "Pause" }
-        return playback.hasEnded ? "Play Again" : "Resume"
+        return "Play"
     }
 
     private func audioSourceSummary(_ meeting: Meeting) -> String {
@@ -228,9 +228,9 @@ struct MeetingDetailView: View {
     }
     private func emptyTranscript(_ meeting: Meeting) -> some View {
         ContentUnavailableView {
-            Label("Your conversation, in words", systemImage: "text.bubble")
+            Label("Recording transcript", systemImage: "text.bubble")
         } description: {
-            Text(store.recordingID == meetingID ? "Take notes while recording. Transcription is available after the audio is saved." : "Create a searchable transcript with speaker labels from your recording.")
+            Text(store.recordingID == meetingID ? "Take notes while recording. Transcription is available after the audio is saved." : "No transcript yet.")
         } actions: {
             if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {
                 Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription") { Task { await store.transcribe(id: meetingID) } }.disabled(store.isBusy)

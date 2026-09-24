@@ -60,3 +60,29 @@ struct WaveformTimeline: View {
         .help("Click or drag to seek. Arrow keys move five seconds.")
     }
 }
+
+/// The only observer of frequent progress updates. Controls outside this view
+/// retain their identity while its playhead and timestamps advance.
+struct PlaybackPosition: View {
+    @ObservedObject var progress: PlaybackProgress
+    let waveforms: [AudioWaveform]
+    let duration: Double
+    var label = "Playback position"
+    var dimmed = false
+    var showsTimes = false
+    let seek: (Double) -> Void
+
+    var body: some View {
+        VStack(spacing: 4) {
+            WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.time,
+                             label: label, dimmed: dimmed, seek: seek)
+            if showsTimes {
+                HStack {
+                    Text(playbackTime(progress.time))
+                    Spacer()
+                    Text("−" + playbackTime(max(0, duration - progress.time)))
+                }.font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            }
+        }
+    }
+}

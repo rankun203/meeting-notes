@@ -16,7 +16,13 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var isLoading = false
     @Published private(set) var hasEnded = false
-    @Published private(set) var currentTime: Double = 0
+    // Only timeline views observe the clock; a tick must not invalidate menus,
+    // the meeting editor, or the navigation hierarchy.
+    let progress = PlaybackProgress()
+    private(set) var currentTime: Double {
+        get { progress.time }
+        set { progress.update(newValue) }
+    }
     @Published private(set) var duration: Double = 0
     @Published private(set) var playbackRate: Double = 1
     @Published private(set) var isPlaybackBlocked = false
@@ -318,5 +324,14 @@ final class MeetingPlayback: ObservableObject {
         for url in temporaryURLs { try? FileManager.default.removeItem(at: url) }
         temporaryURLs = []
         sourceCompositionTracks = []
+    }
+}
+
+@MainActor
+final class PlaybackProgress: ObservableObject {
+    @Published private(set) var time: Double = 0
+    func update(_ value: Double) {
+        guard value.isFinite, value != time else { return }
+        time = value
     }
 }
