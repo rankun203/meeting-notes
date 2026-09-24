@@ -42,7 +42,7 @@ final class MeetingPlayback: ObservableObject {
     private var endObserver: NSObjectProtocol?
     private var failureObserver: NSObjectProtocol?
 
-    init(prepareAudio: @escaping AudioPreparer = AudioPlaybackPreparation.prepare) {
+    init(prepareAudio: @escaping AudioPreparer = { url in try await AudioPlaybackPreparation.prepare(url) }) {
         self.prepareAudio = prepareAudio
         player.actionAtItemEnd = .pause
         periodicObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] _ in
@@ -95,7 +95,12 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func play() {
-        guard hasSelection, !isPlaybackBlocked, errorMessage == nil else { return }
+        guard hasSelection, !isPlaybackBlocked else { return }
+        if errorMessage != nil {
+            guard let meeting = sourceMeeting else { return }
+            load(meeting: meeting, files: sourceFiles, track: selectedTrack, position: currentTime, autoplay: true)
+            return
+        }
         wantsPlayback = true
         if isLoading { return }
         guard player.currentItem != nil else { return }

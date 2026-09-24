@@ -34,3 +34,7 @@ Apple's [Playing audio HIG](https://developer.apple.com/design/human-interface-g
 ## Validation
 
 Added meaningful tests using only generated silent audio and controlled preparation callbacks: paused selection, mixed duration, preserving position when selecting a source, bounded seeks, recording prevention, metadata updates/deletion, stale cancelled preparation and temporary-file cleanup, and decode errors. Tests do not play sound or use real meeting recordings. Root's integrated run passed all 44 tests in 15 suites. Native visual and interactive playback checks remain pending. Git commits are serialized by root.
+
+## Retry follow-up
+
+Integration review found that the detail's same-meeting Play/Resume action called the general transport toggle, which returned early for a failed item. Updated `play()` to rebuild the retained meeting, source-track choice and position when an error exists; recording still prevents this retry. Added a counted failing-preparer regression: the explicit retry makes a second preparation attempt and surfaces its new error, while an attempt during recording performs no new work. Both fixture attempts fail before creating a player item, so the test cannot emit sound. Root's final integrated run passed all 45 tests in 15 suites. No new technical debt.

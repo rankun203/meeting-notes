@@ -19,6 +19,11 @@ private actor PlaybackPreparationGate {
     func release() { releaseWaiter?.resume(); releaseWaiter = nil }
 }
 
+private actor PlaybackAttemptCounter {
+    private(set) var count = 0
+    func next() -> Int { count += 1; return count }
+}
+
 @MainActor
 struct MeetingPlaybackTests {
     @Test func selectionLoadsPausedAndSwitchingTracksKeepsPosition() async throws {
@@ -98,6 +103,35 @@ struct MeetingPlaybackTests {
         #expect(playback.errorMessage?.contains("Fixture decode failed") == true)
         #expect(!playback.isLoading)
         #expect(!playback.isPlaying)
+        playback.clear()
+    }
+
+    @Test func playRetriesFailedSelectionButRecordingPreventsRetry() async {
+        let counter = PlaybackAttemptCounter()
+        let playback = MeetingPlayback { _ in
+            let attempt = await counter.next()
+            throw ServiceError("Fixture failure \(attempt)")
+        }
+        let meeting = Meeting(title: "Retry fixture")
+        let files = [URL(fileURLWithPath: "/fixture/microphone.opus"), URL(fileURLWithPath: "/fixture/system.opus")]
+        playback.select(meeting: meeting, files: files, track: 1)
+        await playback.waitForPreparation()
+        #expect(await counter.count == 1)
+        #expect(playback.errorMessage?.contains("Fixture failure 1") == true)
+        playback.setRecordingActive(true)
+        playback.togglePlayPause()
+        await playback.waitForPreparation()
+        #expect(await counter.count == 1)
+        #expect(playback.errorMessage?.contains("Fixture failure 1") == true)
+        playback.setRecordingActive(false)
+        playback.togglePlayPause()
+        await playback.waitForPreparation()
+        #expect(await counter.count == 2)
+        #expect(playback.errorMessage?.contains("Fixture failure 2") == true)
+        #expect(playback.meetingID == meeting.id)
+        #expect(playback.selectedTrack == 1)
+        #expect(!playback.isPlaying)
+        #expect(!playback.isLoading)
         playback.clear()
     }
 
