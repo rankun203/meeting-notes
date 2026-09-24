@@ -1,0 +1,113 @@
+import AVFoundation
+import Foundation
+import Testing
+@testable import GdayMeetings
+
+private actor PlaybackPreparationGate {
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    func suspend() async {
+        started = true
+        for waiter in startWaiters { waiter.resume() }; startWaiters = []
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+    func release() { releaseWaiter?.resume(); releaseWaiter = nil }
+}
+
+@MainActor
+struct MeetingPlaybackTests {
+    @Test func selectionLoadsPausedAndSwitchingTracksKeepsPosition() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mic = directory.appendingPathComponent("microphone.wav")
+        let system = directory.appendingPathComponent("system.wav")
+        try makeSilence(mic, seconds: 2)
+        try makeSilence(system, seconds: 3)
+        let meeting = Meeting(title: "Fixture meeting", audioFiles: ["microphone.wav", "system.wav"])
+        let playback = MeetingPlayback()
+        defer { playback.clear() }
+        playback.select(meeting: meeting, files: [mic, system])
+        await playback.waitForPreparation()
+        #expect(playback.errorMessage == nil)
+        #expect(playback.hasSelection)
+        #expect(!playback.isPlaying)
+        #expect(playback.selectedTrack == -1)
+        #expect(abs(playback.duration - 3) < 0.01)
+        #expect(playback.trackNames == ["Microphone", "System Audio"])
+        playback.seek(to: 1.2)
+        playback.selectTrack(0)
+        await playback.waitForPreparation()
+        #expect(playback.selectedTrack == 0)
+        #expect(abs(playback.duration - 2) < 0.01)
+        #expect(abs(playback.currentTime - 1.2) < 0.01)
+        #expect(!playback.isPlaying)
+        playback.seek(to: 500)
+        #expect(playback.currentTime == playback.duration)
+        playback.skip(by: -15)
+        #expect(playback.currentTime == 0)
+        var renamed = meeting; renamed.title = "Renamed"
+        playback.reconcile(meetings: [renamed])
+        #expect(playback.title == "Renamed")
+        #expect(playback.selectedTrack == 0)
+        playback.setRecordingActive(true)
+        playback.play()
+        #expect(!playback.isPlaying)
+        #expect(playback.isPlaybackBlocked)
+        playback.setRecordingActive(false)
+        #expect(!playback.isPlaying)
+        playback.reconcile(meetings: [])
+        #expect(!playback.hasSelection)
+        #expect(playback.duration == 0)
+    }
+
+    @Test func stalePreparationCannotReplaceSelectionAndDeletesItsOwnedFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.wav")
+        let temporary = directory.appendingPathComponent("temporary.wav")
+        try makeSilence(source, seconds: 0.2)
+        let gate = PlaybackPreparationGate()
+        let playback = MeetingPlayback { url in
+            try FileManager.default.copyItem(at: url, to: temporary)
+            await gate.suspend() // Deliberately ignores cancellation like some framework work.
+            return PreparedPlaybackAudio(url: temporary, temporary: true)
+        }
+        playback.select(meeting: Meeting(title: "Old"), files: [source])
+        let oldWork = Task { await playback.waitForPreparation() }
+        await gate.waitUntilStarted()
+        playback.clear()
+        await gate.release()
+        await oldWork.value
+        #expect(!playback.hasSelection)
+        #expect(!playback.isLoading)
+        #expect(!FileManager.default.fileExists(atPath: temporary.path))
+        #expect(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    @Test func failedPreparationReportsErrorWithoutStartingPlayback() async throws {
+        let playback = MeetingPlayback { _ in throw ServiceError("Fixture decode failed") }
+        playback.select(meeting: Meeting(title: "Broken"), files: [URL(fileURLWithPath: "/fixture/invalid.opus")])
+        await playback.waitForPreparation()
+        #expect(playback.errorMessage?.contains("Fixture decode failed") == true)
+        #expect(!playback.isLoading)
+        #expect(!playback.isPlaying)
+        playback.clear()
+    }
+
+    private func makeSilence(_ url: URL, seconds: Double) throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
+        let frames = AVAudioFrameCount(seconds * 48000)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        buffer.floatChannelData![0].initialize(repeating: 0, count: Int(frames))
+        var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file?.write(from: buffer); file = nil
+    }
+}
