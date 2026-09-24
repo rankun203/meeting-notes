@@ -91,7 +91,12 @@ struct RecordingSetupView: View {
                         Text("M4A · widely compatible").tag(RecordingFormat.m4a)
                         Text("WAV · uncompressed").tag(RecordingFormat.wav)
                     }
-                }.padding(.top, 12)
+                }
+                .padding(.top, 12)
+                // Keep the native pop-up bezel and keyboard focus ring inside
+                // the disclosure's clipping boundary (HIG: retain system controls).
+                // https://developer.apple.com/design/human-interface-guidelines/pop-up-buttons
+                .padding(.bottom, 4)
             }
             .disabled(store.isStartingRecording)
             if let startupError {
