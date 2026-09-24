@@ -30,6 +30,8 @@ This builds an ad-hoc signed `Gday Meetings.app` and opens a Finder folder with 
 
 This workflow uses built-in `ditto`, `codesign` and Finder; it does not need a DMG builder or copy over `/Applications` automatically. For command-line-only installation, `cargo install --git https://github.com/rankun203/meeting-notes gday-meetings-client` remains available.
 
+The installer places the app on the left and Applications on the right, uses Snap to Grid and Retina drag instructions, and selects the app to populate Finder's preview pane when enabled. Its taller window leaves room for version information. To regenerate the bundled background artwork, run `uv run --no-project --with pillow apps/client-macos-rust/scripts/render-installer-background.py` from the repository root; Pillow is only needed when regenerating the artwork.
+
 ## Usage
 
 ```bash

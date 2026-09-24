@@ -7,6 +7,7 @@ installer_dir="$target_dir/installer"
 staged_app="$installer_dir/Gday Meetings.app"
 require_stopped_app "$staged_app"
 mkdir -p "$installer_dir"
+/bin/cp "$client_dir/packaging/installer-background.tiff" "$target_dir/installer-background.tiff"
 # A separate copy keeps development launches working after the installer app is dragged away.
 if [[ -e "$staged_app" ]]; then rm -rf "$staged_app"; fi
 run_step "Prepare installer copy" "Check free disk space and write access to $installer_dir. Do not use sudo make." \
