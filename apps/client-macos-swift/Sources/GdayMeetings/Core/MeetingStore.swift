@@ -10,6 +10,7 @@ final class MeetingStore: ObservableObject {
     @Published var tags: [MeetingTag] = []
     @Published var settings = AppSettings()
     @Published var recordingID: UUID?
+    @Published var presentsRecordingSetup = false
     @Published var isBusy = false
     @Published var errorMessage: String?
     @Published var recordingPermissionNeeded: RecordingPermission?
@@ -17,6 +18,8 @@ final class MeetingStore: ObservableObject {
     @Published var statusMessage = ""
     @Published var recordingStartedAt: Date?
     @Published var isFinalizingRecording = false
+    @Published private(set) var isStartingRecording = false
+    @Published var recordingLevels = RecordingLevels()
     let dataDirectory: URL
     private var recorder: AudioCapture?
     private var captureTransition = false
@@ -117,15 +120,20 @@ final class MeetingStore: ObservableObject {
     func audioURLs(for meeting: Meeting) -> [URL] { meeting.audioFiles.filter { URL(fileURLWithPath: $0).lastPathComponent == $0 && !$0.contains("..") }.map { directory(for: meeting.id).appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) } }
     func audioURL(for meeting: Meeting) -> URL? { audioURLs(for: meeting).first }
 
-    func startRecording() async {
+    func startRecording(title: String? = nil) async {
         guard recordingID == nil, !isBusy, canSave else { return }
+        isStartingRecording = true
+        defer { isStartingRecording = false }
+        recordingLevels = RecordingLevels(microphone: RecordingSourceLevel(enabled: settings.captureMicrophone), system: RecordingSourceLevel(enabled: settings.captureSystemAudio))
         recordingPermissionNeeded = nil
         isBusy = true; captureTransition = true
         activeRecordingFormat = settings.recordingFormat
-        let meeting = Meeting(title: Date().formatted(date: .abbreviated, time: .shortened))
+        let suppliedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let meeting = Meeting(title: suppliedTitle.isEmpty ? Date().formatted(date: .abbreviated, time: .shortened) : suppliedTitle)
         do {
             try FileManager.default.createDirectory(at: directory(for: meeting.id), withIntermediateDirectories: true)
             let capture = AudioCapture()
+            capture.onLevels = { [weak self] levels, delivered in Task { @MainActor in defer { delivered() }; if self?.recordingID == meeting.id && self?.isFinalizingRecording == false { self?.recordingLevels = levels } } }
             capture.onHealth = { [weak self] message in Task { @MainActor in if self?.recordingID == meeting.id { self?.captureHealth = message } } }
             capture.onFailure = { [weak self] error in Task { @MainActor in
                 guard let self else { return }
@@ -169,6 +177,7 @@ final class MeetingStore: ObservableObject {
             catch { errorMessage = "Audio compression failed; the original WAV recording was retained. \(error.localizedDescription)"; stopFailed = true }
         }
         recordingID = nil; recordingStartedAt = nil
+        recordingLevels = RecordingLevels()
         statusMessage = stopFailed ? "Recording interrupted; partial audio retained" : "Recording saved"
         captureTransition = false
         isBusy = false

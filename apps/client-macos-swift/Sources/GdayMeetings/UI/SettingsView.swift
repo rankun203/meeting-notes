@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("gdayServerURL") private var serverURL = ""
     @ViewState private var signingIn = false
     @ViewState private var error: String?
+    private var audioSettingsLocked: Bool { store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording }
 
     private func setting<T>(_ path: WritableKeyPath<AppSettings, T>) -> Binding<T> {
         Binding(get: { store.settings[keyPath: path] }, set: { store.settings[keyPath: path] = $0; store.saveSettings() })
@@ -17,8 +18,8 @@ struct SettingsView: View {
         TabView {
             Form {
                 Section("Audio Sources") {
-                    Toggle("Record microphone", isOn: setting(\.captureMicrophone)).disabled(store.recordingID != nil)
-                    Toggle("Record system audio", isOn: setting(\.captureSystemAudio)).disabled(store.recordingID != nil)
+                    Toggle("Record microphone", isOn: setting(\.captureMicrophone)).disabled(audioSettingsLocked)
+                    Toggle("Record system audio", isOn: setting(\.captureSystemAudio)).disabled(audioSettingsLocked)
                     Text("macOS requests microphone access and presents a sharing picker when recording starts. Select a display to capture system audio; no screen video is saved.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Microphone Processing") {
@@ -26,16 +27,16 @@ struct SettingsView: View {
                     // its ducking can affect unrelated apps, so this is an explicit choice.
                     // https://developer.apple.com/videos/play/wwdc2023/10235/
                     Toggle("Microphone voice processing", isOn: setting(\.microphoneVoiceProcessing))
-                        .disabled(!store.settings.captureMicrophone || store.recordingID != nil)
+                        .disabled(!store.settings.captureMicrophone || audioSettingsLocked)
                     Text("Apple noise suppression and gain control. May reduce other apps’ volume; echo removal depends on the audio route. Headphones give the most reliable separation.").font(.caption).foregroundStyle(.secondary)
-                    if store.recordingID != nil { Text("Audio source and processing changes are available after recording stops.").font(.caption).foregroundStyle(.secondary) }
+                    if audioSettingsLocked { Text("Audio source and processing changes are available after recording stops.").font(.caption).foregroundStyle(.secondary) }
                 }
                 Section("Recording Format") {
                     Picker("Save audio as", selection: setting(\.recordingFormat)) {
                         Text("Opus (Recommended)").tag(RecordingFormat.opus)
                         Text("M4A (AAC)").tag(RecordingFormat.m4a)
                         Text("WAV").tag(RecordingFormat.wav)
-                    }.disabled(store.recordingID != nil)
+                    }.disabled(audioSettingsLocked)
                     Text("Audio is captured as temporary uncompressed PCM, then saved in this format after recording stops. If conversion fails, the original PCM recording is kept.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("After Recording") { Toggle("Automatically transcribe recordings", isOn: setting(\.autoTranscribe)) }

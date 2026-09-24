@@ -1,5 +1,6 @@
 import AVFoundation
 import ScreenCaptureKit
+import Accelerate
 
 /// HIG Privacy: request protected resources only when recording is requested.
 /// https://developer.apple.com/design/human-interface-guidelines/privacy
@@ -23,6 +24,12 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
     private var healthTimer: DispatchSourceTimer?
     private var expectedMicrophone = false
     private var expectedSystem = false
+    private var levels = RecordingLevels()
+    private var lastMicSample: TimeInterval = 0
+    private var lastSystemSample: TimeInterval = 0
+    private var meterTimer: DispatchSourceTimer?
+    private var meterDeliveryPending = false
+    var onLevels: ((RecordingLevels, @escaping () -> Void) -> Void)?
     var onHealth: ((String) -> Void)?
     var onFailure: ((Error) -> Void)?
 
@@ -33,6 +40,7 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
     func start(directory: URL, microphoneEnabled: Bool, systemEnabled: Bool, voiceProcessingEnabled: Bool = false) async throws -> [String] {
         guard microphoneEnabled || systemEnabled else { throw MeetingError.message("Enable microphone or system audio in Settings before recording.") }
         expectedMicrophone = microphoneEnabled; expectedSystem = systemEnabled
+        levels.microphone.enabled = microphoneEnabled; levels.system.enabled = systemEnabled
         var files: [String] = []
         do {
             let authorization = try await RecordingPermissions.request(microphone: microphoneEnabled, systemAudio: systemEnabled)
@@ -110,7 +118,7 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 // Its samples are copied into Core Audio's bounded asynchronous writer.
                 input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, time in
                     guard time.isHostTimeValid else { self?.report(MeetingError.message("Microphone returned no host-clock timestamp.")); return }
-                    do { try writer.append(buffer, hostSeconds: AVAudioTime.seconds(forHostTime: time.hostTime)) }
+                    do { try writer.append(buffer, hostSeconds: AVAudioTime.seconds(forHostTime: time.hostTime)); self?.measure(buffer, microphone: true) }
                     catch { self?.report(error) }
                 }
                 microphoneTapInstalled = true
@@ -165,12 +173,29 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 self.onHealth?(statuses.joined(separator: " · "))
             }
             healthTimer = timer; timer.resume()
+            let meterTimer = DispatchSource.makeTimerSource(queue: queue)
+            meterTimer.schedule(deadline: .now(), repeating: .milliseconds(100), leeway: .milliseconds(20))
+            meterTimer.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.stateLock.lock()
+                let pending = self.meterDeliveryPending
+                if !pending { self.meterDeliveryPending = true }
+                self.stateLock.unlock()
+                guard !pending else { return }
+                let finish = { [weak self] in
+                    guard let self else { return }; self.stateLock.lock(); self.meterDeliveryPending = false; self.stateLock.unlock()
+                }
+                if let publish = self.onLevels { publish(self.levelSnapshot(), finish) }
+                else { finish() }
+            }
+            self.meterTimer = meterTimer; meterTimer.resume()
             let startupFailure = currentFailure()
             if let startupFailure { throw startupFailure }
             return files
         } catch { try? await stop(); throw error }
     }
     func stop() async throws {
+        meterTimer?.cancel(); meterTimer = nil
         healthTimer?.cancel(); healthTimer = nil
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver); self.configurationObserver = nil }
         if microphoneTapInstalled { engine?.inputNode.removeTap(onBus: 0); microphoneTapInstalled = false }
@@ -192,6 +217,21 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         if (expectedMicrophone && (microphoneWriter?.capturedFrames ?? 0) == 0) || (expectedSystem && systemFrames == 0) {
             throw MeetingError.message("A selected audio source delivered no samples. Available tracks were saved. Check microphone and system-audio permissions and the selected devices; system silence can also produce no samples.")
         }
+    }
+    private func measure(_ buffer: AVAudioPCMBuffer, microphone: Bool) {
+        let measured = RecordingSourceLevel.measure(buffer)
+        let now = ProcessInfo.processInfo.systemUptime
+        stateLock.lock(); defer { stateLock.unlock() }
+        if microphone { levels.microphone = measured; lastMicSample = now }
+        else { levels.system = measured; lastSystemSample = now }
+    }
+    private func levelSnapshot() -> RecordingLevels {
+        let now = ProcessInfo.processInfo.systemUptime
+        stateLock.lock(); defer { stateLock.unlock() }
+        var snapshot = levels
+        if now - lastMicSample > 1 { snapshot.microphone.stale = true }
+        if now - lastSystemSample > 1 { snapshot.system.stale = true }
+        return snapshot
     }
     private func currentFailure() -> Error? {
         stateLock.lock(); defer { stateLock.unlock() }; return failure
@@ -216,7 +256,50 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: list.unsafePointer) else { throw MeetingError.message("Could not read system audio samples.") }
                 if systemWriter == nil, let systemURL { systemWriter = try TimedAudioWriter(url: systemURL, format: format, epoch: epoch) }
                 try systemWriter?.append(buffer, hostSeconds: timestamp)
+                measure(buffer, microphone: false)
             }
         } catch { report(error) }
+    }
+}
+
+
+struct RecordingLevels: Equatable {
+    var microphone = RecordingSourceLevel()
+    var system = RecordingSourceLevel()
+}
+struct RecordingSourceLevel: Equatable {
+    var enabled = false
+    var hasSamples = false
+    var stale = false
+    var rmsDB: Double = -120
+    var peakDB: Double = -120
+    var level: Double { enabled && hasSamples && !stale ? min(1, max(0, (rmsDB + 60) / 60)) : 0 }
+    var statusText: String {
+        if !enabled { return "Not recording" }
+        if !hasSamples { return "Waiting for audio" }
+        if stale { return "No recent audio" }
+        return rmsDB < -60 ? "Quiet" : "Receiving audio"
+    }
+    static func measure(_ buffer: AVAudioPCMBuffer) -> Self {
+        // Scalar snapshots only: no sample history, audio copies, or UI work here.
+        guard buffer.format.commonFormat == .pcmFormatFloat32, buffer.frameLength > 0 else {
+            return Self(enabled: true)
+        }
+        var sumSquares: Float = 0
+        var maximum: Float = 0
+        var sampleCount = 0
+        let frameCount = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        for audio in UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList) {
+            guard let data = audio.mData else { continue }
+            let count = min(Int(audio.mDataByteSize) / MemoryLayout<Float>.size, frameCount * (buffer.format.isInterleaved ? channels : 1))
+            guard count > 0 else { continue }
+            var energy: Float = 0; var peak: Float = 0
+            vDSP_svesq(data.assumingMemoryBound(to: Float.self), 1, &energy, vDSP_Length(count))
+            vDSP_maxmgv(data.assumingMemoryBound(to: Float.self), 1, &peak, vDSP_Length(count))
+            sumSquares += energy; maximum = max(maximum, peak); sampleCount += count
+        }
+        guard sampleCount > 0, sumSquares.isFinite, maximum.isFinite else { return Self(enabled: true) }
+        return Self(enabled: true, hasSamples: true, rmsDB: 20 * log10(max(1e-6, sqrt(Double(sumSquares) / Double(sampleCount)))), peakDB: 20 * log10(max(1e-6, Double(maximum))))
     }
 }
