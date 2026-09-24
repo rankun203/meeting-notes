@@ -16,17 +16,56 @@ struct RecordingSetupView: View {
     @ViewState private var startupError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 42)).foregroundStyle(.tint)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("New Recording").font(.title2.weight(.semibold))
-                    Text("Choose the audio you want to include.")
-                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            header.padding(.horizontal, 26).padding(.top, 26).padding(.bottom, 20)
+            // HIG Scroll views: make content beyond the available area reachable.
+            // Keep the sheet's title and completion actions outside the scrolling
+            // region so expanding options or showing an error can't hide them.
+            // https://developer.apple.com/design/human-interface-guidelines/scroll-views
+            ScrollViewReader { scroll in
+                ScrollView {
+                    form.padding(.horizontal, 26).padding(.bottom, 22)
+                }
+                .scrollIndicators(.visible)
+                .onChange(of: startupError) { _, error in
+                    if error != nil {
+                        // Reveal a new failure even when it appears below the fold.
+                        scroll.scrollTo("recording-startup-error", anchor: .bottom)
+                    }
                 }
             }
+            .frame(maxHeight: .infinity)
+            Divider()
+            actions.padding(.horizontal, 26).padding(.vertical, 16)
+        }
+        // A bounded ideal height keeps the sheet stable when options expand.
+        // The scroll region yields space when the presenting window is shorter.
+        .frame(width: 510)
+        .frame(minHeight: 400, idealHeight: 540, maxHeight: 620)
+        .interactiveDismissDisabled(store.isStartingRecording)
+        .onAppear {
+            microphone = store.settings.captureMicrophone
+            systemAudio = store.settings.captureSystemAudio
+            voiceProcessing = store.settings.microphoneVoiceProcessing
+            format = store.settings.recordingFormat
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 42)).foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("New Recording").font(.title2.weight(.semibold))
+                Text("Choose the audio you want to include.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 7) {
                 Text("Meeting title").font(.subheadline.weight(.medium))
                 TextField("Untitled Meeting", text: $title)
@@ -55,12 +94,6 @@ struct RecordingSetupView: View {
                 }.padding(.top, 12)
             }
             .disabled(store.isStartingRecording)
-            if store.isStartingRecording {
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing your recording…").foregroundStyle(.secondary)
-                }
-            }
             if let startupError {
                 // HIG Feedback: keep recoverable failure beside the action it affects,
                 // rather than attempting to present an alert behind this modal sheet.
@@ -72,11 +105,22 @@ struct RecordingSetupView: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .id("recording-startup-error")
             }
-            Divider()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var actions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Audio sources are saved as separate tracks.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Text("Audio sources are saved as separate tracks.")
-                    .font(.caption).foregroundStyle(.secondary)
+                if store.isStartingRecording {
+                    ProgressView().controlSize(.small)
+                    Text("Preparing…").font(.callout).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                     .disabled(store.isStartingRecording)
@@ -111,14 +155,6 @@ struct RecordingSetupView: View {
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 .disabled((!microphone && !systemAudio) || store.isBusy || store.isStartingRecording)
             }
-        }
-        .padding(26).frame(width: 510)
-        .interactiveDismissDisabled(store.isStartingRecording)
-        .onAppear {
-            microphone = store.settings.captureMicrophone
-            systemAudio = store.settings.captureSystemAudio
-            voiceProcessing = store.settings.microphoneVoiceProcessing
-            format = store.settings.recordingFormat
         }
     }
     private func sourceToggle(_ name: String, subtitle: String, symbol: String, value: Binding<Bool>) -> some View {
