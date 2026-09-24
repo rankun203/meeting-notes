@@ -19,5 +19,9 @@ run_step "Verify installer copy" "Run make install again to recreate the install
 echo "Drag Gday Meetings.app onto Applications in the Finder window."
 echo "Then open Gday Meetings from Applications to start the client and its browser UI."
 echo "Installer folder: $installer_dir"
-run_step "Open installer in Finder" "A logged-in macOS desktop session is required. Your built app remains available at $staged_app; open the installer folder manually." \
-    /usr/bin/open "$installer_dir"
+echo "Opening an icon-view installer window (macOS may ask to allow Finder automation)."
+if ! /usr/bin/osascript "$client_dir/scripts/open-installer.applescript" "$installer_dir"; then
+    echo "Could not set Finder's icon view. Opening the folder normally; press Command-1 in that window to show icons." >&2
+    run_step "Open installer in Finder" "A logged-in macOS desktop session is required. Your built app remains available at $staged_app; open the installer folder manually." \
+        /usr/bin/open "$installer_dir"
+fi
