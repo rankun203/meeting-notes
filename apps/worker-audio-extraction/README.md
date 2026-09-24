@@ -121,13 +121,13 @@ and an explicit language after starting the CPU image; inspect completed word ti
   "input": {
     "tracks": [
       {
-        "audio_url": "https://example.com/session/mic.opus",
+        "audio_url": "https://gdaymeetings.com/files/mic.opus?token=SIGNED_AUDIO_CAPABILITY",
         "track_name": "system_microphone",
         "source_type": "mic",
         "channels": 1
       },
       {
-        "audio_url": "https://example.com/session/system.opus",
+        "audio_url": "https://gdaymeetings.com/files/system.opus?token=SIGNED_AUDIO_CAPABILITY",
         "track_name": "system_mix",
         "source_type": "system_mix",
         "channels": 2

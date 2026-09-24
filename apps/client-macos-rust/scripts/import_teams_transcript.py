@@ -16,7 +16,7 @@ Usage:
         --name "Engineering Solution Discussion" \\
         --started-at 2026-07-28T07:11:51Z \\
         [--duration-secs 6075] [--tags work,cms] [--language zh] \\
-        [--data-dir ~/.local/share/org.rankun.meeting-notes] [--dry-run]
+        [--data-dir ~/.local/share/com.gdaymeetings.macos.rust] [--dry-run]
 
 TRANSCRIPT.json is the Stream transcript document — the one with
 `{"$schema": ".../transcript.json", "entries": [...]}`. Get it from the
@@ -30,7 +30,17 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_DATA_DIR = Path.home() / ".local/share/org.rankun.meeting-notes"
+DEFAULT_DATA_DIR = Path.home() / ".local/share/com.gdaymeetings.macos.rust"
+# Historical location: use it until the Rust app performs its exclusive migration.
+LEGACY_DATA_DIR = Path.home() / ".local/share/org.rankun.meeting-notes"
+
+
+def default_data_dir() -> Path:
+    if DEFAULT_DATA_DIR.exists() or DEFAULT_DATA_DIR.is_symlink():
+        return DEFAULT_DATA_DIR
+    if LEGACY_DATA_DIR.is_dir():
+        return LEGACY_DATA_DIR
+    return DEFAULT_DATA_DIR
 
 # Teams "(SP)" and similar vendor/affiliation suffixes are not part of the name.
 SUFFIX_RE = re.compile(r"\s*\((?:SP|EXT|Contractor|Guest)\)\s*$", re.IGNORECASE)
@@ -222,7 +232,7 @@ def main() -> int:
     ap.add_argument("--notes", help="Session notes")
     ap.add_argument("--map", action="append", default=[], metavar="TEAMS_NAME=PERSON_ID",
                     help="Force a speaker mapping; repeatable")
-    ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    ap.add_argument("--data-dir", type=Path, default=default_data_dir())
     ap.add_argument("--dry-run", action="store_true",
                     help="Report the speaker mapping without writing anything")
     args = ap.parse_args()

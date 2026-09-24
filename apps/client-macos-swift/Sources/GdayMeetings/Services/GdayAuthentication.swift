@@ -161,7 +161,7 @@ private struct OAuthSession: Codable {
 
 private final class LoopbackCallback: @unchecked Sendable {
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "app.gday.oauth-callback")
+    private let queue = DispatchQueue(label: "com.gdaymeetings.macos.oauth-callback")
     private var completion: CheckedContinuation<[String: String], Error>?
     private var expectedState = ""
     private var didStart = false

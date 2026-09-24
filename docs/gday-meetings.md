@@ -4,7 +4,7 @@ The CMS now lives in [apps/server](../apps/server) as Gday Meetings Server. It d
 
 ## Deploy and connect
 
-1. Deploy apps/server using the deployment guide. Use localhost for fully local execution or a reachable HTTPS origin for cloud deployment.
+1. Deploy apps/server using the deployment guide. Use localhost for fully local execution, `https://gdaymeetings.com` for the owned production domain after DNS/TLS deployment, or your own reachable HTTPS origin for self-hosting.
 2. Build/deploy the updated `apps/worker-audio-extraction` worker. Older workers ignore the
    result sink and cannot guarantee durable outputs.
 3. Configure the local worker or RunPod endpoint **on the server**. In this daemon's

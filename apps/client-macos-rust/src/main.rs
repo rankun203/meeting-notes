@@ -54,14 +54,10 @@ extern "C" fn crash_handler(sig: libc::c_int) {
     }
 }
 
-// Stable on-disk identity: rebranding must not hide existing recordings/settings.
-const APP_NAME: &str = "org.rankun.meeting-notes";
-
 fn default_data_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".local/share")
-        .join(APP_NAME)
+    let home = dirs::home_dir().expect("could not determine home directory");
+    gday_meetings_client::data_dir::default_data_dir(&home)
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[derive(Parser)]

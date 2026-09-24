@@ -27,8 +27,9 @@ final class MeetingStore: ObservableObject {
     init(dataDirectory: URL? = nil) {
         let dataDirectory = dataDirectory ?? ProcessInfo.processInfo.environment["GDAY_SWIFT_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
         usesKeychain = dataDirectory == nil
-        self.dataDirectory = dataDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Gday Meetings Swift", isDirectory: true)
+        self.dataDirectory = dataDirectory ?? LibraryLocation.directory()
         do {
+            if dataDirectory == nil { try LibraryLocation.migrateLegacyLibrary() }
             try FileManager.default.createDirectory(at: self.dataDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let libraryURL = self.dataDirectory.appendingPathComponent("library.json")
             if FileManager.default.fileExists(atPath: libraryURL.path) {

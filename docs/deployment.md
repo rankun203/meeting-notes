@@ -26,11 +26,14 @@ Prepare the environment in `apps/server/`:
 cd apps/server
 cp .env.example .env
 # Set a stable PAYLOAD_SECRET and the public SERVER_URL.
+# Production: SERVER_URL=https://gdaymeetings.com (configure DNS and TLS first).
 # Generate a new secret for a fresh database: openssl rand -hex 32
 docker compose up --build -d
 ```
 
 From the repository root, `make server-start`, `make server-stop` and `make server-logs` delegate to this directory. They operate only on the server's Compose project. The default port binding is `127.0.0.1:3000`; set SERVER_PORT and SERVER_BIND_ADDRESS to configure the deployment, and make SERVER_URL match the browser-facing origin. Use HTTPS for a non-loopback client connection.
+
+The owned production origin is `https://gdaymeetings.com`; the MCP endpoint is `https://gdaymeetings.com/mcp`. These settings do not create DNS records, certificates, hosting or accounts. Keep localhost for local development and use your own origin for self-hosted deployments. Changing an existing deployment origin changes its OAuth issuer/audience: reconnect clients and coordinate outstanding tasks and previously issued audio URLs before retiring the old origin.
 
 SQLite is the default. The named volume `gday-meetings-data` retains the database and managed audio under `/app/data`. Set SERVER_DATA_VOLUME if your existing installation uses another volume. Preserve its PAYLOAD_SECRET and stop the old server before reusing its volume. If upgrading from the previous component Compose default, point SERVER_DATA_VOLUME at its existing project-prefixed `gday-data` volume instead of creating an empty library. No data is copied automatically.
 
@@ -67,11 +70,11 @@ On the **server**, select the self-hosted HTTP worker transport:
 
 ```dotenv
 TRANSCRIPTION_PROVIDER=local
-LOCAL_WORKER_URL=https://worker.example.com
+LOCAL_WORKER_URL=https://worker.gdaymeetings.com
 LOCAL_WORKER_API_TOKEN=the-workers-WORKER_API_TOKEN
 ```
 
-Here `local` names the standalone HTTP transport, even when the worker is on another host. The server must reach LOCAL_WORKER_URL. The worker must reach the server's signed audio URLs and result callback at SERVER_URL. If that public origin is inaccessible to the worker, set SERVER_INTERNAL_URL to an explicit server origin that it can reach. There are no implicit `server` or `worker-audio-extraction` DNS names across the two Compose projects. A container's localhost refers to itself.
+The worker subdomain is an example under the owned domain; provision its DNS and TLS or substitute the actual worker origin. Here `local` names the standalone HTTP transport, even when the worker is on another host. The server must reach LOCAL_WORKER_URL. The worker must reach the server's signed audio URLs and result callback at SERVER_URL. If that public origin is inaccessible to the worker, set SERVER_INTERNAL_URL to an explicit server origin that it can reach. There are no implicit `server` or `worker-audio-extraction` DNS names across the two Compose projects. A container's localhost refers to itself.
 
 The machine token never substitutes for user OAuth. The server gives the worker only task-scoped input and callback capabilities. Drain outstanding jobs before changing providers or endpoints: current tasks store provider job IDs without a per-job provider configuration snapshot.
 

@@ -78,7 +78,7 @@ Makefile                  Common commands delegating to independent components
 
 The Rust client binary is `gday-meetings-client` and its macOS bundle is `Gday Meetings.app`. Its existing local data paths and macOS app identity are preserved. The SwiftUI client is independently packaged as `Gday Meetings Swift.app`. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
 
-The GitHub repository URL still uses `meeting-notes`. The Rust client's internal bundle identifier and data directory remain `org.rankun.meeting-notes` so existing recordings and permissions stay associated with it. Stop and remove the old Meeting Notes bundle when replacing it with the Rust Gday Meetings app; those two versions use the same library. The Swift client uses a separate identity and library. Historical worklogs and release notes retain their original names.
+The GitHub repository URL still uses `meeting-notes`. Our domain is `gdaymeetings.com`. The native SwiftUI app uses `com.gdaymeetings.macos` and stores meetings in `~/.local/share/com.gdaymeetings.macos/`. The Rust client uses `com.gdaymeetings.macos.rust` with a separate library because the formats differ. Both clients preserve their old libraries during migration; recording permissions may need to be granted again after the identity change. Historical worklogs and release notes retain their original names.
 
 ## Deployment and development
 

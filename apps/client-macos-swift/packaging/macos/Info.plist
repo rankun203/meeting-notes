@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key><string>org.rankun.gday-meetings.swift</string>
+    <key>CFBundleIdentifier</key><string>com.gdaymeetings.macos</string>
     <key>CFBundleName</key><string>Gday Meetings Swift</string>
     <key>CFBundleDisplayName</key><string>Gday Meetings</string>
     <key>CFBundleExecutable</key><string>GdayMeetings</string>

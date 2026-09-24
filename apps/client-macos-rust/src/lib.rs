@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod chat;
+pub mod data_dir;
 pub mod filesdb;
 pub mod llm;
 pub mod logging;

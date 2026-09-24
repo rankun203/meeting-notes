@@ -27,7 +27,7 @@ docker compose up --build -d
 
 This component Compose file builds the server from this directory. For a fully local server and CPU/GPU worker, use [the repository-root deployment guide](../../docs/deployment.md). Earlier published `ghcr.io/rankun203/gday-meetings` images predate the monorepo local-worker integration.
 
-The default binds to localhost:3000. Set `SERVER_PORT` and `SERVER_BIND_ADDRESS` for a different Docker host binding. Put an HTTPS reverse proxy in front, set `SERVER_URL` to the public origin reachable by workers, and configure the proxy for long audio uploads/downloads and the appropriate maximum body size. Named volume `gday-meetings-data` stores SQLite and audio; use `SERVER_DATA_VOLUME` to select an existing differently named volume, including the old project-prefixed `gday-data` Compose volume. Back it up together and preserve `PAYLOAD_SECRET`: changing the secret invalidates all existing audio and callback capability URLs. Use a single app replica with SQLite and local audio storage.
+The default binds to localhost:3000. Set `SERVER_PORT` and `SERVER_BIND_ADDRESS` for a different Docker host binding. Put an HTTPS reverse proxy in front, set `SERVER_URL=https://gdaymeetings.com` for the owned production domain (or your own public origin) reachable by workers, and configure the proxy for long audio uploads/downloads and the appropriate maximum body size. Named volume `gday-meetings-data` stores SQLite and audio; use `SERVER_DATA_VOLUME` to select an existing differently named volume, including the old project-prefixed `gday-data` Compose volume. Back it up together and preserve `PAYLOAD_SECRET`: changing the secret invalidates all existing audio and callback capability URLs. Use a single app replica with SQLite and local audio storage.
 
 Postgres deployment:
 
@@ -52,7 +52,7 @@ See [API reference](docs/api.md). Configure the gday-meetings client with this p
 
 ## MCP
 
-The hosted **Streamable HTTP** endpoint is `https://meetings.example.com/mcp`. It runs inside the app/container. Connect with an OAuth-capable MCP client using this URL; no local process, shared MCP secret, or custom Authorization header is needed.
+The production **Streamable HTTP** endpoint is `https://gdaymeetings.com/mcp`. It runs inside the app/container after that domain is deployed; self-hosted installations use their own origin. Connect with an OAuth-capable MCP client using this URL; no local process, shared MCP secret, or custom Authorization header is needed.
 
 The client discovers authorization, registers, opens your Gday Meetings Server login, and asks you to allow meeting search. Only tokens issued after an authenticated workspace user grants consent can call MCP. The single `mcp:read` permission allows searching and reading workspace meetings; members share the workspace, while user management is restricted to administrators.
 

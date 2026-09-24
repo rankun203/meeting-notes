@@ -7,34 +7,74 @@ struct ServiceError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+// Keep migration policy independent of Security so failure paths can be tested
+// without reading or changing the user's real credentials.
+protocol CredentialStorage {
+    func read(account: String, service: String) throws -> String?
+    func write(_ value: String, account: String, service: String) throws
+    func remove(account: String, service: String) throws
+}
+
+struct CredentialIdentityMigration {
+    static let service = "com.gdaymeetings.macos"
+    static let legacyService = "app.gday.meetings.swift"
+    let storage: any CredentialStorage
+
+    func get(_ account: String) throws -> String? {
+        if let current = try storage.read(account: account, service: Self.service) { return current }
+        guard let legacy = try storage.read(account: account, service: Self.legacyService) else { return nil }
+        // Persist the replacement before removing the only surviving credential.
+        try set(legacy, for: account)
+        return legacy
+    }
+    func set(_ value: String, for account: String) throws {
+        try storage.write(value, account: account, service: Self.service)
+        try storage.remove(account: account, service: Self.legacyService)
+    }
+    func delete(_ account: String) throws {
+        // Remove fallback FIRST. If this fails, retain the canonical credential and
+        // report failure; never claim sign-out while leaving a resurrectable token.
+        try storage.remove(account: account, service: Self.legacyService)
+        try storage.remove(account: account, service: Self.service)
+    }
+}
+
 enum KeychainStore {
-    static let service = "app.gday.meetings.swift"
-    static func get(_ account: String) throws -> String? {
-        var query = base(account)
+    static let service = CredentialIdentityMigration.service
+    private static let migration = CredentialIdentityMigration(storage: SecurityCredentialStorage())
+    static func get(_ account: String) throws -> String? { try migration.get(account) }
+    static func set(_ value: String, for account: String) throws { try migration.set(value, for: account) }
+    static func delete(_ account: String) throws { try migration.delete(account) }
+}
+
+private struct SecurityCredentialStorage: CredentialStorage {
+    func read(account: String, service: String) throws -> String? {
+        var query = base(account, service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw ServiceError("Unable to read credentials from Keychain (\(status)).") }
-        return String(data: data, encoding: .utf8)
+        guard status == errSecSuccess, let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else { throw ServiceError("Unable to read credentials from Keychain (\(status)).") }
+        return value
     }
-    static func set(_ value: String, for account: String) throws {
+    func write(_ value: String, account: String, service: String) throws {
         let attributes = [kSecValueData as String: Data(value.utf8)]
-        let status = SecItemUpdate(base(account) as CFDictionary, attributes as CFDictionary)
+        let status = SecItemUpdate(base(account, service: service) as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
-            var query = base(account)
+            var query = base(account, service: service)
             query.merge(attributes) { _, new in new }
             query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let added = SecItemAdd(query as CFDictionary, nil)
             guard added == errSecSuccess else { throw ServiceError("Unable to save credentials to Keychain (\(added)).") }
         } else if status != errSecSuccess { throw ServiceError("Unable to update Keychain (\(status)).") }
     }
-    static func delete(_ account: String) throws {
-        let status = SecItemDelete(base(account) as CFDictionary)
+    func remove(account: String, service: String) throws {
+        let status = SecItemDelete(base(account, service: service) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw ServiceError("Unable to remove Keychain credentials (\(status)).") }
     }
-    private static func base(_ account: String) -> [String: Any] {
+    private func base(_ account: String, service: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
 }

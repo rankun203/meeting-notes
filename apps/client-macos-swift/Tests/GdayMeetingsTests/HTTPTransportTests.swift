@@ -18,7 +18,7 @@ private final class HTTPFixture: @unchecked Sendable {
         var body = "{}"
     }
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "app.gday.tests.http")
+    private let queue = DispatchQueue(label: "com.gdaymeetings.macos.tests.http")
     private let respond: @Sendable (Request) -> Response
     private var received: [Request] = []
     private var started = false

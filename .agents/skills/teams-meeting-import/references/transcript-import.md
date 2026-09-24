@@ -62,7 +62,7 @@ Show the user the proposed speaker mapping before the real import.
 
 Teams commonly writes `Surname, Given`, while the People library uses short display names. The importer matches when a person's whole name is contained in the Teams name. This deliberately conservative behavior avoids mapping people who merely share a surname.
 
-Nicknames and initials may not match. Look them up rather than guessing: read `~/.local/share/org.rankun.meeting-notes/people/*/profile.json` and search both `name` and `notes`, because notes often record the full name behind a handle. Force a confirmed mapping with:
+Nicknames and initials may not match. Look them up rather than guessing: read `~/.local/share/com.gdaymeetings.macos.rust/people/*/profile.json` and search both `name` and `notes`, because notes often record the full name behind a handle. Force a confirmed mapping with:
 
 ```bash
 --map "Surname, Given=p_xxxxxxxxxxxx"

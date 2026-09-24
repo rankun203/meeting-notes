@@ -32,7 +32,7 @@ export function GdaySettings() {
       jsx('button', { type: 'button', disabled: busy, onClick: logout, className: 'text-sm text-blue-600 disabled:opacity-50', children: busy ? 'Signing out…' : 'Sign out' }),
     ] }) : jsxs('div', { className: 'space-y-2', children: [
       jsx('label', { className: LABEL_CLS, htmlFor: 'gday-url', children: 'Gday Meetings Server URL' }),
-      jsx('input', { id: 'gday-url', className: INPUT_CLS, type: 'url', value: url, placeholder: 'https://meetings.example.com', onChange: event => setUrl(event.target.value) }),
+      jsx('input', { id: 'gday-url', className: INPUT_CLS, type: 'url', value: url, placeholder: 'https://gdaymeetings.com', onChange: event => setUrl(event.target.value) }),
       jsx('button', { type: 'button', disabled: busy || !url.trim(), onClick: login, className: 'rounded-lg bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50', children: busy ? 'Opening sign-in…' : 'Login to Gday Meetings Server' }),
     ] }),
     error && jsx('p', { role: 'alert', className: 'text-sm text-red-600', children: error }),
