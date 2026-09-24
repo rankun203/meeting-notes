@@ -49,7 +49,7 @@ struct LibraryView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(meeting.title).font(.headline).lineLimit(1)
-                                if store.recordingID == meeting.id { Label("Recording", systemImage: "record.circle").foregroundStyle(.red).labelStyle(.iconOnly) }
+                                if store.recordingID == meeting.id { Label(store.isFinalizingRecording ? "Saving audio" : "Recording", systemImage: store.isFinalizingRecording ? "externaldrive" : "record.circle").foregroundStyle(store.isFinalizingRecording ? Color.secondary : Color.red).labelStyle(.iconOnly) }
                             }
                             Text(meeting.createdAt, format: .dateTime.month().day().hour().minute()).font(.caption).foregroundStyle(.secondary)
                             if !meeting.summary.isEmpty { Text(meeting.summary).lineLimit(2).font(.caption).foregroundStyle(.secondary) }
@@ -98,6 +98,7 @@ struct LibraryView: View {
                     }
                 } label: { Label(store.recordingID == nil ? "Record" : "Stop Recording", systemImage: store.recordingID == nil ? "record.circle" : "stop.circle.fill") }
                     .tint(store.recordingID == nil ? nil : .red).help(store.recordingID == nil ? "Start recording" : "Stop and save recording")
+                    .disabled(store.isFinalizingRecording)
             }
         }
         // HIG Feedback: show ongoing capture status passively, close to the content.
@@ -116,7 +117,7 @@ struct LibraryView: View {
             if store.isBusy || !store.statusMessage.isEmpty || store.recordingID != nil {
                 HStack(spacing: 8) {
                     if store.isBusy { ProgressView().controlSize(.small) }
-                    if store.recordingID != nil { Label("Recording", systemImage: "record.circle.fill").foregroundStyle(.red) }
+                    if store.recordingID != nil && !store.isFinalizingRecording { Label("Recording", systemImage: "record.circle.fill").foregroundStyle(.red) }
                     Text(store.statusMessage).font(.caption).lineLimit(2)
                     Spacer()
                 }.padding(8).background(.bar)
@@ -135,7 +136,7 @@ struct LibraryView: View {
 enum MeetingPanels {
     static func importAudio(_ store: MeetingStore) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.audio, .movie]
+        panel.allowedContentTypes = [.audio, .movie] + ["opus", "ogg"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.prompt = "Import"

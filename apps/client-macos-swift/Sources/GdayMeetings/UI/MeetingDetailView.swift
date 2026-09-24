@@ -12,6 +12,7 @@ struct MeetingDetailView: View {
     @ViewState private var selectedTrack = -1
     @ViewState private var playbackGeneration = UUID()
     @ViewState private var loadingPlayback = false
+    @ViewState private var playbackTemporaryURLs: [URL] = []
     @ViewState private var speakerFrom = ""
     @ViewState private var speakerTo = ""
 
@@ -28,7 +29,9 @@ struct MeetingDetailView: View {
                 TextField("Meeting title", text: text(\.title)).font(.title).textFieldStyle(.plain).accessibilityLabel("Meeting title")
                 HStack {
                     Text(meeting.createdAt, format: .dateTime).foregroundStyle(.secondary)
-                    if store.recordingID == meetingID {
+                    if store.recordingID == meetingID && store.isFinalizingRecording {
+                        Label("Saving audio…", systemImage: "externaldrive").foregroundStyle(.secondary)
+                    } else if store.recordingID == meetingID {
                         TimelineView(.periodic(from: .now, by: 1)) { timeline in
                             let elapsed = store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0
                             Label(formatTime(elapsed), systemImage: "record.circle.fill").foregroundStyle(.red).monospacedDigit().accessibilityLabel("Recording duration \(formatTime(elapsed))")
@@ -89,7 +92,7 @@ struct MeetingDetailView: View {
                 } label: { Label("Export and Archive", systemImage: "square.and.arrow.up") }.help("Export meeting text or archive audio and meeting data to the server")
             }
             .task(id: PlaybackSelection(meetingID: meetingID, audioFiles: meeting.audioFiles, track: selectedTrack, recording: store.recordingID == meetingID)) { await loadPlayer() }
-            .onDisappear { playbackGeneration = UUID(); player?.pause(); player = nil }
+            .onDisappear { playbackGeneration = UUID(); releasePlayback() }
         }
     }
     private func associationSummary(_ meeting: Meeting) -> String {
@@ -102,25 +105,38 @@ struct MeetingDetailView: View {
         let generation = UUID()
         playbackGeneration = generation
         let previousTime = player?.currentTime() ?? .zero
-        player?.pause(); player = nil
+        releasePlayback()
         loadingPlayback = false
         guard let meeting, store.recordingID != meetingID else { return }
         let files = store.audioURLs(for: meeting)
         guard !files.isEmpty else { return }
         loadingPlayback = true
         defer { if playbackGeneration == generation { loadingPlayback = false } }
+        var preparedTemporaryURLs: [URL] = []
+        var transferredOwnership = false
+        defer {
+            if !transferredOwnership {
+                for url in preparedTemporaryURLs { try? FileManager.default.removeItem(at: url) }
+            }
+        }
         do {
             let item: AVPlayerItem
             if selectedTrack >= 0 || files.count == 1 {
                 let index = min(max(0, selectedTrack), files.count - 1)
-                item = AVPlayerItem(url: files[index])
+                let prepared = try await AudioPlaybackPreparation.prepare(files[index])
+                if prepared.temporary { preparedTemporaryURLs.append(prepared.url) }
+                try Task.checkCancellation()
+                item = AVPlayerItem(url: prepared.url)
             } else {
                 // Simultaneous capture tracks share a zero origin. Native AVFoundation
                 // composition mixes them so listening includes every participant.
                 let composition = AVMutableComposition()
                 for file in files {
                     try Task.checkCancellation()
-                    let asset = AVURLAsset(url: file)
+                    let prepared = try await AudioPlaybackPreparation.prepare(file)
+                    if prepared.temporary { preparedTemporaryURLs.append(prepared.url) }
+                    try Task.checkCancellation()
+                    let asset = AVURLAsset(url: prepared.url)
                     let tracks = try await asset.loadTracks(withMediaType: .audio)
                     let duration = try await asset.load(.duration)
                     guard duration.isNumeric, CMTimeCompare(duration, .zero) > 0 else { continue }
@@ -140,13 +156,23 @@ struct MeetingDetailView: View {
             if previousTime.isNumeric { await newPlayer.seek(to: previousTime) }
             try Task.checkCancellation()
             guard playbackGeneration == generation, store.recordingID != meetingID else { return }
+            playbackTemporaryURLs = preparedTemporaryURLs
             player = newPlayer
+            transferredOwnership = true
         } catch is CancellationError {
             // Switching tracks or meetings cancels preparation without an alert.
         } catch {
             guard !Task.isCancelled, playbackGeneration == generation else { return }
             store.errorMessage = "Unable to load meeting audio: " + error.localizedDescription
         }
+    }
+    @MainActor
+    private func releasePlayback() {
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+        for url in playbackTemporaryURLs { try? FileManager.default.removeItem(at: url) }
+        playbackTemporaryURLs = []
     }
     private func editor(_ label: String, binding: Binding<String>) -> some View {
         // HIG accessibility: standard editable text, semantic fonts and system colors

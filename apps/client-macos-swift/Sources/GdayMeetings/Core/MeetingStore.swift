@@ -15,9 +15,11 @@ final class MeetingStore: ObservableObject {
     @Published var captureHealth = ""
     @Published var statusMessage = ""
     @Published var recordingStartedAt: Date?
+    @Published var isFinalizingRecording = false
     let dataDirectory: URL
     private var recorder: AudioCapture?
     private var captureTransition = false
+    private var activeRecordingFormat: RecordingFormat = .opus
     private var canSave = true
     private var lastSavedLibrary = MeetingLibrary()
     var libraryWritable: Bool { canSave }
@@ -117,6 +119,7 @@ final class MeetingStore: ObservableObject {
     func startRecording() async {
         guard recordingID == nil, !isBusy, canSave else { return }
         isBusy = true; captureTransition = true
+        activeRecordingFormat = settings.recordingFormat
         let meeting = Meeting(title: Date().formatted(date: .abbreviated, time: .shortened))
         do {
             try FileManager.default.createDirectory(at: directory(for: meeting.id), withIntermediateDirectories: true)
@@ -142,17 +145,60 @@ final class MeetingStore: ObservableObject {
         guard let id = recordingID else { return }
         guard !captureTransition else { return }
         captureTransition = true
+        isBusy = true
+        isFinalizingRecording = true
         let duration = recordingDuration
         var stopFailed = false
         do { try await recorder?.stop() } catch { errorMessage = error.localizedDescription; stopFailed = true }
         let profile = recorder?.profile
         recorder = nil
         captureHealth = ""
+        if let index = meetings.firstIndex(where: { $0.id == id }) {
+            meetings[index].duration = duration; meetings[index].recordingProfile = profile
+            if !save() { stopFailed = true }
+        }
+        if !stopFailed && activeRecordingFormat != .wav {
+            statusMessage = "Saving \(activeRecordingFormat.rawValue.uppercased()) audio…"
+            do { try await finalizeRecordingAudio(id: id, format: activeRecordingFormat) }
+            catch { errorMessage = "Audio compression failed; the original WAV recording was retained. \(error.localizedDescription)"; stopFailed = true }
+        }
         recordingID = nil; recordingStartedAt = nil
-        if let index = meetings.firstIndex(where: { $0.id == id }) { meetings[index].duration = duration; meetings[index].recordingProfile = profile; save() }
         statusMessage = stopFailed ? "Recording interrupted; partial audio retained" : "Recording saved"
         captureTransition = false
+        isBusy = false
+        isFinalizingRecording = false
         if !stopFailed && transcribeAfter && settings.autoTranscribe { await transcribe(id: id) }
+    }
+    func finalizeRecordingAudio(id: UUID, format: RecordingFormat) async throws {
+        guard canSave, format != .wav else { return }
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return }
+        let originals = audioURLs(for: meeting)
+        guard !originals.isEmpty, originals.count == meeting.audioFiles.count else { throw MeetingError.message("A recorded audio file is missing.") }
+        var encoded: [URL] = []
+        do {
+            for source in originals {
+                let destination = source.deletingPathExtension().appendingPathExtension(format.rawValue)
+                try await RecordingEncoder.encode(source: source, destination: destination, format: format)
+                encoded.append(destination)
+            }
+            guard let index = meetings.firstIndex(where: { $0.id == id }) else { throw MeetingError.message("The recording no longer exists.") }
+            meetings[index].audioFiles = encoded.map(\.lastPathComponent)
+            if var profile = meetings[index].recordingProfile {
+                for i in profile.tracks.indices {
+                    if let sourceIndex = originals.firstIndex(where: { $0.lastPathComponent == profile.tracks[i].filename }) {
+                        profile.tracks[i].filename = encoded[sourceIndex].lastPathComponent
+                    }
+                }
+                meetings[index].recordingProfile = profile
+            }
+            guard save() else { throw MeetingError.message(errorMessage ?? "Could not save compressed recording metadata.") }
+        } catch {
+            for file in encoded { try? FileManager.default.removeItem(at: file) }
+            throw error
+        }
+        // Remove only this capture's PCM spools, after durable metadata points to
+        // every finalized compressed track. Failed conversion leaves WAV recoverable.
+        for file in originals { try? FileManager.default.removeItem(at: file) }
     }
     func finalizeForQuit() async {
         while captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
@@ -160,7 +206,7 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func importAudio(url: URL) throws -> UUID {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
-        guard ["wav","m4a","mp3","mp4","aiff","aif","caf","flac","aac","mov"].contains(url.pathExtension.lowercased()) else { throw MeetingError.message("Choose an audio or video file: WAV, M4A, MP3, MP4, AIFF, CAF, FLAC, AAC, or MOV.") }
+        guard ["opus","ogg","wav","m4a","mp3","mp4","aiff","aif","caf","flac","aac","mov"].contains(url.pathExtension.lowercased()) else { throw MeetingError.message("Choose an audio or video file: Opus, Ogg, WAV, M4A, MP3, MP4, AIFF, CAF, FLAC, AAC, or MOV.") }
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
         var meeting = Meeting(title: url.deletingPathExtension().lastPathComponent)
         let folder = directory(for: meeting.id)
@@ -169,7 +215,18 @@ final class MeetingStore: ObservableObject {
         try FileManager.default.copyItem(at: url, to: folder.appendingPathComponent(name))
         meeting.audioFiles = [name]
         if let player = try? AVAudioPlayer(contentsOf: folder.appendingPathComponent(name)) { meeting.duration = player.duration }
-        meetings.insert(meeting, at: 0); guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }; return meeting.id
+        meetings.insert(meeting, at: 0); guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported audio.") }
+        if ["opus", "ogg"].contains(url.pathExtension.lowercased()) {
+            let importedID = meeting.id
+            Task { [weak self] in
+                do {
+                    let metadata = try await AudioPlaybackPreparation.opusMetadata(folder.appendingPathComponent(name))
+                    guard let self, let index = self.meetings.firstIndex(where: { $0.id == importedID }) else { return }
+                    self.meetings[index].duration = metadata.duration; self.save()
+                } catch { self?.errorMessage = "The imported audio was retained, but its Opus metadata could not be read. \(error.localizedDescription)" }
+            }
+        }
+        return meeting.id
     }
     func importArchive(url: URL) throws {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }

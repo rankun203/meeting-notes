@@ -16,11 +16,15 @@ Core Audio process taps are another supported system-audio capture option on mac
 
 - Obtain permissions before starting capture; permission-dialog delays must not become track offsets.
 - Use capture timestamps to retain gaps and align sources. Never assume callback arrival times or buffer counts alone establish synchronization.
-- Preserve each source's actual sample rate and channel count. Stereo channels are not two independent speakers; source tracks and diarized identities are different concepts.
+- Preserve each source's channel count and duration; retain capture format metadata. Opus storage uses a 48 kHz timeline with native sample-rate conversion. Stereo channels are not two independent speakers; source tracks and diarized identities are different concepts.
 - Keep microphone monitoring off and exclude this app's playback from system capture.
 - Keep file I/O away from hardware render callbacks. Own any buffer memory that outlives a callback, bound queued work, and surface write/format/route failures.
 - Drain pending writes before closing files. A partial recording with an explicit failure is preferable to silently claiming a complete recording.
-- Retain the original local audio. Perform lossy conversion only for playback/export/service compatibility, without repeatedly transcoding the same intermediate file.
+- Capture into recoverable PCM spools. Finalize each source into the selected Opus (default), M4A/AAC, or WAV format. Remove generated spools only after all encoded tracks and their library metadata are saved successfully. Retain PCM on failure. Never replace saved recordings during later playback/export/service conversion.
+
+## Recording formats
+
+Opus and AAC use Apple's native encoders. Opus packets are written into the standard Ogg container with pre-skip, checksums, channel metadata, and final granule trimming, following [RFC 7845](https://www.rfc-editor.org/rfc/rfc7845) and [Ogg framing](https://www.xiph.org/ogg/doc/framing.html). The tested native file readers do not open Ogg Opus, so playback demuxes and decodes into a temporary seekable CAF file. Server transcription receives the original Opus; compatible direct transcription uses decoded audio to prepare AAC excerpts. Native MP3 encoding is unavailable on the tested Mac; MP3 input remains supported. No external encoder is installed or required. Older supported macOS releases still need codec validation; unavailable conversion fails visibly and retains WAV.
 
 ## Transcription and transcoding
 

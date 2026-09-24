@@ -57,6 +57,10 @@ struct MeetingTag: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey { case id, name, color }
 
 }
+enum RecordingFormat: String, Codable, CaseIterable {
+    case opus, m4a, wav
+}
+
 struct AppSettings: Codable, Equatable {
     var llmBaseURL = "https://api.openai.com/v1"
     var llmModel = "gpt-4o-mini"
@@ -68,8 +72,9 @@ struct AppSettings: Codable, Equatable {
     var captureSystemAudio = true
     var captureMicrophone = true
     var microphoneVoiceProcessing = false
+    var recordingFormat: RecordingFormat = .opus
     var summarizationPrompt = "Summarize this meeting with decisions, key points, and action items. Do not invent information."
-    enum CodingKeys: String, CodingKey { case llmBaseURL, llmModel, transcriptionBaseURL, transcriptionModel, autoTranscribe, captureSystemAudio, captureMicrophone, microphoneVoiceProcessing, summarizationPrompt }
+    enum CodingKeys: String, CodingKey { case llmBaseURL, llmModel, transcriptionBaseURL, transcriptionModel, autoTranscribe, captureSystemAudio, captureMicrophone, microphoneVoiceProcessing, recordingFormat, summarizationPrompt }
 
 }
 struct MeetingLibrary: Codable {
@@ -173,6 +178,7 @@ extension AppSettings {
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         microphoneVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .microphoneVoiceProcessing) ?? false
+        recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
         summarizationPrompt = try values.decodeIfPresent(String.self, forKey: .summarizationPrompt) ?? "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     }
 }

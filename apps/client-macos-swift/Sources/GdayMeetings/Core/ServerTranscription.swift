@@ -72,6 +72,11 @@ extension MeetingStore {
 }
 
 func prepareServerAudio(_ file: URL, compressPCM: Bool = true) async throws -> (url: URL, temporary: Bool, channels: Int) {
+    // Preserve the primary Ogg Opus recording; AVAsset cannot inspect Ogg.
+    if ["opus", "ogg"].contains(file.pathExtension.lowercased()) {
+        let channels = try AudioPlaybackPreparation.opusChannels(file)
+        return (file, false, channels)
+    }
     let allowed = ["wav", "flac", "mp3", "m4a", "ogg", "opus", "mp4", "webm", "aac"]
     var prepared = file
     let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0

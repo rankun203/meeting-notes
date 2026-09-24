@@ -30,6 +30,14 @@ struct SettingsView: View {
                     Text("Apple noise suppression and gain control. May reduce other apps’ volume; echo removal depends on the audio route. Headphones give the most reliable separation.").font(.caption).foregroundStyle(.secondary)
                     if store.recordingID != nil { Text("Audio source and processing changes are available after recording stops.").font(.caption).foregroundStyle(.secondary) }
                 }
+                Section("Recording Format") {
+                    Picker("Save audio as", selection: setting(\.recordingFormat)) {
+                        Text("Opus (Recommended)").tag(RecordingFormat.opus)
+                        Text("M4A (AAC)").tag(RecordingFormat.m4a)
+                        Text("WAV").tag(RecordingFormat.wav)
+                    }.disabled(store.recordingID != nil)
+                    Text("Audio is captured as temporary uncompressed PCM, then saved in this format after recording stops. If conversion fails, the original PCM recording is kept.").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("After Recording") { Toggle("Automatically transcribe recordings", isOn: setting(\.autoTranscribe)) }
             }.tabItem { Label("Recording", systemImage: "mic") }
             Form {
@@ -62,7 +70,7 @@ struct SettingsView: View {
                 }
             }.tabItem { Label("Intelligence", systemImage: "sparkles") }
         }
-        .formStyle(.grouped).padding(16).frame(width: 590, height: 510)
+        .formStyle(.grouped).padding(16).frame(width: 590, height: 600)
         .alert("Connection Failed", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") { error = nil } } message: { Text(error ?? "") }
     }
 }

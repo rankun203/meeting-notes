@@ -15,7 +15,9 @@ extension MeetingStore {
             guard !files.isEmpty else { throw MeetingError.message("This meeting has no audio to transcribe.") }
             var segments: [TranscriptSegment] = []
             for file in files {
-                let asset = AVURLAsset(url: file)
+                let playback = try await AudioPlaybackPreparation.prepare(file)
+                defer { if playback.temporary { try? FileManager.default.removeItem(at: playback.url) } }
+                let asset = AVURLAsset(url: playback.url)
                 let duration = try await asset.load(.duration).seconds
                 guard duration.isFinite, duration > 0 else { throw MeetingError.message("This audio file has no readable duration.") }
                 let speaker = file.lastPathComponent.hasPrefix("microphone") ? "You" : "Speaker"
