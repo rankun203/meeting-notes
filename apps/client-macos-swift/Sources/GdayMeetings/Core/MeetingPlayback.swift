@@ -21,6 +21,9 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var playbackRate: Double = 1
     @Published private(set) var isPlaybackBlocked = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var waveforms: [AudioWaveform?] = []
+    @Published private(set) var mutedTracks: Set<Int> = []
+    private var sourceCompositionTracks: [[AVCompositionTrack]] = []
     var hasSelection: Bool { meetingID != nil }
 
     typealias AudioPreparer = @Sendable (URL) async throws -> PreparedPlaybackAudio
@@ -43,6 +46,7 @@ final class MeetingPlayback: ObservableObject {
     private var failureObserver: NSObjectProtocol?
 
     init(prepareAudio: @escaping AudioPreparer = { url in try await AudioPlaybackPreparation.prepare(url) }) {
+        player.isMuted = UIPreview.enabled
         self.prepareAudio = prepareAudio
         player.actionAtItemEnd = .pause
         periodicObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] _ in
@@ -144,10 +148,32 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func selectTrack(_ track: Int) {
-        guard let meeting = sourceMeeting, !isPlaybackBlocked else { return }
-        let selection = Self.validTrack(track, count: sourceFiles.count)
-        guard selection != selectedTrack else { return }
-        load(meeting: meeting, files: sourceFiles, track: selection, position: currentTime, autoplay: wantsPlayback)
+        guard hasSelection, !isPlaybackBlocked, !isLoading else { return }
+        selectedTrack = Self.validTrack(track, count: sourceFiles.count)
+        mutedTracks = selectedTrack < 0 ? [] : Set(sourceFiles.indices.filter { $0 != selectedTrack })
+        applyMix()
+    }
+
+    func toggleMute(_ index: Int) {
+        guard sourceFiles.indices.contains(index), !isPlaybackBlocked, !isLoading else { return }
+        if mutedTracks.contains(index) { mutedTracks.remove(index) } else { mutedTracks.insert(index) }
+        let audible = sourceFiles.indices.filter { !mutedTracks.contains($0) }
+        selectedTrack = audible.count == 1 ? audible[0] : -1
+        applyMix()
+    }
+
+    private func applyMix() {
+        guard let item = player.currentItem else { return }
+        let count = sourceCompositionTracks.enumerated().reduce(0) { $0 + (mutedTracks.contains($1.offset) ? 0 : $1.element.count) }
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = sourceCompositionTracks.enumerated().flatMap { index, tracks in
+            tracks.map { track in
+                let parameter = AVMutableAudioMixInputParameters(track: track)
+                parameter.setVolume(mutedTracks.contains(index) ? 0 : 1 / Float(max(1, count)), at: .zero)
+                return parameter
+            }
+        }
+        item.audioMix = mix
     }
 
     /// Recording prevents the app's own audio from feeding back into the new meeting.
@@ -175,6 +201,7 @@ final class MeetingPlayback: ObservableObject {
         releaseCurrentItem()
         sourceMeeting = nil; sourceFiles = []
         meetingID = nil; title = ""; trackNames = []; selectedTrack = -1
+        waveforms = []; mutedTracks = []
         currentTime = 0; duration = 0; pendingPosition = 0
         isLoading = false; isSeeking = false; hasEnded = false; errorMessage = nil
     }
@@ -195,6 +222,7 @@ final class MeetingPlayback: ObservableObject {
         releaseCurrentItem()
         sourceMeeting = meeting; sourceFiles = files
         meetingID = meeting.id; title = meeting.title; selectedTrack = track
+        waveforms = []; mutedTracks = track < 0 ? [] : Set(files.indices.filter { $0 != track })
         trackNames = files.map { file in
             let name = file.deletingPathExtension().lastPathComponent
             return name.hasPrefix("microphone") ? "Microphone" : name.hasPrefix("system") ? "System Audio" : name
@@ -210,10 +238,11 @@ final class MeetingPlayback: ObservableObject {
             var transferred = false
             defer { if !transferred { for url in temporary { try? FileManager.default.removeItem(at: url) } } }
             do {
-                let selected = track >= 0 ? [files[track]] : files
                 let composition = AVMutableComposition()
-                var compositionTracks: [AVCompositionTrack] = []
-                for file in selected {
+                var sourceTracks: [[AVCompositionTrack]] = []
+                var envelopes: [AudioWaveform?] = []
+                for file in files {
+                    var compositionTracks: [AVCompositionTrack] = []
                     try Task.checkCancellation()
                     let prepared = try await prepare(file)
                     if prepared.temporary { temporary.append(prepared.url) }
@@ -227,26 +256,21 @@ final class MeetingPlayback: ObservableObject {
                         try destination.insertTimeRange(CMTimeRange(start: .zero, duration: length), of: audio, at: .zero)
                         compositionTracks.append(destination)
                     }
+                    sourceTracks.append(compositionTracks)
+                    // A missing envelope must not prevent otherwise valid playback.
+                    envelopes.append(try? await AudioWaveform.read(prepared.url))
                 }
                 try Task.checkCancellation()
                 guard let self, self.generation == operation else { return }
                 let length = composition.duration.seconds
                 guard length.isFinite, length > 0 else { throw MeetingError.message("This recording has no playable duration.") }
                 let item = AVPlayerItem(asset: composition)
-                if compositionTracks.count > 1 {
-                    // Equal attenuation avoids clipping when simultaneous tracks sum.
-                    // System output volume remains untouched (HIG Playing Audio).
-                    let mix = AVMutableAudioMix()
-                    mix.inputParameters = compositionTracks.map { track in
-                        let parameter = AVMutableAudioMixInputParameters(track: track)
-                        parameter.setVolume(1 / Float(compositionTracks.count), at: .zero)
-                        return parameter
-                    }
-                    item.audioMix = mix
-                }
+                self.sourceCompositionTracks = sourceTracks
+                self.waveforms = envelopes
                 self.temporaryURLs = temporary; transferred = true
                 self.duration = length
                 self.player.replaceCurrentItem(with: item)
+                self.applyMix()
                 self.observe(item, generation: operation)
                 self.isLoading = false
                 self.seek(to: self.pendingPosition)
@@ -293,5 +317,6 @@ final class MeetingPlayback: ObservableObject {
         player.replaceCurrentItem(with: nil)
         for url in temporaryURLs { try? FileManager.default.removeItem(at: url) }
         temporaryURLs = []
+        sourceCompositionTracks = []
     }
 }

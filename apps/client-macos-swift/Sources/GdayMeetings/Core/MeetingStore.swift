@@ -28,6 +28,8 @@ final class MeetingStore: ObservableObject {
     private var lastSavedLibrary = MeetingLibrary()
     var libraryWritable: Bool { canSave }
     private let usesKeychain: Bool
+    private var savedLLMKey = ""
+    private var savedTranscriptionKey = ""
     var recordingDuration: TimeInterval { recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0 }
 
     init(dataDirectory: URL? = nil) {
@@ -49,7 +51,9 @@ final class MeetingStore: ObservableObject {
             if usesKeychain {
                 do {
                     settings.llmAPIKey = try KeychainStore.get("llm-api-key") ?? ""
+                    savedLLMKey = settings.llmAPIKey
                     settings.transcriptionAPIKey = try KeychainStore.get("transcription-api-key") ?? ""
+                    savedTranscriptionKey = settings.transcriptionAPIKey
                 } catch { errorMessage = error.localizedDescription }
             }
         } catch {
@@ -79,8 +83,14 @@ final class MeetingStore: ObservableObject {
         guard canSave else { return }
         do {
             if usesKeychain {
-                try KeychainStore.set(settings.llmAPIKey, for: "llm-api-key")
-                try KeychainStore.set(settings.transcriptionAPIKey, for: "transcription-api-key")
+                if settings.llmAPIKey != savedLLMKey {
+                    try KeychainStore.set(settings.llmAPIKey, for: "llm-api-key")
+                    savedLLMKey = settings.llmAPIKey
+                }
+                if settings.transcriptionAPIKey != savedTranscriptionKey {
+                    try KeychainStore.set(settings.transcriptionAPIKey, for: "transcription-api-key")
+                    savedTranscriptionKey = settings.transcriptionAPIKey
+                }
             }
             try JSONEncoder().encode(settings).write(to: dataDirectory.appendingPathComponent("settings.json"), options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dataDirectory.appendingPathComponent("settings.json").path)
@@ -121,6 +131,7 @@ final class MeetingStore: ObservableObject {
     func audioURL(for meeting: Meeting) -> URL? { audioURLs(for: meeting).first }
 
     func startRecording(title: String? = nil) async {
+        guard !UIPreview.enabled else { errorMessage = "Recording is disabled in UI Preview."; return }
         guard recordingID == nil, !isBusy, canSave else { return }
         isStartingRecording = true
         defer { isStartingRecording = false }

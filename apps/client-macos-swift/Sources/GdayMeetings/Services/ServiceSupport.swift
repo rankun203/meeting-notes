@@ -42,9 +42,9 @@ struct CredentialIdentityMigration {
 enum KeychainStore {
     static let service = CredentialIdentityMigration.service
     private static let migration = CredentialIdentityMigration(storage: SecurityCredentialStorage())
-    static func get(_ account: String) throws -> String? { try migration.get(account) }
-    static func set(_ value: String, for account: String) throws { try migration.set(value, for: account) }
-    static func delete(_ account: String) throws { try migration.delete(account) }
+    static func get(_ account: String) throws -> String? { UIPreview.enabled ? nil : try migration.get(account) }
+    static func set(_ value: String, for account: String) throws { if !UIPreview.enabled { try migration.set(value, for: account) } }
+    static func delete(_ account: String) throws { if !UIPreview.enabled { try migration.delete(account) } }
 }
 
 private struct SecurityCredentialStorage: CredentialStorage {
@@ -153,6 +153,7 @@ enum ServiceHTTP {
     }
     static func sameOrigin(_ a: URL, _ b: URL) -> Bool { a.scheme == b.scheme && a.host == b.host && a.port == b.port }
     static func json(_ request: URLRequest) async throws -> [String: Any] {
+        try UIPreview.requireLiveServices()
         let (data, response) = try await session.data(for: request)
         return try decode(data, response)
     }

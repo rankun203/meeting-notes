@@ -219,7 +219,11 @@ struct MeetingDetailView: View {
                         }
                     }
                 }.padding(4)
-            }.overlay { if meeting.transcript.isEmpty { emptyTranscript(meeting) } }
+            }.overlay {
+                // Expanded playback can leave little vertical space. Keep the
+                // empty-state action reachable using standard scrolling.
+                if meeting.transcript.isEmpty { ScrollView { emptyTranscript(meeting).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity) } }
+            }
         }
     }
     private func emptyTranscript(_ meeting: Meeting) -> some View {

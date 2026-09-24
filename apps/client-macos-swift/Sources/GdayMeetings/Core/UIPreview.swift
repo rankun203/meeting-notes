@@ -1,0 +1,75 @@
+import AVFoundation
+import Foundation
+import SwiftUI
+
+/// Explicit opt-in: never load the normal library, credentials, or remote services.
+enum UIPreview {
+    static let enabled = ProcessInfo.processInfo.arguments.contains("--ui-preview")
+        || Bundle.main.object(forInfoDictionaryKey: "GdayUIPreview") as? Bool == true
+
+    static func requireLiveServices() throws {
+        if enabled { throw ServiceError("Online services are disabled in UI Preview.") }
+    }
+
+    @MainActor static func makeStore() -> MeetingStore {
+        guard enabled else { return MeetingStore() }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Gday-UI-Preview-\(UUID())")
+        let store = MeetingStore(dataDirectory: directory)
+        do {
+            for title in ["Synthetic single track", "Synthetic conversation"] {
+                var meeting = Meeting(title: title)
+                let folder = store.directory(for: meeting.id)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                meeting.audioFiles = title.contains("single") ? ["microphone.wav"] : ["microphone.wav", "system.wav"]
+                meeting.duration = 60
+                for (index, name) in meeting.audioFiles.enumerated() {
+                    try writeFixture(to: folder.appendingPathComponent(name), source: index)
+                }
+                try store.insertImportedMeeting(meeting)
+            }
+            _ = store.addPerson(name: "Preview Person")
+            _ = store.addTag(name: "Preview")
+        } catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
+        return store
+    }
+
+    static func writeFixture(to url: URL, source: Int) throws {
+        let rate = 8000.0
+        let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8000)!
+        buffer.frameLength = 8000
+        for second in 0..<60 {
+            let samples = buffer.floatChannelData![0]
+            for frame in 0..<8000 {
+                let time = Double(second) + Double(frame) / rate
+                let phase = (time + Double(source) * 4).truncatingRemainder(dividingBy: 12)
+                let envelope = phase > 1 && phase < 7 ? pow(sin((phase - 1) / 6 * .pi), 2) : 0
+                samples[frame] = Float(0.65 * envelope * sin(2 * .pi * 230 * time) * (0.65 + 0.35 * sin(time * 13)))
+            }
+            try file.write(from: buffer)
+        }
+    }
+}
+
+struct PreviewContainer<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @ViewState private var appearance = 0
+    var body: some View {
+        VStack(spacing: 0) {
+            if UIPreview.enabled {
+                HStack {
+                    Label("UI Preview · Synthetic audio · Silent playback", systemImage: "eye")
+                    Spacer()
+                    Picker("Appearance", selection: $appearance) {
+                        Text("System").tag(0)
+                        Text("Light").tag(1)
+                        Text("Dark").tag(2)
+                    }.fixedSize()
+                }.font(.caption).padding(8).background(.quaternary)
+            }
+            content()
+        }
+        .preferredColorScheme(UIPreview.enabled ? (appearance == 1 ? .light : appearance == 2 ? .dark : nil) : nil)
+    }
+}

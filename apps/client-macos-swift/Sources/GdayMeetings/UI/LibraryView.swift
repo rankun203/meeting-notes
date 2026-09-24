@@ -38,6 +38,7 @@ struct LibraryView: View {
         // HIG: a sidebar expresses the hierarchy; an intermediate list selects content.
         // Native split views preserve resizing, keyboard navigation and system appearance.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
+        VStack(spacing: 0) {
         NavigationSplitView {
             List(selection: $destination) {
                 Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
@@ -135,7 +136,7 @@ struct LibraryView: View {
         // HIG Feedback: keep the activity visible while people browse other content.
         // A single persistent transport replaces scattered status and action rows.
         // https://developer.apple.com/design/human-interface-guidelines/feedback
-        .safeAreaInset(edge: .bottom) {
+        // Allocate actual layout height so detail overlays cannot extend beneath playback.
             VStack(spacing: 0) {
                 if recordingActive && (store.isStartingRecording || destination != .meetings || selectedMeeting != store.recordingID) { recordingStrip }
                 else if playback.hasSelection && !recordingActive { MeetingPlayerBar(showMeeting: showMeeting) }

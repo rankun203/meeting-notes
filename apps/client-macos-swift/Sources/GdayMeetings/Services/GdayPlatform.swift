@@ -33,6 +33,7 @@ extension GdayServerService {
         components.queryItems = [URLQueryItem(name: "filename", value: file.lastPathComponent)]
         r.url = components.url; r.httpMethod = "POST"; r.timeoutInterval = 900
         r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        try UIPreview.requireLiveServices()
         let (data, response) = try await ServiceHTTP.session.upload(for: r, fromFile: file)
         let json = try ServiceHTTP.decode(data, response)
         guard let value = json["url"] as? String, let url = URL(string: value, relativeTo: r.url)?.absoluteURL, ServiceHTTP.sameOrigin(url, r.url!) else { throw ServiceError("The uploaded audio URL is invalid or belongs to another server.") }
@@ -93,6 +94,7 @@ extension GdayServerService {
         r.httpMethod = "POST"; r.timeoutInterval = 900
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
+        try UIPreview.requireLiveServices()
         let (data, response) = try await ServiceHTTP.session.data(for: r)
         if (response as? HTTPURLResponse)?.statusCode == 409 {
             throw ServiceError("The server already has this meeting with a different snapshot or transcription. Archives are immutable and cannot overwrite an existing meeting. Your local files are unchanged.")

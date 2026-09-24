@@ -6,13 +6,12 @@ import SwiftUI
 struct MeetingPlayerBar: View {
     @EnvironmentObject private var playback: MeetingPlayback
     let showMeeting: (UUID) -> Void
-    @ViewState private var isScrubbing = false
-    @ViewState private var scrubTime: Double = 0
+    @ViewState private var tracksExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
             Divider()
-            HStack(spacing: 20) {
+            HStack(spacing: 14) {
                 Button {
                     if let id = playback.meetingID { showMeeting(id) }
                 } label: {
@@ -31,7 +30,7 @@ struct MeetingPlayerBar: View {
                     }.contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .frame(minWidth: 150, idealWidth: 220, maxWidth: 260)
+                .frame(minWidth: 150, idealWidth: 180, maxWidth: 220)
                 .help("Show the meeting that is playing")
                 .accessibilityLabel("Show meeting: \(playback.title)")
 
@@ -51,27 +50,23 @@ struct MeetingPlayerBar: View {
                 }
 
                 VStack(spacing: 4) {
-                    Slider(value: Binding(get: { isScrubbing ? scrubTime : playback.currentTime }, set: {
-                        scrubTime = $0
-                        if !isScrubbing { playback.seek(to: $0) }
-                    }),
-                           in: 0...max(0.01, playback.duration),
-                           onEditingChanged: { editing in
-                               if editing { scrubTime = playback.currentTime; isScrubbing = true }
-                               else { isScrubbing = false; playback.seek(to: scrubTime) }
-                           })
-                        .controlSize(.small)
+                    WaveformTimeline(waveforms: audibleWaveforms, duration: playback.duration, time: playback.currentTime, dimmed: playback.mutedTracks.count == playback.trackNames.count, seek: playback.seek)
                         .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
-                        .accessibilityLabel("Playback position")
-                        .accessibilityValue("\(playbackTime(isScrubbing ? scrubTime : playback.currentTime)) of \(playbackTime(playback.duration))")
                     HStack {
-                        Text(playbackTime(isScrubbing ? scrubTime : playback.currentTime))
+                        Text(playbackTime(playback.currentTime))
                         Spacer()
-                        Text("−" + playbackTime(max(0, playback.duration - (isScrubbing ? scrubTime : playback.currentTime))))
+                        Text("−" + playbackTime(max(0, playback.duration - (playback.currentTime))))
                     }.font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                 }.frame(minWidth: 130, maxWidth: .infinity)
 
                 HStack(spacing: 10) {
+                    Button { tracksExpanded.toggle() } label: {
+                        Image(systemName: tracksExpanded ? "chevron.down" : "waveform")
+                            .frame(width: 28, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
+                    .help(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
                     Menu {
                         Picker("Playback Speed", selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })) {
                             ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in Text("\(rate.formatted())×").tag(rate) }
@@ -96,6 +91,33 @@ struct MeetingPlayerBar: View {
                 }
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
+            if tracksExpanded {
+                ScrollView {
+                    VStack(spacing: 10) {
+                        ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in
+                            HStack(spacing: 14) {
+                                HStack {
+                                    Text(name).font(.caption).lineLimit(1)
+                                    Spacer()
+                                    Button { playback.toggleMute(index) } label: {
+                                        Image(systemName: playback.mutedTracks.contains(index) ? "speaker.slash" : "speaker.wave.2")
+                                            .frame(width: 28, height: 28)
+                                    }.buttonStyle(.plain)
+                                        .accessibilityLabel("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
+                                        .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
+                                        .disabled(playback.isLoading || playback.isPlaybackBlocked)
+                                }.frame(width: 160)
+                                WaveformTimeline(
+                                    waveforms: playback.waveforms.indices.contains(index) ? [playback.waveforms[index]].compactMap { $0 } : [],
+                                    duration: playback.duration, time: playback.currentTime,
+                                    label: "\(name) playback position",
+                                    dimmed: playback.mutedTracks.contains(index), seek: playback.seek)
+                                    .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                            }
+                        }
+                    }.padding(.horizontal, 20).padding(.bottom, 12)
+                }.frame(height: min(200, CGFloat(playback.trackNames.count) * 46 + 12))
+            }
             if let error = playback.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.secondary)
@@ -104,11 +126,18 @@ struct MeetingPlayerBar: View {
             }
         }
         .background(.bar)
-        .onChange(of: playback.meetingID) { _, _ in isScrubbing = false }
+        .onChange(of: playback.meetingID) { _, _ in tracksExpanded = false }
+    }
+
+    private var audibleWaveforms: [AudioWaveform] {
+        if playback.mutedTracks.count == playback.trackNames.count { return playback.waveforms.compactMap { $0 } }
+        return playback.waveforms.enumerated().compactMap { playback.mutedTracks.contains($0.offset) ? nil : $0.element }
     }
 
     private var selectedTrackName: String {
-        playback.trackNames.indices.contains(playback.selectedTrack) ? playback.trackNames[playback.selectedTrack] : "All Tracks"
+        if playback.mutedTracks.count == playback.trackNames.count { return "All Muted" }
+        if playback.selectedTrack < 0 && !playback.mutedTracks.isEmpty { return "Custom Mix" }
+        return playback.trackNames.indices.contains(playback.selectedTrack) ? playback.trackNames[playback.selectedTrack] : "All Tracks"
     }
 
     private func transportButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {

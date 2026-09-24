@@ -126,6 +126,7 @@ enum DirectTranscription {
         var request = URLRequest(url: base.appendingPathComponent("audio/transcriptions")); request.httpMethod = "POST"; request.timeoutInterval = 600
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         if !settings.transcriptionAPIKey.isEmpty { request.setValue("Bearer \(settings.transcriptionAPIKey)", forHTTPHeaderField: "Authorization") }
+        try UIPreview.requireLiveServices()
         let (data, response) = try await ServiceHTTP.session.upload(for: request, from: body)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MeetingError.message("Transcription service returned HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0). Check the endpoint, model, and API key.") }
         let output = try JSONDecoder().decode(Response.self, from: data)

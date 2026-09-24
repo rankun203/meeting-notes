@@ -76,6 +76,7 @@ private struct OAuthSession: Codable {
         credentials = nil; connected = false; email = nil; origin = nil
         if let old, let revoke = old.revocationEndpoint {
             for token in [old.accessToken, old.refreshToken].compactMap({ $0 }) {
+                try UIPreview.requireLiveServices()
                 _ = try? await ServiceHTTP.session.data(for: ServiceHTTP.form(revoke, ["token": token, "client_id": old.clientID]))
             }
         }

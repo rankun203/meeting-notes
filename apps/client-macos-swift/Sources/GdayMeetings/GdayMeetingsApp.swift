@@ -5,13 +5,18 @@ import Combine
 @main
 struct GdayMeetingsApp: App {
     @NSApplicationDelegateAdaptor(MeetingsAppDelegate.self) private var delegate
-    @StateObject private var store = MeetingStore()
+    @StateObject private var store = UIPreview.makeStore()
     @StateObject private var playback = MeetingPlayback()
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            LibraryView().environmentObject(store).environmentObject(playback)
-                .onAppear { delegate.store = store }
+            PreviewContainer { LibraryView() }.environmentObject(store).environmentObject(playback)
+                .onAppear {
+                    delegate.store = store
+                    if UIPreview.enabled, !playback.hasSelection, let meeting = store.meetings.first {
+                        playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
+                    }
+                }
                 .onReceive(store.$isStartingRecording.combineLatest(store.$recordingID, store.$isFinalizingRecording)) { starting, recording, saving in
                     playback.setRecordingActive(starting || recording != nil || saving)
                 }
