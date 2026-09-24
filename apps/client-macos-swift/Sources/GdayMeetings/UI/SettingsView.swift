@@ -20,7 +20,9 @@ struct SettingsView: View {
                 Section("Audio Sources") {
                     Toggle("Record microphone", isOn: setting(\.captureMicrophone)).disabled(audioSettingsLocked)
                     Toggle("Record system audio", isOn: setting(\.captureSystemAudio)).disabled(audioSettingsLocked)
-                    Text("macOS requests microphone access and presents a sharing picker when recording starts. Select a display to capture system audio; no screen video is saved.").font(.caption).foregroundStyle(.secondary)
+                    // HIG Privacy: explain the requested resources in the context of their use.
+                    // https://developer.apple.com/design/human-interface-guidelines/privacy
+                    Text("When needed, macOS requests access to the audio sources you enable when recording starts. System Audio records other apps’ audio without sharing or recording your screen.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Microphone Processing") {
                     // Apple voice processing provides noise suppression and gain control;
