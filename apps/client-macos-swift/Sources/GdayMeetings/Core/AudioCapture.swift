@@ -1,5 +1,5 @@
 import AVFoundation
-import ScreenCaptureKit
+import CoreAudio
 import Accelerate
 
 /// HIG Privacy: request protected resources only when recording is requested.
@@ -7,14 +7,12 @@ import Accelerate
 // Start/stop are serialized by MeetingStore. The engine tap only invokes the
 // locked writer/report methods; system-writer state belongs to queue. Profile
 // snapshots synchronize with that queue; failure state is protected by stateLock.
-final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+final class AudioCapture: NSObject, @unchecked Sendable {
     private var engine: AVAudioEngine?
-    private var stream: SCStream?
-    private var systemConsent: SystemAudioConsent?
+    private var systemCapture: SystemAudioCapture?
     private var microphoneWriter: TimedAudioWriter?
     private var systemWriter: TimedAudioWriter?
     private let queue = DispatchQueue(label: "com.gdaymeetings.macos.system-audio")
-    private var systemURL: URL?
     private var configurationObserver: NSObjectProtocol?
     private var epoch: TimeInterval = 0
     private var voiceProcessing = false
@@ -43,8 +41,23 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         levels.microphone.enabled = microphoneEnabled; levels.system.enabled = systemEnabled
         var files: [String] = []
         do {
-            let authorization = try await RecordingPermissions.request(microphone: microphoneEnabled, systemAudio: systemEnabled)
-            systemConsent = authorization?.session
+            let cancellationGeneration = await RecordingPermissions.currentCancellationGeneration
+            try await RecordingPermissions.request(microphone: microphoneEnabled)
+            try await RecordingPermissions.checkCancellation(since: cancellationGeneration)
+            if systemEnabled {
+                let capture = SystemAudioCapture(queue: queue)
+                systemCapture = capture
+                capture.onFailure = { [weak self] error in self?.report(error) }
+                capture.onBuffer = { [weak self] buffer, timestamp in
+                    guard let self, let writer = self.systemWriter, timestamp >= self.epoch else { return }
+                    try writer.append(buffer, hostSeconds: timestamp)
+                    self.measure(buffer, microphone: false)
+                }
+                // Trigger audio-only consent before starting the microphone. Frames
+                // before the common recording epoch are discarded, not persisted.
+                try capture.start()
+                try await RecordingPermissions.checkCancellation(since: cancellationGeneration)
+            }
             epoch = CMClockGetTime(CMClockGetHostTimeClock()).seconds
             if microphoneEnabled {
                 let engine = AVAudioEngine()
@@ -111,6 +124,7 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                     }
                 }
                 epoch = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+                try prepareSystemWriter(directory: directory)
                 let url = directory.appendingPathComponent("microphone.wav")
                 let writer = try TimedAudioWriter(url: url, format: format, epoch: epoch, voiceProcessed: voiceProcessing)
                 microphoneWriter = writer
@@ -147,20 +161,10 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 files.append(url.lastPathComponent)
             }
             if systemEnabled {
-                guard let filter = authorization?.filter else { throw RecordingPermissionError(permission: .systemAudio) }
-                let configuration = SCStreamConfiguration()
-                configuration.capturesAudio = true
-                configuration.excludesCurrentProcessAudio = true
-                configuration.sampleRate = 48000; configuration.channelCount = 2
-                configuration.width = 2; configuration.height = 2
-                configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-                systemURL = directory.appendingPathComponent("system.wav")
-                let capture = SCStream(filter: filter, configuration: configuration, delegate: self)
-                try capture.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
-                stream = capture
-                try await capture.startCapture()
+                if !microphoneEnabled { try prepareSystemWriter(directory: directory) }
                 files.append("system.wav")
             }
+            try systemCapture?.observeOutputRoute()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + 10, repeating: 10)
             timer.setEventHandler { [weak self] in
@@ -198,13 +202,13 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         meterTimer?.cancel(); meterTimer = nil
         healthTimer?.cancel(); healthTimer = nil
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver); self.configurationObserver = nil }
+        var stopError: Error?
+        // Unregister system route listeners before tearing down VoiceProcessingIO,
+        // whose own aggregate removal must not look like a mid-recording route loss.
+        if let systemCapture { do { try systemCapture.stop() } catch { stopError = error } }
+        systemCapture = nil
         if microphoneTapInstalled { engine?.inputNode.removeTap(onBus: 0); microphoneTapInstalled = false }
         engine?.stop(); engine = nil
-        var stopError: Error?
-        if let stream { do { try await stream.stopCapture() } catch { stopError = error } }
-        stream = nil
-        if let systemConsent { await systemConsent.close() }
-        systemConsent = nil
         // Flush only after delivery has stopped; disposal drains the async ring buffer.
         queue.sync {
             do { try systemWriter?.finish() } catch { stopError = error }
@@ -243,23 +247,13 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         stateLock.unlock()
         if first { onFailure?(error) }
     }
-    func stream(_ stream: SCStream, didStopWithError error: Error) { report(error) }
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, sampleBuffer.isValid, let description = sampleBuffer.formatDescription else { return }
-        do {
-            guard let clock = stream.synchronizationClock else { throw MeetingError.message("System audio synchronization clock is unavailable.") }
-            // Convert SCStream's clock into the same host-clock domain as AVAudioTime.
-            // https://developer.apple.com/documentation/screencapturekit/scstream/synchronizationclock
-            let timestamp = CMSyncConvertTime(sampleBuffer.presentationTimeStamp, from: clock, to: CMClockGetHostTimeClock()).seconds
-            let format = AVAudioFormat(cmAudioFormatDescription: description)
-            try sampleBuffer.withAudioBufferList { list, _ in
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: list.unsafePointer) else { throw MeetingError.message("Could not read system audio samples.") }
-                if systemWriter == nil, let systemURL { systemWriter = try TimedAudioWriter(url: systemURL, format: format, epoch: epoch) }
-                try systemWriter?.append(buffer, hostSeconds: timestamp)
-                measure(buffer, microphone: false)
-            }
-        } catch { report(error) }
+    private func prepareSystemWriter(directory: URL) throws {
+        guard let capture = systemCapture, let format = capture.format else { return }
+        try queue.sync {
+            systemWriter = try TimedAudioWriter(url: directory.appendingPathComponent("system.wav"), format: format, epoch: epoch)
+        }
     }
+
 }
 
 

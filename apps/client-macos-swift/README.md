@@ -1,6 +1,6 @@
 # Gday Meetings — SwiftUI client
 
-A native macOS meeting app built entirely with SwiftUI, AppKit, AVFoundation, ScreenCaptureKit, Security, and Foundation. The package has no third-party dependencies and does not launch the Rust client or a browser UI.
+A native macOS meeting app built entirely with SwiftUI, AppKit, AVFoundation, Core Audio, Security, and Foundation. The package has no third-party dependencies and does not launch the Rust client or a browser UI.
 
 ## Build and install
 
@@ -27,7 +27,7 @@ Builds target the current Mac's architecture. Quit the development or staged app
 
 ### With Xcode
 
-Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/screen-recording purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`.
+Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/system-audio purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`.
 
 ## Native workflows
 
@@ -59,7 +59,7 @@ The audio pipeline aligns track timestamps to a shared host-clock timeline, pres
 
 ## Recording permissions and storage
 
-When recording begins, macOS requests microphone access and presents its content-sharing picker for system audio. Select the display containing the meeting to authorize that capture session from the app; no screen video is saved. System audio capture requires an available display. If microphone access was previously denied, macOS requires changing that existing decision in Privacy & Security; the app cannot force another microphone prompt. A recording needs at least one enabled audio source.
+When recording begins, macOS requests the microphone and system-audio permissions needed by the selected sources. System audio uses an audio-only Core Audio process tap: there is no display selection, screen-sharing session, or video capture. The packaged app includes `NSAudioCaptureUsageDescription` and `NSMicrophoneUsageDescription`. Permission decisions belong to macOS; previously denied access may require the user to change the existing decision in Privacy & Security. A recording needs at least one enabled audio source. Each session creates and tears down its own private tap and aggregate device, and saves microphone and system tracks separately.
 
 The meetings library lives in `~/.local/share/com.gdaymeetings.macos/`, and the app identity is `com.gdaymeetings.macos`, based on our domain `gdaymeetings.com`. The toolbar folder button opens this directory. On first launch, if the new directory does not exist, the app copies the former `~/Library/Application Support/Gday Meetings Swift/` library into it, preserving the original. Existing destination libraries are never merged or overwritten. Quit older app versions before migration; changes subsequently made in an older version are not synchronized. The Rust client uses its own directory and format. Changing the bundle identity may require granting recording permissions again. OAuth credentials and provider keys are stored in Keychain. Keep a backup of the library to retain audio as well as text.
 

@@ -153,9 +153,6 @@ struct RecordingSetupView: View {
                             startupError = error
                             store.errorMessage = nil
                         }
-                        // Cancelling the system picker is a normal return to setup;
-                        // keep the draft and let the person start again or cancel.
-
                     }
                 }
                 .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)

@@ -6,7 +6,8 @@ let package = Package(
     platforms: [.macOS("14.2")],
     products: [.executable(name: "GdayMeetings", targets: ["GdayMeetings"])],
     targets: [
-        .executableTarget(name: "GdayMeetings"),
-        .testTarget(name: "GdayMeetingsTests", dependencies: ["GdayMeetings"])
+        .target(name: "AudioCaptureBridge", publicHeadersPath: "include"),
+        .executableTarget(name: "GdayMeetings", dependencies: ["AudioCaptureBridge"]),
+        .testTarget(name: "GdayMeetingsTests", dependencies: ["GdayMeetings", "AudioCaptureBridge"])
     ]
 )

@@ -216,7 +216,7 @@ final class MeetingStore: ObservableObject {
         for file in originals { try? FileManager.default.removeItem(at: file) }
     }
     func finalizeForQuit() async {
-        RecordingPermissions.cancelPendingSelection()
+        RecordingPermissions.cancelPendingStart()
         while captureTransition { try? await Task.sleep(nanoseconds: 100_000_000) }
         await stopRecording(transcribeAfter: false)
     }

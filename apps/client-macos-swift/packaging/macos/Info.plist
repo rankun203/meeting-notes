@@ -17,7 +17,5 @@
     <string>Gday Meetings records your microphone to include your voice in meeting recordings.</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Gday Meetings records audio from meeting apps to save and transcribe your meetings.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Gday Meetings uses screen recording permission to capture meeting audio. No screen video is saved.</string>
 </dict>
 </plist>
