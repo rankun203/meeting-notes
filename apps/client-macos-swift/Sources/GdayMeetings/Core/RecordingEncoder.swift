@@ -59,7 +59,11 @@ enum RecordingEncoder {
         guard channels == 1 || channels == 2 else { throw MeetingError.message("Opus recording supports mono or stereo tracks. The original multichannel WAV was retained; choose WAV for this device.") }
         guard let target = AVAudioFormat(settings: [AVFormatIDKey: kAudioFormatOpus, AVSampleRateKey: 48000, AVNumberOfChannelsKey: channels]),
               let converter = AVAudioConverter(from: input.processingFormat, to: target) else { throw MeetingError.message("This Mac cannot create a native Opus encoder. The original WAV was retained; choose M4A or WAV in Settings.") }
-        converter.bitRate = channels == 1 ? 48000 : 96000
+        // Prefer VBR when the native codec exposes bitrate-strategy control.
+        // Keep native complexity: AVAudioConverter has no libopus 0–10 control.
+        // https://developer.apple.com/documentation/avfaudio/avaudioconverter/bitratestrategy
+        if converter.bitRateStrategy != nil { converter.bitRateStrategy = AVAudioBitRateStrategy_Variable }
+        converter.bitRate = channels == 1 ? 32000 : 64000
         let preSkip = converter.primeInfo.leadingFrames
         guard preSkip <= UInt16.max else { throw MeetingError.message("The native Opus encoder reported unsupported priming.") }
         let audibleFrames = Int64((Double(input.length) * 48000 / input.processingFormat.sampleRate).rounded())

@@ -26,6 +26,8 @@ The Core Audio IOProc is a real-time callback. It copies Float32 input into a bo
 
 ## Recording formats
 
+New Opus recordings target **32 kbps mono / 64 kbps stereo**, with a 48 kHz encoding timeline. Request VBR when the native encoder exposes bitrate-strategy control; otherwise keep its default strategy. VBR targets are not exact file-size guarantees. Keep Apple's native encoder complexity because `AVAudioConverter` has no libopus-style 0–10 complexity setting. Capture retains the device's native sample rate and separate source tracks; conversion resamples as needed. Existing recordings are not re-encoded. [Apple's bitrate strategy](https://developer.apple.com/documentation/avfaudio/avaudioconverter/bitratestrategy), [Opus bitrate guidance](https://www.rfc-editor.org/rfc/rfc6716.html#section-2.1.1).
+
 Opus and AAC use Apple's native encoders. Opus packets are written into the standard Ogg container with pre-skip, checksums, channel metadata, and final granule trimming, following [RFC 7845](https://www.rfc-editor.org/rfc/rfc7845) and [Ogg framing](https://www.xiph.org/ogg/doc/framing.html). The tested native file readers do not open Ogg Opus, so playback demuxes and decodes into a temporary seekable CAF file. Server transcription receives the original Opus; compatible direct transcription uses decoded audio to prepare AAC excerpts. Native MP3 encoding is unavailable on the tested Mac; MP3 input remains supported. No external encoder is installed or required. Older supported macOS releases still need codec validation; unavailable conversion fails visibly and retains WAV.
 
 ## Transcription and transcoding
