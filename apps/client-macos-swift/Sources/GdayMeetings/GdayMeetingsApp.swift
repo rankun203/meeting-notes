@@ -1,15 +1,21 @@
 import SwiftUI
 import AppKit
+import Combine
 
 @main
 struct GdayMeetingsApp: App {
     @NSApplicationDelegateAdaptor(MeetingsAppDelegate.self) private var delegate
     @StateObject private var store = MeetingStore()
+    @StateObject private var playback = MeetingPlayback()
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            LibraryView().environmentObject(store)
+            LibraryView().environmentObject(store).environmentObject(playback)
                 .onAppear { delegate.store = store }
+                .onReceive(store.$isStartingRecording.combineLatest(store.$recordingID, store.$isFinalizingRecording)) { starting, recording, saving in
+                    playback.setRecordingActive(starting || recording != nil || saving)
+                }
+                .onReceive(store.$meetings) { meetings in playback.reconcile(meetings: meetings) }
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1200, height: 800)
@@ -25,16 +31,25 @@ struct GdayMeetingsApp: App {
             }
             CommandMenu("Recording") {
                 Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
-                    Task { if store.recordingID == nil { await store.startRecording() } else { await store.stopRecording() } }
+                    if store.recordingID == nil { store.presentsRecordingSetup = true }
+                    else { Task { await store.stopRecording() } }
                 }.keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(store.isFinalizingRecording)
+                    .disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
+            }
+            CommandMenu("Playback") {
+                Button(playback.isPlaying ? "Pause" : "Play") { playback.togglePlayPause() }
+                    .disabled(!playback.hasSelection || playback.isPlaybackBlocked || playback.isLoading)
+                Button("Back 15 Seconds") { playback.skip(by: -15) }
+                    .disabled(!playback.hasSelection || playback.isPlaybackBlocked || playback.isLoading)
+                Button("Forward 15 Seconds") { playback.skip(by: 15) }
+                    .disabled(!playback.hasSelection || playback.isPlaybackBlocked || playback.isLoading)
             }
         }
         // HIG: app-specific preferences live in a separate standard Settings window.
         // https://developer.apple.com/design/human-interface-guidelines/settings
-        Settings { SettingsView().environmentObject(store) }
+        Settings { SettingsView().environmentObject(store).environmentObject(playback) }
         MenuBarExtra("Gday Meetings", systemImage: store.recordingID == nil ? "waveform" : "record.circle.fill") {
-            RecordingMenuView().environmentObject(store)
+            RecordingMenuView().environmentObject(store).environmentObject(playback)
         }
     }
 }
@@ -63,8 +78,11 @@ private struct RecordingMenuView: View {
             Text("Recording since \(started.formatted(date: .omitted, time: .shortened))")
         }
         Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
-            Task { if store.recordingID == nil { await store.startRecording() } else { await store.stopRecording() } }
-        }.disabled(store.isFinalizingRecording)
+            if store.recordingID == nil {
+                openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+                store.presentsRecordingSetup = true
+            } else { Task { await store.stopRecording() } }
+        }.disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
         Button("Show Gday Meetings") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
         Divider()
         Button("Quit Gday Meetings") { NSApp.terminate(nil) }.keyboardShortcut("q")

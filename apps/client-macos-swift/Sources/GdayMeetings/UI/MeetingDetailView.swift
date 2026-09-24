@@ -1,18 +1,13 @@
 import SwiftUI
-import AVKit
 
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MeetingStore
+    @EnvironmentObject private var playback: MeetingPlayback
     @ObservedObject private var server = GdayServerService.shared
     let meetingID: UUID
     @ViewState private var tab = 0
     @ViewState private var chatDraft = ""
     @ViewState private var todoDraft = ""
-    @ViewState private var player: AVPlayer?
-    @ViewState private var selectedTrack = -1
-    @ViewState private var playbackGeneration = UUID()
-    @ViewState private var loadingPlayback = false
-    @ViewState private var playbackTemporaryURLs: [URL] = []
     @ViewState private var speakerFrom = ""
     @ViewState private var speakerTo = ""
 
@@ -25,161 +20,175 @@ struct MeetingDetailView: View {
     }
     var body: some View {
         if let meeting {
-            VStack(alignment: .leading, spacing: 14) {
-                TextField("Meeting title", text: text(\.title)).font(.title).textFieldStyle(.plain).accessibilityLabel("Meeting title")
-                HStack {
-                    Text(meeting.createdAt, format: .dateTime).foregroundStyle(.secondary)
-                    if store.recordingID == meetingID && store.isFinalizingRecording {
-                        Label("Saving audio…", systemImage: "externaldrive").foregroundStyle(.secondary)
-                    } else if store.recordingID == meetingID {
-                        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                            let elapsed = store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0
-                            Label(formatTime(elapsed), systemImage: "record.circle.fill").foregroundStyle(.red).monospacedDigit().accessibilityLabel("Recording duration \(formatTime(elapsed))")
-                        }
-                    } else if meeting.duration > 0 {
-                        Text(formatTime(meeting.duration)).monospacedDigit().foregroundStyle(.secondary).accessibilityLabel("Duration \(formatTime(meeting.duration))")
-                    }
-                    Spacer()
-                    Menu("People") {
-                        ForEach(store.people) { person in
-                            Toggle(person.name, isOn: Binding(get: { self.meeting?.personIDs.contains(person.id) ?? false }, set: { selected in change { if selected { $0.personIDs.append(person.id) } else { $0.personIDs.removeAll { $0 == person.id } } } }))
-                        }
-                        if store.people.isEmpty { Text("Add people in the sidebar") }
-                    }
-                    Menu("Tags") {
-                        ForEach(store.tags) { tag in
-                            Toggle(tag.name, isOn: Binding(get: { self.meeting?.tagIDs.contains(tag.id) ?? false }, set: { selected in change { if selected { $0.tagIDs.append(tag.id) } else { $0.tagIDs.removeAll { $0 == tag.id } } } }))
-                        }
-                        if store.tags.isEmpty { Text("Add tags in the sidebar") }
-                    }
-                }.font(.callout)
-                if !meeting.personIDs.isEmpty || !meeting.tagIDs.isEmpty {
-                    Text(associationSummary(meeting)).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 22) {
+                meetingHeader(meeting)
+                if store.recordingID == meetingID {
+                    RecordingWorkspaceView(meetingID: meetingID)
+                } else if !meeting.audioFiles.isEmpty {
+                    recordingOverview(meeting)
                 }
-                if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {
-                    HStack {
-                        if meeting.audioFiles.count > 1 {
-                            Picker("Audio track", selection: $selectedTrack) {
-                                Text("All Tracks").tag(-1)
-                                ForEach(Array(meeting.audioFiles.enumerated()), id: \.offset) { index, file in Text(file.hasPrefix("microphone") ? "Microphone" : file.hasPrefix("system") ? "System Audio" : file).tag(index) }
-                            }.frame(maxWidth: 260)
-                        }
-                        if let player { AudioPlaybackView(player: player).frame(height: 44) }
-                        else if loadingPlayback { ProgressView("Loading audio…").controlSize(.small) }
-                    }
-                }
+                // HIG: standard segmented navigation maintains a predictable content
+                // hierarchy and keyboard accessibility without custom hit targets.
+                // https://developer.apple.com/design/human-interface-guidelines/segmented-controls
                 Picker("Meeting content", selection: $tab) {
                     Text("Transcript").tag(0); Text("Notes").tag(1); Text("Summary").tag(2); Text("To-Dos").tag(3); Text("Chat").tag(4)
-                }.pickerStyle(.segmented)
-                switch tab {
-                case 0: transcript(meeting)
-                case 1: editor("Notes", binding: text(\.notes))
-                case 2:
-                    VStack(alignment: .leading) {
-                        Button("Generate Summary", systemImage: "sparkles") { Task { await store.summarize(id: meetingID) } }.disabled(store.isBusy || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
-                        editor("Summary", binding: text(\.summary))
-                    }
-                case 3: todos(meeting)
-                default: chat(meeting)
-                }
-            }.padding(20)
+                }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Meeting content")
+                meetingContent(meeting)
+            }
+            .padding(24)
             .navigationTitle(meeting.title)
             .toolbar {
-                Button(meeting.serverTranscription == nil ? "Transcribe" : "Resume Transcription", systemImage: "text.bubble") { Task { await store.transcribe(id: meetingID) } }.disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meetingID)
                 Menu {
-                    Button("Export Meeting Text…") { MeetingPanels.export(meeting, store: store) }
-                    Button("Archive to Server", systemImage: "icloud.and.arrow.up") { Task { await store.archiveToServer(id: meetingID) } }.disabled(!server.connected || store.isBusy || store.recordingID == meetingID)
-                } label: { Label("Export and Archive", systemImage: "square.and.arrow.up") }.help("Export meeting text or archive audio and meeting data to the server")
+                    Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription", systemImage: "text.bubble") { Task { await store.transcribe(id: meetingID) } }
+                        .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meetingID)
+                    Divider()
+                    Button("Export Meeting Text…", systemImage: "square.and.arrow.up") { MeetingPanels.export(meeting, store: store) }
+                    Button("Archive to Server", systemImage: "icloud.and.arrow.up") { Task { await store.archiveToServer(id: meetingID) } }
+                        .disabled(!server.connected || store.isBusy || store.recordingID == meetingID)
+                } label: { Label("Meeting Actions", systemImage: "ellipsis.circle") }
+                .help("Transcribe, export, or archive this meeting")
             }
-            .task(id: PlaybackSelection(meetingID: meetingID, audioFiles: meeting.audioFiles, track: selectedTrack, recording: store.recordingID == meetingID)) { await loadPlayer() }
-            .onDisappear { playbackGeneration = UUID(); releasePlayback() }
+            // Reading or editing a meeting never changes the app-owned playback.
+            .onAppear { if store.recordingID == meetingID { tab = 1 } }
+            .onChange(of: store.recordingID) { _, id in if id == meetingID { tab = 1 } }
         }
     }
+
+    private func meetingHeader(_ meeting: Meeting) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Meeting title", text: text(\.title))
+                .font(.largeTitle.weight(.semibold)).textFieldStyle(.plain)
+                .accessibilityLabel("Meeting title")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    meetingDate(meeting).fixedSize()
+                    Spacer(minLength: 8)
+                    associationsMenu
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    meetingDate(meeting)
+                    associationsMenu
+                }
+            }.font(.callout).foregroundStyle(.secondary)
+            if !meeting.personIDs.isEmpty || !meeting.tagIDs.isEmpty {
+                Text(associationSummary(meeting)).font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func meetingDate(_ meeting: Meeting) -> some View {
+        HStack(spacing: 10) {
+            Text(meeting.createdAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())
+            if meeting.duration > 0 && store.recordingID != meetingID {
+                Text(formatTime(meeting.duration)).monospacedDigit().accessibilityLabel("Duration \(formatTime(meeting.duration))")
+            }
+        }
+    }
+
+    private var associationsMenu: some View {
+        Menu {
+            Section("People") {
+                ForEach(store.people) { person in
+                    Toggle(person.name, isOn: Binding(get: { self.meeting?.personIDs.contains(person.id) ?? false }, set: { selected in change { if selected { $0.personIDs.append(person.id) } else { $0.personIDs.removeAll { $0 == person.id } } } }))
+                }
+                if store.people.isEmpty { Text("Add people in the sidebar") }
+            }
+            Section("Tags") {
+                ForEach(store.tags) { tag in
+                    Toggle(tag.name, isOn: Binding(get: { self.meeting?.tagIDs.contains(tag.id) ?? false }, set: { selected in change { if selected { $0.tagIDs.append(tag.id) } else { $0.tagIDs.removeAll { $0 == tag.id } } } }))
+                }
+                if store.tags.isEmpty { Text("Add tags in the sidebar") }
+            }
+        } label: { Label("People & Tags", systemImage: "person.2") }
+        .menuStyle(.borderlessButton).fixedSize()
+    }
+
+
+    private func recordingOverview(_ meeting: Meeting) -> some View {
+        // HIG Playing Audio: start playback only after an intentional action.
+        // Library browsing does not replace or pause the current recording.
+        // https://developer.apple.com/design/human-interface-guidelines/playing-audio
+        HStack(spacing: 14) {
+            Image(systemName: "waveform")
+                .font(.title2).foregroundStyle(.tint)
+                .frame(width: 52, height: 52)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Meeting Recording").font(.headline)
+                Text(audioSourceSummary(meeting)).font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button {
+                if playback.meetingID == meetingID { playback.togglePlayPause() }
+                else { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
+            } label: {
+                Label(playbackActionTitle, systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
+            .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "Listen to this meeting")
+        }
+        .padding(16)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var playbackActionTitle: String {
+        guard playback.meetingID == meetingID else { return "Play Recording" }
+        if playback.isLoading { return "Loading…" }
+        if playback.isPlaying { return "Pause" }
+        return playback.hasEnded ? "Play Again" : "Resume"
+    }
+
+    private func audioSourceSummary(_ meeting: Meeting) -> String {
+        let names = meeting.audioFiles.map { file in
+            file.hasPrefix("microphone") ? "Microphone" : file.hasPrefix("system") ? "System Audio" : "Imported Audio"
+        }
+        return names.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func meetingContent(_ meeting: Meeting) -> some View {
+        switch tab {
+        case 0: transcript(meeting)
+        case 1:
+            VStack(alignment: .leading, spacing: 10) {
+                if store.recordingID == meetingID {
+                    HStack {
+                        Text("Meeting Notes").font(.headline)
+                        Spacer()
+                        Text("Saved as you type").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                editor("Notes", binding: text(\.notes))
+            }
+        case 2:
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Summary").font(.headline)
+                    Spacer()
+                    Button(meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary", systemImage: "sparkles") { Task { await store.summarize(id: meetingID) } }
+                        .disabled(store.isBusy || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
+                }
+                editor("Summary", binding: text(\.summary))
+            }
+        case 3: todos(meeting)
+        default: chat(meeting)
+        }
+    }
+
     private func associationSummary(_ meeting: Meeting) -> String {
         let names: [String] = store.people.filter { meeting.personIDs.contains($0.id) }.map(\.name)
         let tags: [String] = store.tags.filter { meeting.tagIDs.contains($0.id) }.map { "#" + $0.name }
         return (names + tags).joined(separator: " · ")
-    }
-    @MainActor
-    private func loadPlayer() async {
-        let generation = UUID()
-        playbackGeneration = generation
-        let previousTime = player?.currentTime() ?? .zero
-        releasePlayback()
-        loadingPlayback = false
-        guard let meeting, store.recordingID != meetingID else { return }
-        let files = store.audioURLs(for: meeting)
-        guard !files.isEmpty else { return }
-        loadingPlayback = true
-        defer { if playbackGeneration == generation { loadingPlayback = false } }
-        var preparedTemporaryURLs: [URL] = []
-        var transferredOwnership = false
-        defer {
-            if !transferredOwnership {
-                for url in preparedTemporaryURLs { try? FileManager.default.removeItem(at: url) }
-            }
-        }
-        do {
-            let item: AVPlayerItem
-            if selectedTrack >= 0 || files.count == 1 {
-                let index = min(max(0, selectedTrack), files.count - 1)
-                let prepared = try await AudioPlaybackPreparation.prepare(files[index])
-                if prepared.temporary { preparedTemporaryURLs.append(prepared.url) }
-                try Task.checkCancellation()
-                item = AVPlayerItem(url: prepared.url)
-            } else {
-                // Simultaneous capture tracks share a zero origin. Native AVFoundation
-                // composition mixes them so listening includes every participant.
-                let composition = AVMutableComposition()
-                for file in files {
-                    try Task.checkCancellation()
-                    let prepared = try await AudioPlaybackPreparation.prepare(file)
-                    if prepared.temporary { preparedTemporaryURLs.append(prepared.url) }
-                    try Task.checkCancellation()
-                    let asset = AVURLAsset(url: prepared.url)
-                    let tracks = try await asset.loadTracks(withMediaType: .audio)
-                    let duration = try await asset.load(.duration)
-                    guard duration.isNumeric, CMTimeCompare(duration, .zero) > 0 else { continue }
-                    for source in tracks {
-                        guard let destination = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-                            throw MeetingError.message("Unable to prepare audio playback.")
-                        }
-                        try destination.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: source, at: .zero)
-                    }
-                }
-                guard !composition.tracks.isEmpty else { throw MeetingError.message("The recording has no playable audio tracks.") }
-                item = AVPlayerItem(asset: composition)
-            }
-            try Task.checkCancellation()
-            guard playbackGeneration == generation, store.recordingID != meetingID else { return }
-            let newPlayer = AVPlayer(playerItem: item)
-            if previousTime.isNumeric { await newPlayer.seek(to: previousTime) }
-            try Task.checkCancellation()
-            guard playbackGeneration == generation, store.recordingID != meetingID else { return }
-            playbackTemporaryURLs = preparedTemporaryURLs
-            player = newPlayer
-            transferredOwnership = true
-        } catch is CancellationError {
-            // Switching tracks or meetings cancels preparation without an alert.
-        } catch {
-            guard !Task.isCancelled, playbackGeneration == generation else { return }
-            store.errorMessage = "Unable to load meeting audio: " + error.localizedDescription
-        }
-    }
-    @MainActor
-    private func releasePlayback() {
-        player?.pause()
-        player?.replaceCurrentItem(with: nil)
-        player = nil
-        for url in playbackTemporaryURLs { try? FileManager.default.removeItem(at: url) }
-        playbackTemporaryURLs = []
     }
     private func editor(_ label: String, binding: Binding<String>) -> some View {
         // HIG accessibility: standard editable text, semantic fonts and system colors
         // respect contrast and assistive technologies without custom event handling.
         // https://developer.apple.com/design/human-interface-guidelines/accessibility
         TextEditor(text: binding).font(.body).accessibilityLabel(label)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
+            .padding(8).background(.background, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor).opacity(0.6)))
     }
     private func transcript(_ meeting: Meeting) -> some View {
         VStack(alignment: .leading) {
@@ -202,7 +211,7 @@ struct MeetingDetailView: View {
                     ForEach(meeting.transcript) { segment in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Button(formatTime(segment.start)) { player?.seek(to: CMTime(seconds: segment.start, preferredTimescale: 600)); player?.play() }.buttonStyle(.link).help("Play from this point").disabled(player == nil || store.recordingID == meetingID)
+                                Button(formatTime(segment.start)) { playback.play(meeting: meeting, files: store.audioURLs(for: meeting), at: segment.start) }.buttonStyle(.link).monospacedDigit().help("Play from this point").disabled(playback.isPlaybackBlocked || store.audioURLs(for: meeting).isEmpty)
                                 TextField("Speaker", text: Binding(get: { self.meeting?.transcript.first(where: { $0.id == segment.id })?.speaker ?? "" }, set: { value in change { meeting in if let index = meeting.transcript.firstIndex(where: { $0.id == segment.id }) { meeting.transcript[index].speaker = value } } })).font(.headline).textFieldStyle(.plain)
                             }
                             TextField("Transcript", text: Binding(get: { self.meeting?.transcript.first(where: { $0.id == segment.id })?.text ?? "" }, set: { value in change { meeting in if let index = meeting.transcript.firstIndex(where: { $0.id == segment.id }) { meeting.transcript[index].text = value } } }), axis: .vertical).textFieldStyle(.plain)
@@ -210,9 +219,21 @@ struct MeetingDetailView: View {
                         }
                     }
                 }.padding(4)
-            }.overlay { if meeting.transcript.isEmpty { ContentUnavailableView("No Transcript", systemImage: "text.bubble", description: Text("Record or import audio, then choose Transcribe. Configure your transcription service in Settings.")) } }
+            }.overlay { if meeting.transcript.isEmpty { emptyTranscript(meeting) } }
         }
     }
+    private func emptyTranscript(_ meeting: Meeting) -> some View {
+        ContentUnavailableView {
+            Label("Your conversation, in words", systemImage: "text.bubble")
+        } description: {
+            Text(store.recordingID == meetingID ? "Take notes while recording. Transcription is available after the audio is saved." : "Create a searchable transcript with speaker labels from your recording.")
+        } actions: {
+            if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {
+                Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription") { Task { await store.transcribe(id: meetingID) } }.disabled(store.isBusy)
+            }
+        }
+    }
+
     private func todos(_ meeting: Meeting) -> some View {
         VStack {
             HStack {
@@ -262,13 +283,4 @@ struct MeetingDetailView: View {
     }
 }
 
-private struct PlaybackSelection: Hashable { let meetingID: UUID; let audioFiles: [String]; let track: Int; let recording: Bool }
-
 private func formatTime(_ seconds: Double) -> String { let value = seconds.isFinite ? max(0, Int(min(seconds, Double(Int.max / 2)))) : 0; return String(format: "%d:%02d", value / 60, value % 60) }
-
-// AVKit's native controls provide standard playback shortcuts and accessibility.
-struct AudioPlaybackView: NSViewRepresentable {
-    let player: AVPlayer
-    func makeNSView(context: Context) -> AVPlayerView { let view = AVPlayerView(); view.controlsStyle = .inline; view.player = player; return view }
-    func updateNSView(_ view: AVPlayerView, context: Context) { view.player = player }
-}

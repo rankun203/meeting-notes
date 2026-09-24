@@ -6,12 +6,16 @@ private enum LibraryDestination: Hashable { case meetings, people, tags, server 
 
 struct LibraryView: View {
     @EnvironmentObject private var store: MeetingStore
+    @EnvironmentObject private var playback: MeetingPlayback
     @ViewState private var destination: LibraryDestination? = .meetings
     @ViewState private var selectedMeeting: UUID?
     @ViewState private var selectedPerson: UUID?
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @ViewState private var deleting: Meeting?
+
+    private var recordingActive: Bool { store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording }
+    private func showMeeting(_ id: UUID) { selectedMeeting = id; destination = .meetings }
 
     private var filteredMeetings: [Meeting] {
         store.meetings.filter { meeting in
@@ -22,7 +26,12 @@ struct LibraryView: View {
     private var emptyMeetings: some View {
         let title = search.isEmpty ? "No Meetings" : "No Results"
         let description = search.isEmpty ? "Record a meeting or import audio to get started." : "Try another search."
-        return ContentUnavailableView { Label(title, systemImage: "waveform") } description: { Text(description) }
+        return ContentUnavailableView { Label(title, systemImage: "waveform") } description: { Text(description) } actions: {
+            if search.isEmpty {
+                Button("New Recording") { store.presentsRecordingSetup = true }
+                    .disabled(store.isBusy || recordingActive)
+            }
+        }
     }
 
     var body: some View {
@@ -50,11 +59,19 @@ struct LibraryView: View {
                             HStack {
                                 Text(meeting.title).font(.headline).lineLimit(1)
                                 if store.recordingID == meeting.id { Label(store.isFinalizingRecording ? "Saving audio" : "Recording", systemImage: store.isFinalizingRecording ? "externaldrive" : "record.circle").foregroundStyle(store.isFinalizingRecording ? Color.secondary : Color.red).labelStyle(.iconOnly) }
+                                else if playback.meetingID == meeting.id { Image(systemName: playback.isPlaying ? "speaker.wave.2.fill" : "pause.circle").foregroundStyle(.tint).accessibilityLabel(playback.isPlaying ? "Playing" : "Playback paused") }
                             }
-                            Text(meeting.createdAt, format: .dateTime.month().day().hour().minute()).font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                Text(meeting.createdAt, format: .dateTime.month().day().hour().minute())
+                                if meeting.duration > 0 { Text("·"); Text(playbackTime(meeting.duration)).monospacedDigit() }
+                            }.font(.caption).foregroundStyle(.secondary)
                             if !meeting.summary.isEmpty { Text(meeting.summary).lineLimit(2).font(.caption).foregroundStyle(.secondary) }
                         }.padding(.vertical, 4).tag(meeting.id)
                         .contextMenu {
+                            if !meeting.audioFiles.isEmpty {
+                                Button("Play Recording", systemImage: "play.fill") { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
+                                    .disabled(recordingActive)
+                            }
                             Button("Export Meeting…") { MeetingPanels.export(meeting, store: store) }
                             Button("Delete Meeting…", role: .destructive) { deleting = meeting }
                                 .disabled(store.recordingID == meeting.id)
@@ -76,7 +93,15 @@ struct LibraryView: View {
             } else if destination == .tags, let id = selectedTag, let tag = store.tags.first(where: { $0.id == id }) {
                 ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
             } else {
-                ContentUnavailableView("Gday Meetings", systemImage: "waveform", description: Text("Your recordings, transcripts, and meeting notes in one place."))
+                ContentUnavailableView {
+                    Label("Room for the conversation", systemImage: "waveform")
+                } description: {
+                    Text("Record a meeting, capture the important details, and return to any moment.")
+                } actions: {
+                    Button("New Recording", systemImage: "record.circle") { store.presentsRecordingSetup = true }
+                        .buttonStyle(.borderedProminent).disabled(store.isBusy || recordingActive)
+                    Button("Import Audio…") { MeetingPanels.importAudio(store) }.disabled(store.isBusy)
+                }
             }
         }
         // HIG: toolbar actions apply to the current content and use familiar symbols.
@@ -89,46 +114,51 @@ struct LibraryView: View {
                     }
                 } label: { Label("Open Meetings Folder", systemImage: "folder") }
                     .help("Open the meetings storage folder in Finder")
-                Button { selectedMeeting = store.createMeeting(title: "Untitled Meeting"); destination = .meetings } label: { Label("New Meeting", systemImage: "square.and.pencil") }.help("Create a meeting")
-                Button { MeetingPanels.importAudio(store) } label: { Label("Import Audio", systemImage: "square.and.arrow.down") }.help("Import an audio or video file")
                 Button {
-                    Task {
-                        if store.recordingID == nil { await store.startRecording(); selectedMeeting = store.recordingID; destination = .meetings }
-                        else { await store.stopRecording() }
-                    }
-                } label: { Label(store.recordingID == nil ? "Record" : "Stop Recording", systemImage: store.recordingID == nil ? "record.circle" : "stop.circle.fill") }
-                    .tint(store.recordingID == nil ? nil : .red).help(store.recordingID == nil ? "Start recording" : "Stop and save recording")
-                    .disabled(store.isFinalizingRecording)
+                    if let id = store.recordingID { showMeeting(id) }
+                    else { store.presentsRecordingSetup = true }
+                } label: { Label(store.isFinalizingRecording ? "Saving…" : recordingActive ? "Recording" : "New Recording", systemImage: "record.circle.fill") }
+                    .labelStyle(.titleAndIcon).tint(.red)
+                    .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
+                    .disabled(store.isStartingRecording || store.isFinalizingRecording || (store.isBusy && store.recordingID == nil))
+                Button { MeetingPanels.importAudio(store) } label: { Label("Import", systemImage: "square.and.arrow.down") }
+                    .help("Import an audio or video file").disabled(store.isBusy)
+                Menu {
+                    Button("New Meeting Notes", systemImage: "square.and.pencil") { showMeeting(store.createMeeting(title: "Untitled Meeting")) }
+                    Divider()
+                    Button("Import Existing Gday Library…") { MeetingPanels.importLegacy(store) }
+                    Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
+                } label: { Label("Library Actions", systemImage: "ellipsis") }
+                .help("New notes and library imports").disabled(store.isBusy)
             }
         }
-        // HIG Feedback: show ongoing capture status passively, close to the content.
-        // Critical capture actions remain in the toolbar, never only at the bottom.
+        // HIG Feedback: keep the activity visible while people browse other content.
+        // A single persistent transport replaces scattered status and action rows.
         // https://developer.apple.com/design/human-interface-guidelines/feedback
-        .safeAreaInset(edge: .top) {
-            if store.recordingID != nil && !store.captureHealth.isEmpty {
-                HStack(alignment: .top) {
-                    Label(store.captureHealth, systemImage: "waveform")
-                        .font(.callout).textSelection(.enabled)
-                    Spacer()
-                }.padding(10).background(.bar)
-            }
-        }
         .safeAreaInset(edge: .bottom) {
-            if store.isBusy || !store.statusMessage.isEmpty || store.recordingID != nil {
-                HStack(spacing: 8) {
-                    if store.isBusy { ProgressView().controlSize(.small) }
-                    if store.recordingID != nil && !store.isFinalizingRecording { Label("Recording", systemImage: "record.circle.fill").foregroundStyle(.red) }
-                    Text(store.statusMessage).font(.caption).lineLimit(2)
-                    Spacer()
-                }.padding(8).background(.bar)
+            VStack(spacing: 0) {
+                if recordingActive && (store.isStartingRecording || destination != .meetings || selectedMeeting != store.recordingID) { recordingStrip }
+                else if playback.hasSelection && !recordingActive { MeetingPlayerBar(showMeeting: showMeeting) }
+                else if !recordingActive && (store.isBusy || !store.statusMessage.isEmpty) {
+                    HStack(spacing: 8) {
+                        if store.isBusy { ProgressView().controlSize(.small) }
+                        Text(store.statusMessage).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Spacer()
+                    }.padding(.horizontal, 16).padding(.vertical, 8).background(.bar)
+                }
             }
         }
-        .alert("Unable to Complete Action", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
+        .sheet(isPresented: $store.presentsRecordingSetup) {
+            RecordingSetupView(onStarted: showMeeting).environmentObject(store)
+        }
+        .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
+        .alert("Unable to Complete Action", isPresented: Binding(get: { store.errorMessage != nil && !store.presentsRecordingSetup }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
-        .alert(store.recordingPermissionNeeded?.title ?? "Recording Access Needed", isPresented: Binding(get: { store.recordingPermissionNeeded != nil }, set: { if !$0 { store.recordingPermissionNeeded = nil } })) {
+        .alert(store.recordingPermissionNeeded?.title ?? "Recording Access Needed", isPresented: Binding(get: { store.recordingPermissionNeeded != nil && !store.presentsRecordingSetup }, set: { if !$0 { store.recordingPermissionNeeded = nil } })) {
             Button("Request Access Again") {
-                Task { await store.startRecording(); selectedMeeting = store.recordingID; destination = .meetings }
+                store.recordingPermissionNeeded = nil
+                store.presentsRecordingSetup = true
             }
             Button("Cancel", role: .cancel) { store.recordingPermissionNeeded = nil }
         } message: {
@@ -137,6 +167,35 @@ struct LibraryView: View {
         .confirmationDialog("Delete \(deleting?.title ?? "meeting")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("Delete Meeting", role: .destructive) { if let meeting = deleting { store.deleteMeeting(id: meeting.id); if selectedMeeting == meeting.id { selectedMeeting = nil } }; deleting = nil }
         } message: { Text("This deletes the meeting and its saved audio. This cannot be undone.") }
+    }
+
+    private var recordingStrip: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 14) {
+                if store.isStartingRecording || store.isFinalizingRecording { ProgressView().controlSize(.small) }
+                else { Image(systemName: "record.circle.fill").foregroundStyle(.red).font(.title2).accessibilityHidden(true) }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(store.isStartingRecording ? "Preparing Recording" : store.isFinalizingRecording ? "Saving Recording" : "Recording")
+                        .font(.callout.weight(.semibold))
+                    if let id = store.recordingID, let meeting = store.meetings.first(where: { $0.id == id }) {
+                        Button(meeting.title) { showMeeting(id) }.buttonStyle(.plain).font(.caption).foregroundStyle(.secondary).lineLimit(1).help("Return to this recording")
+                    } else { Text("Complete the macOS audio consent prompt.").font(.caption).foregroundStyle(.secondary) }
+                }
+                if let started = store.recordingStartedAt {
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        let elapsed = store.isFinalizingRecording ? (store.meetings.first { $0.id == store.recordingID }?.duration ?? 0) : timeline.date.timeIntervalSince(started)
+                        Text(playbackTime(elapsed)).font(.title3).monospacedDigit().accessibilityLabel("Recording duration \(playbackTime(elapsed))")
+                    }
+                }
+                Spacer(minLength: 12)
+                if let id = store.recordingID {
+                    Button("Show Recording") { showMeeting(id) }
+                    Button("Stop & Save", systemImage: "stop.fill") { Task { await store.stopRecording() } }
+                        .buttonStyle(.borderedProminent).tint(.red).disabled(store.isFinalizingRecording)
+                }
+            }.padding(.horizontal, 20).padding(.vertical, 12)
+        }.background(.bar)
     }
 }
 

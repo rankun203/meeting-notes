@@ -195,10 +195,16 @@ private struct RecordingSourceMeter: View {
     let saving: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Label(title, systemImage: symbol).font(.subheadline.weight(.medium))
-                Spacer()
-                Text(saving ? (source.enabled ? "Finalizing" : "Not recorded") : source.statusText).font(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    sourceLabel.fixedSize()
+                    Spacer(minLength: 6)
+                    statusLabel.fixedSize()
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    sourceLabel
+                    statusLabel
+                }
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
@@ -211,5 +217,10 @@ private struct RecordingSourceMeter: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(saving ? "Finalizing" : (source.enabled && source.hasSamples && !source.stale ? "\(source.statusText), \(Int(source.rmsDB)) decibels" : source.statusText))
+    }
+
+    private var sourceLabel: some View { Label(title, systemImage: symbol).font(.subheadline.weight(.medium)) }
+    private var statusLabel: some View {
+        Text(saving ? (source.enabled ? "Finalizing" : "Not recorded") : source.statusText).font(.caption).foregroundStyle(.secondary)
     }
 }

@@ -1,0 +1,126 @@
+import SwiftUI
+
+/// HIG Playing Audio: familiar transport controls stay available while people
+/// navigate and work. The app owns playback; this view only presents its state.
+/// https://developer.apple.com/design/human-interface-guidelines/playing-audio
+struct MeetingPlayerBar: View {
+    @EnvironmentObject private var playback: MeetingPlayback
+    let showMeeting: (UUID) -> Void
+    @ViewState private var isScrubbing = false
+    @ViewState private var scrubTime: Double = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 20) {
+                Button {
+                    if let id = playback.meetingID { showMeeting(id) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "waveform")
+                            .font(.title2).foregroundStyle(.tint)
+                            .frame(width: 44, height: 44)
+                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(playback.title).font(.callout.weight(.semibold)).lineLimit(1)
+                            Text(playback.isLoading ? "Preparing audio…" : playback.isPlaying ? "Now Playing" : playback.hasEnded ? "Finished" : "Paused")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(minWidth: 150, idealWidth: 220, maxWidth: 260)
+                .help("Show the meeting that is playing")
+                .accessibilityLabel("Show meeting: \(playback.title)")
+
+                HStack(spacing: 9) {
+                    transportButton("Back 15 Seconds", symbol: "gobackward.15") { playback.skip(by: -15) }
+                    Button { playback.togglePlayPause() } label: {
+                        Group {
+                            if playback.isLoading { ProgressView().controlSize(.small) }
+                            else { Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.title2) }
+                        }.frame(width: 38, height: 38).contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
+                    .help(playback.isPlaying ? "Pause playback" : "Play recording")
+                    .disabled(playback.isPlaybackBlocked || playback.isLoading)
+                    transportButton("Forward 15 Seconds", symbol: "goforward.15") { playback.skip(by: 15) }
+                }
+
+                VStack(spacing: 4) {
+                    Slider(value: Binding(get: { isScrubbing ? scrubTime : playback.currentTime }, set: {
+                        scrubTime = $0
+                        if !isScrubbing { playback.seek(to: $0) }
+                    }),
+                           in: 0...max(0.01, playback.duration),
+                           onEditingChanged: { editing in
+                               if editing { scrubTime = playback.currentTime; isScrubbing = true }
+                               else { isScrubbing = false; playback.seek(to: scrubTime) }
+                           })
+                        .controlSize(.small)
+                        .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                        .accessibilityLabel("Playback position")
+                        .accessibilityValue("\(playbackTime(isScrubbing ? scrubTime : playback.currentTime)) of \(playbackTime(playback.duration))")
+                    HStack {
+                        Text(playbackTime(isScrubbing ? scrubTime : playback.currentTime))
+                        Spacer()
+                        Text("−" + playbackTime(max(0, playback.duration - (isScrubbing ? scrubTime : playback.currentTime))))
+                    }.font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                }.frame(minWidth: 130, maxWidth: .infinity)
+
+                HStack(spacing: 10) {
+                    Menu {
+                        Picker("Playback Speed", selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })) {
+                            ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in Text("\(rate.formatted())×").tag(rate) }
+                        }
+                    } label: { Text("\(playback.playbackRate.formatted())×").monospacedDigit() }
+                    .menuStyle(.borderlessButton).fixedSize()
+                    .accessibilityLabel("Playback speed")
+                    .help("Playback speed")
+
+                    Menu {
+                        Picker("Audio Track", selection: Binding(get: { playback.selectedTrack }, set: { playback.selectTrack($0) })) {
+                            Text("All Tracks").tag(-1)
+                            ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in Text(name).tag(index) }
+                        }
+                        Divider()
+                        Button("Close Player", systemImage: "xmark") { playback.clear() }
+                    } label: { Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1) }
+                    .menuStyle(.borderlessButton).frame(maxWidth: 140)
+                    .accessibilityLabel("Audio track and player options")
+                    .accessibilityValue(selectedTrackName)
+                    .help("Choose microphone, system audio, or all tracks")
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            if let error = playback.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.bottom, 10)
+            }
+        }
+        .background(.bar)
+        .onChange(of: playback.meetingID) { _, _ in isScrubbing = false }
+    }
+
+    private var selectedTrackName: String {
+        playback.trackNames.indices.contains(playback.selectedTrack) ? playback.trackNames[playback.selectedTrack] : "All Tracks"
+    }
+
+    private func transportButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).font(.title3).frame(width: 30, height: 34).contentShape(Rectangle()) }
+            .buttonStyle(.plain).accessibilityLabel(title).help(title)
+            .disabled(playback.isLoading || playback.isPlaybackBlocked || playback.duration <= 0)
+    }
+}
+
+func playbackTime(_ seconds: Double) -> String {
+    guard seconds.isFinite else { return "0:00" }
+    let total = Int(max(0, min(seconds, Double(Int.max / 2))))
+    if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, total / 60 % 60, total % 60) }
+    return String(format: "%d:%02d", total / 60, total % 60)
+}

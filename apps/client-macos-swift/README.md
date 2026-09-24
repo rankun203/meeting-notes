@@ -32,13 +32,13 @@ Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme 
 ## Native workflows
 
 - Search your local meeting titles, notes, summaries and transcripts.
-- Record microphone and system audio as separate tracks, or import existing audio/video using the standard file picker.
-- Play all tracks together or individual tracks using native AVKit controls; select transcript timestamps to seek.
+- Choose **New Recording** to name the meeting and select microphone/system sources. During capture, take notes beside real source meters, an elapsed timer, and **Stop & Save**. Recording controls remain available when browsing elsewhere.
+- Play all tracks together or individual tracks in the persistent player. Continue browsing, searching, and editing other meetings while listening; use 15-second skips, speed selection, the scrubber, or transcript timestamps. Starting a recording pauses playback; it resumes only when you choose Play.
 - Edit transcripts, rename speakers, write notes, and generate/edit summaries and action items.
 - Organize meetings with people and tags, and chat using meeting, person or tag context.
 - Configure a Gday Meetings server with browser-based OAuth sign-in, or use an OpenAI-compatible transcription endpoint. Summaries and chat use a separately configured OpenAI-compatible language model.
 - Export meeting text as JSON or Markdown, import text archives, or copy recordings from the Rust client's library using **File → Import Existing Gday Library**. JSON text exports do not embed audio.
-- Search server meetings and import their transcript text, or use **Export and Archive → Archive to Server** to retain a verified server snapshot of a local meeting and its audio.
+- Search server meetings and import their transcript text, or use **Meeting Actions → Archive to Server** to retain a verified server snapshot of a local meeting and its audio.
 - Use the menu bar recording controls, **Command-N** for a meeting, **Command-O** for audio import, **Command-Shift-R** for recording, and **Command-comma** for Settings.
 
 Server transcription checkpoints its upload inputs, stable attempt key, and task ID locally. If the app exits or a request fails, choose **Resume Transcription** to check the same durable job. The server and worker run separately; installing this client does not install them. A working server must have a worker configured before it can transcribe.
@@ -76,6 +76,9 @@ The source cites the relevant Apple HIG principles beside the controls implement
 | [Settings](https://developer.apple.com/design/human-interface-guidelines/settings) | Standard Settings scene with grouped recording, transcription, and intelligence options. |
 | [Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility) | Native controls, semantic fonts/colors, accessible labels, keyboard navigation, and text selection. |
 | [Privacy](https://developer.apple.com/design/human-interface-guidelines/privacy) | Just-in-time recording permission requests and browser authentication. |
+| [Sheets](https://developer.apple.com/design/human-interface-guidelines/sheets) | Focused recording setup with draft choices, explicit start/cancel, and inline retry errors. |
+| [Feedback](https://developer.apple.com/design/human-interface-guidelines/feedback) | Actual source levels and distinct recording/saving states without invented progress. |
+| [Playing audio](https://developer.apple.com/design/human-interface-guidelines/playing-audio) | App-owned persistent transport; browsing never implicitly starts or replaces playback. |
 | [Designing for macOS](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos) | Resizable windows, standard file panels, menu commands, and familiar keyboard shortcuts. |
 
 `ViewState` is an alias of the original `SwiftUI.State` property wrapper. SDK 27 also declares a `State` macro whose plugin is absent from this Command Line Tools installation; the alias avoids that optional macro dependency without changing SwiftUI state behavior.
