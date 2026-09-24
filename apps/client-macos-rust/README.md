@@ -153,4 +153,6 @@ bash scripts/build-macos.sh
 bash scripts/run-macos.sh --port 8080
 ```
 
-Finder launches without arguments default to `serve --web-ui --open`. Explicit CLI arguments retain their usual behavior. The app currently uses the browser UI and runs in the background; closing the browser does not stop it. Use Activity Monitor to quit an installed copy, or `make stop` for the development copy. Ordinary CLI invocation still requires a subcommand.
+Finder launches without arguments default to `serve --web-ui --open`. The app adds a waveform icon to the macOS menu bar, with **Open Gday Meetings**, **Status**, **Show Logs**, and **Quit Gday Meetings**. Open uses the currently assigned port. Status shows Starting, Ready, Recording (with a count and a dot beside the icon), or Stopping. Quit finalizes active recordings and shuts down the local server before removing the icon.
+
+The app uses the browser UI and has no Dock icon or separate window; closing the browser does not stop it. Both Finder and `make start` run the menu bar shell. An ordinary CLI binary stays terminal-only and requires a subcommand; Ctrl+C and `make stop` retain their graceful shutdown behavior.

@@ -45,3 +45,5 @@ objc2-foundation = { version = "0.2", features = ["NSArray", "NSString", "NSNoti
 block2 = "0.5"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+tray-icon = { version = "0.25.1", default-features = false }
+winit = { version = "0.30", default-features = false }

@@ -1,8 +1,8 @@
 //! macOS events used by recording auto-stop.
 //!
 //! Screen lock is detected from the current Core Graphics session state. A
-//! short polling interval is used because this daemon has no AppKit main event
-//! loop, making distributed lock notifications unreliable. System sleep uses
+//! short polling interval also supports CLI launches without an AppKit main
+//! event loop, where distributed lock notifications are unreliable. System sleep uses
 //! the I/O Kit root power domain so acknowledgement can be delayed briefly
 //! while audio writers finalize.
 

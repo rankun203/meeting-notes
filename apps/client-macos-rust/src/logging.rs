@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-fn log_directory() -> Result<PathBuf, String> {
+pub fn log_directory() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("GDAY_MEETINGS_LOG_DIR") {
         if !path.is_empty() {
             return Ok(path.into());

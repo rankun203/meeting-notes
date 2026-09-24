@@ -3,6 +3,18 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use tracing::info;
+use tokio_util::sync::CancellationToken;
+
+#[cfg(target_os = "macos")]
+mod desktop;
+
+#[derive(Clone, Debug)]
+enum DesktopStatus {
+    Ready { url: Option<String>, recordings: usize },
+    Stopping,
+}
+type StatusCallback = std::sync::Arc<dyn Fn(DesktopStatus) + Send + Sync>;
+
 
 use gday_meetings_client::chat::manager::ConversationManager;
 use gday_meetings_client::filesdb::FilesDb;
@@ -86,23 +98,25 @@ enum Commands {
     },
 }
 
-fn parse_cli(mut args: Vec<OsString>, executable: &Path) -> Result<Cli, clap::Error> {
-    // Finder supplies no subcommand. Keep ordinary CLI invocation unchanged.
+fn is_app_bundle(executable: &Path) -> bool {
     let macos = executable.parent();
     let contents = macos.and_then(Path::parent);
     let bundle = contents.and_then(Path::parent);
-    let in_app = cfg!(target_os = "macos")
+    cfg!(target_os = "macos")
         && macos.and_then(Path::file_name).is_some_and(|name| name == "MacOS")
         && contents.and_then(Path::file_name).is_some_and(|name| name == "Contents")
-        && bundle.and_then(Path::extension).is_some_and(|extension| extension == "app");
-    if in_app && args.len() == 1 {
+        && bundle.and_then(Path::extension).is_some_and(|extension| extension == "app")
+}
+
+fn parse_cli(mut args: Vec<OsString>, executable: &Path) -> Result<Cli, clap::Error> {
+    // Finder supplies no subcommand. Keep ordinary CLI invocation unchanged.
+    if is_app_bundle(executable) && args.len() == 1 {
         args.extend(["serve", "--web-ui", "--open"].map(OsString::from));
     }
     Cli::try_parse_from(args)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     install_signal_handlers();
 
     let cli = parse_cli(
@@ -113,6 +127,17 @@ async fn main() {
 
     gday_meetings_client::logging::init();
 
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()
+        .expect("could not start async runtime");
+    #[cfg(target_os = "macos")]
+    if is_app_bundle(&std::env::current_exe().unwrap_or_default()) {
+        desktop::run(cli, &runtime);
+        return;
+    }
+    runtime.block_on(serve(cli, CancellationToken::new(), None));
+}
+
+async fn serve(cli: Cli, shutdown: CancellationToken, notify: Option<StatusCallback>) {
     match cli.command {
         Commands::Serve { port, host, data_dir, web_ui, open_browser } => {
             info!("Gday Meetings daemon starting on port {}...", port);
@@ -231,6 +256,7 @@ async fn main() {
             let claude_runner = gday_meetings_client::llm::claude_code::ClaudeCodeRunner::new(&data_dir);
 
             let shutdown_manager = manager.clone();
+            let status_manager = manager.clone();
             let app = server::create_router(
                 manager, people_manager, shared_settings, files_db, tags_manager,
                 conversation_manager, shared_secrets, claude_runner, web_ui, gday_auth.clone(),
@@ -242,11 +268,37 @@ async fn main() {
             if web_ui {
                 info!("Web UI available at http://{}", addr);
             }
+            let mut browser_addr = addr;
+            if browser_addr.ip().is_unspecified() {
+                browser_addr.set_ip(if browser_addr.is_ipv4() {
+                    std::net::Ipv4Addr::LOCALHOST.into()
+                } else {
+                    std::net::Ipv6Addr::LOCALHOST.into()
+                });
+            }
+            let browser_url = format!("http://{browser_addr}");
+            if let Some(notify) = notify.clone() {
+                let status_shutdown = shutdown.clone();
+                let url = web_ui.then(|| browser_url.clone());
+                tokio::spawn(async move {
+                    let mut previous = None;
+                    loop {
+                        let recordings = status_manager.recording_session_ids().await.len();
+                        if previous != Some(recordings) {
+                            notify(DesktopStatus::Ready { url: url.clone(), recordings });
+                            previous = Some(recordings);
+                        }
+                        tokio::select! {
+                            _ = status_shutdown.cancelled() => break,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                        }
+                    }
+                });
+            }
             if open_browser {
                 #[cfg(target_os = "macos")]
                 {
-                    let browser_host = if host == "0.0.0.0" { "127.0.0.1" } else { &host };
-                    let url = format!("http://{}:{}", browser_host, addr.port());
+                    let url = browser_url;
                     tokio::spawn(async move {
                         match tokio::process::Command::new("/usr/bin/open").arg(&url).status().await {
                             Ok(status) if status.success() => {}
@@ -262,8 +314,13 @@ async fn main() {
             // so audio writers can finalize (write trailing OGG pages, flush
             // BufWriters) before the process exits.
             let shutdown_signal = async move {
-                wait_for_shutdown_signal().await;
-                info!("Shutdown signal received — stopping active recordings (press again to force quit)");
+                tokio::select! {
+                    _ = shutdown.cancelled() => {},
+                    _ = wait_for_shutdown_signal() => {},
+                }
+                shutdown.cancel();
+                if let Some(notify) = notify { notify(DesktopStatus::Stopping); }
+                info!("Shutdown requested — stopping active recordings (press again to force quit)");
 
                 // A second signal force-exits even if a Core Audio call or an
                 // in-flight request is wedged.
@@ -306,6 +363,32 @@ async fn main() {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn desktop_reports_bound_url_and_quits_through_graceful_shutdown() {
+        let directory = std::env::temp_dir().join(format!("gday-desktop-{}", uuid::Uuid::new_v4()));
+        let cli = Cli { command: Commands::Serve {
+            port: 0, host: "127.0.0.1".into(), data_dir: Some(directory.clone()),
+            web_ui: true, open_browser: false,
+        }};
+        let shutdown = CancellationToken::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(serve(cli, shutdown.clone(), Some(std::sync::Arc::new(move |status| {
+            let _ = sender.send(status);
+        }))));
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), receiver.recv()).await.unwrap().unwrap();
+        let DesktopStatus::Ready { url: Some(url), recordings: 0 } = status else {
+            panic!("expected ready state with a browser URL");
+        };
+        assert!(!url.ends_with(":0"));
+        let response = reqwest::get(format!("{url}/api/sessions")).await.unwrap();
+        assert!(response.status().is_success());
+        shutdown.cancel();
+        assert!(matches!(receiver.recv().await, Some(DesktopStatus::Stopping)));
+        tokio::time::timeout(std::time::Duration::from_secs(10), task).await.unwrap().unwrap();
+        assert!(reqwest::get(url).await.is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     #[cfg(target_os = "macos")]
