@@ -1,5 +1,7 @@
 # Gday Meetings
 
+<img src="docs/branding/gday-meetings-koala.png" alt="Gday Meetings koala holding chat bubbles" width="128" />
+
 Gday Meetings has three independently runnable components: a native **client**, a **server** for users and meeting storage, and an audio-processing **worker**. They share this repository so their HTTP contracts and deployment instructions stay together. Each has its own dependencies and release lifecycle.
 
 | Component | Source | Runs where | Responsibility |

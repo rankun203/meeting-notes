@@ -1,6 +1,7 @@
 export default function Home() {
   return (
     <main>
+      <img src="/gday-meetings.png" alt="Gday Meetings koala" width={96} height={96} />
       <p className="eyebrow">GDAY MEETINGS / SERVER</p>
       <h1>
         Every meeting.

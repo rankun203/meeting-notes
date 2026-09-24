@@ -10,7 +10,10 @@ export function Sidebar({ sessions, total, offset, selectedId, onSelect, onPageC
     className: 'flex-shrink-0 px-4 py-3 md:py-4 border-b border-gray-100 dark:border-gray-800',
     children: jsxs('div', { className: 'flex flex-col gap-2', children: [
       jsxs('div', { className: 'flex items-center justify-between', children: [
-        jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Gday Meetings' }),
+        jsxs('div', { className: 'flex items-center gap-2', children: [
+          jsx('img', { src: '/gday-meetings.png', alt: '', width: 32, height: 32 }),
+          jsx('h1', { className: 'text-sm font-semibold tracking-tight', children: 'Gday Meetings' }),
+        ]}),
         jsx('button', {
           onClick: () => {
             const recording = sessions.find(s => s.state === 'recording');

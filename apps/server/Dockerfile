@@ -21,6 +21,7 @@ LABEL org.opencontainers.image.source="https://github.com/rankun203/meeting-note
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000 DATA_DIR=/app/data
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 VOLUME /app/data

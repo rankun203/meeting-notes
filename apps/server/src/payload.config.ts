@@ -31,7 +31,16 @@ export default buildConfig({
   serverURL: env.SERVER_URL,
   admin: {
     user: 'users',
-    meta: { titleSuffix: ' · Gday Meetings Server' },
+    meta: {
+      titleSuffix: ' · Gday Meetings Server',
+      icons: { icon: '/gday-meetings.png', apple: '/gday-meetings.png' },
+    },
+    components: {
+      graphics: {
+        Icon: '/src/components/Brand#BrandIcon',
+        Logo: '/src/components/Brand#BrandLogo',
+      },
+    },
     importMap: {
       importMapFile: path.resolve('src/app/(payload)/admin/importMap.ts'),
     },
