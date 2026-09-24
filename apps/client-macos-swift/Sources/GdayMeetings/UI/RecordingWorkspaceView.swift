@@ -98,6 +98,7 @@ struct RecordingSetupView: View {
                 // https://developer.apple.com/design/human-interface-guidelines/pop-up-buttons
                 .padding(.bottom, 4)
             }
+            .disclosureGroupStyle(RecordingDisclosureStyle())
             .disabled(store.isStartingRecording)
             if let startupError {
                 // HIG Feedback: keep recoverable failure beside the action it affects,
@@ -218,6 +219,7 @@ struct RecordingWorkspaceView: View {
                     Text("Each source has its own track. You can keep taking notes while recording.")
                 }.font(.caption).foregroundStyle(.secondary).padding(.top, 7)
             }
+            .disclosureGroupStyle(RecordingDisclosureStyle())
         }
         .padding(18)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
@@ -226,6 +228,42 @@ struct RecordingWorkspaceView: View {
     static func elapsed(_ seconds: TimeInterval) -> String {
         let value = max(0, Int(seconds.isFinite ? seconds : 0))
         return value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60) : String(format: "%02d:%02d", value / 60, value % 60)
+    }
+}
+
+/// HIG Disclosure controls: provide a clear, accessible way to reveal related details.
+/// One native button owns the entire header so its label and empty space activate
+/// the same action as its chevron, with standard keyboard and disabled behavior.
+/// https://developer.apple.com/design/human-interface-guidelines/disclosure-controls
+struct RecordingDisclosureStyle: DisclosureGroupStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.forward")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                        .accessibilityHidden(true)
+                    configuration.label
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
     }
 }
 
