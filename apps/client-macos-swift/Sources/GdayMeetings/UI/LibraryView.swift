@@ -83,6 +83,12 @@ struct LibraryView: View {
         // https://developer.apple.com/design/human-interface-guidelines/toolbars
         .toolbar {
             ToolbarItemGroup {
+                Button {
+                    if !NSWorkspace.shared.open(store.dataDirectory) {
+                        store.errorMessage = "Could not open the meetings folder in Finder."
+                    }
+                } label: { Label("Open Meetings Folder", systemImage: "folder") }
+                    .help("Open the meetings storage folder in Finder")
                 Button { selectedMeeting = store.createMeeting(title: "Untitled Meeting"); destination = .meetings } label: { Label("New Meeting", systemImage: "square.and.pencil") }.help("Create a meeting")
                 Button { MeetingPanels.importAudio(store) } label: { Label("Import Audio", systemImage: "square.and.arrow.down") }.help("Import an audio or video file")
                 Button {
