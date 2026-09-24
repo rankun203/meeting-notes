@@ -2,11 +2,34 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 HOST_OS := $(shell uname -s)
 CLIENT_DIR := apps/client-macos-rust
+SWIFT_CLIENT_DIR := apps/client-macos-swift
+
+.PHONY: doctor-macos build-macos install-macos start-macos test-macos
+
+doctor-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/doctor-macos.sh"
+
+build-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/build-macos.sh"
+
+install-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/install-macos.sh"
+
+start-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/run-macos.sh"
+
+test-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/test-macos.sh"
 
 .PHONY: help doctor start build install stop server-start server-stop server-logs worker-start worker-start-gpu worker-stop worker-stop-gpu worker-logs test-client test-server test-worker
 
 help:
 	@printf '%s\n' \
+	  'make install-macos       Build SwiftUI app and open Finder installer (Command Line Tools only)' \
+	  'make build-macos         Build and sign the SwiftUI app' \
+	  'make start-macos         Build and launch the SwiftUI app' \
+	  'make doctor-macos        Check Swift/macOS prerequisites' \
+	  'make test-macos          Run Swift client tests' \
 	  'make doctor              Check native macOS build prerequisites' \
 	  'make start               Build and run the native client (macOS)' \
 	  'make build               Build the macOS .app without launching it' \

@@ -6,6 +6,7 @@ Gday Meetings has three independently runnable components: a native **client**, 
 
 | Component | Source | Runs where | Responsibility |
 | --- | --- | --- | --- |
+| Client (macOS, SwiftUI) | [apps/client-macos-swift](apps/client-macos-swift) | On your Mac, outside Docker | Native meeting library, recording, transcripts, notes, people, tags, and AI workflows. Builds with Apple Command Line Tools. |
 | Client (macOS, Rust) | [apps/client-macos-rust](apps/client-macos-rust) | On your Mac, outside Docker | Capture microphone/system audio, local UI and recordings, sign in and upload to the server. |
 | Server | [apps/server](apps/server) | Local host/container or cloud | Payload CMS, canonical users and SSO, managed files, durable transcription jobs/results, authenticated HTTP MCP search. SQLite by default; PostgreSQL optional. |
 | Audio extraction worker | [apps/worker-audio-extraction](apps/worker-audio-extraction) | Local host/container or GPU cloud | Speech recognition, alignment, diarization and speaker embeddings. CPU mode is supported; NVIDIA GPU acceleration is optional. |
@@ -22,6 +23,23 @@ flowchart LR
 The client must run in the host OS to receive microphone and system-audio permissions. The server needs ordinary CPU resources and persistent storage. The worker has a separate Python/ML runtime and can use CPU or GPU hardware. Keeping these as separate packages means installing the client does not install the CMS or model stack, and replacing a worker does not move the meeting database.
 
 ## Start the native client
+
+### SwiftUI client — Apple tools only
+
+On macOS 14.2 or later, install Apple's Command Line Tools, wait for installation to finish, then build from the repository root:
+
+```sh
+xcode-select --install
+make install-macos
+```
+
+This builds and locally signs **Gday Meetings Swift.app**, then opens a Finder folder with an **Applications** shortcut. Drag the app onto Applications and open it. No full Xcode, Rust, CMake, Homebrew, Node, or Docker is required to build this client. Transcription uses a separately configured Gday Meetings server or compatible provider; AI features use your configured provider.
+
+`make start-macos` builds and launches it; `make build-macos` only builds; `make doctor-macos` checks the selected Apple toolchain; `make test-macos` runs its tests. Xcode users can open `apps/client-macos-swift/Package.swift`. See the [Swift client guide](apps/client-macos-swift/README.md) for permissions, features, and development.
+
+The Swift and Rust apps have separate identities and local libraries and can be installed side by side.
+
+### Rust client
 
 Building from source requires macOS 14.2+, Xcode Command Line Tools (Git/Make/Clang/SDK), stable Rust/Cargo, and CMake. Signing is automatic and needs no Apple Developer account. See [macOS setup and troubleshooting](docs/macos-setup.md) for installation commands and runtime permissions.
 
@@ -48,6 +66,7 @@ CPU execution takes longer than GPU execution. Model downloads require network a
 
 ```text
 apps/
+  client-macos-swift/      Native SwiftUI client, Swift package, macOS packaging
   client-macos-rust/       Rust client, UI, Cargo files, scripts and macOS packaging
   server/                 Payload/Next.js CMS, auth, APIs and server tests
   worker-audio-extraction/ Python ML worker, local HTTP and RunPod adapters
@@ -57,9 +76,9 @@ docs/                     Architecture, deployment, and worklogs
 Makefile                  Common commands delegating to independent components
 ```
 
-A future native UI can live under `apps/client-macos-app/`; that application is not implemented yet. The client binary is `gday-meetings-client` and the macOS bundle is `Gday Meetings.app`. Existing local data paths and macOS app identity are preserved. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
+The Rust client binary is `gday-meetings-client` and its macOS bundle is `Gday Meetings.app`. Its existing local data paths and macOS app identity are preserved. The SwiftUI client is independently packaged as `Gday Meetings Swift.app`. The server source was brought back from the Gday Meetings repository; existing database names and previously published images retain their identities.
 
-The GitHub repository URL still uses `meeting-notes`. The internal bundle identifier and data directory remain `org.rankun.meeting-notes` so existing recordings and permissions stay associated with the app. Stop and remove the old app bundle when replacing it with Gday Meetings; both use the same library. Historical worklogs and release notes retain their original names.
+The GitHub repository URL still uses `meeting-notes`. The Rust client's internal bundle identifier and data directory remain `org.rankun.meeting-notes` so existing recordings and permissions stay associated with it. Stop and remove the old Meeting Notes bundle when replacing it with the Rust Gday Meetings app; those two versions use the same library. The Swift client uses a separate identity and library. Historical worklogs and release notes retain their original names.
 
 ## Deployment and development
 

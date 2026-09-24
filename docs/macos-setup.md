@@ -1,5 +1,13 @@
 # Build and install the macOS client
 
+## SwiftUI client (Command Line Tools only)
+
+The native SwiftUI client needs macOS 14.2+ and Apple's Command Line Tools. Install the tools with `xcode-select --install`, finish the installer, clone this repository, and run `make install-macos`. Finder opens with **Gday Meetings Swift.app** and an **Applications** shortcut. Full Xcode is optional: its users can also open `apps/client-macos-swift/Package.swift`.
+
+Use `make doctor-macos`, `make build-macos`, `make start-macos`, and `make test-macos` for the Swift client. It uses its own library and app identity. See its [guide](../apps/client-macos-swift/README.md) for native recording permissions, server settings, and feature details.
+
+The remaining instructions describe the **Rust/browser client**, which retains the original `make install` command.
+
 ## Requirements
 
 - **macOS 14.2 or newer**, with a logged-in desktop session for Finder installation and launching the app. The build targets the current Rust host architecture; it does not create a universal binary. Apple Silicon is the currently validated development platform.

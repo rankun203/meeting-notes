@@ -1,6 +1,10 @@
 # Rust
 target/
 
+# Swift Package Manager and locally packaged apps
+.build/
+.swiftpm/
+
 # IDE
 .idea/
 .codex/

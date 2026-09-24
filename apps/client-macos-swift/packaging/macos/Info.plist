@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>org.rankun.gday-meetings.swift</string>
+    <key>CFBundleName</key><string>Gday Meetings Swift</string>
+    <key>CFBundleDisplayName</key><string>Gday Meetings</string>
+    <key>CFBundleExecutable</key><string>GdayMeetings</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>GdayMeetings</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key><string>14.2</string>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Gday Meetings records your microphone to include your voice in meeting recordings.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Gday Meetings records audio from meeting apps to save and transcribe your meetings.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Gday Meetings uses screen recording permission to capture meeting audio. No screen video is saved.</string>
+</dict>
+</plist>
