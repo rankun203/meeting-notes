@@ -78,6 +78,10 @@ pub trait AudioSource: Send + Sync {
     fn stop(&mut self) -> Result<(), AudioError>;
     fn name(&self) -> &str;
 
+    /// Process-isolated sources can retry indefinitely without leaking native threads.
+    fn persistent_recovery(&self) -> bool { false }
+    fn recovery_ready(&self) -> bool { true }
+
     /// Returns true if the underlying device was lost (e.g. Core Audio device graph change).
     /// Default: always false. MicSource overrides this.
     fn is_device_lost(&self) -> bool {

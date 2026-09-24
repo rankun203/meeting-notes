@@ -186,7 +186,7 @@ impl Recorder {
     pub fn take_lost_sources(&mut self) -> Vec<LostSource> {
         let mut out = Vec::new();
         for active in &mut self.sources {
-            let is_lost = active.source.as_ref().map_or(false, |s| s.is_device_lost());
+            let is_lost = active.source.as_ref().map_or(false, |s| s.is_device_lost() && s.recovery_ready());
             if !is_lost {
                 continue;
             }
@@ -370,6 +370,9 @@ pub struct LostSource {
 }
 
 impl LostSource {
+    pub fn persistent_recovery(&self) -> bool {
+        self.source.persistent_recovery()
+    }
     /// Restart this source: stop the old stream, then start a fresh one with
     /// the original sender so the writer channel stays connected.
     ///

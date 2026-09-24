@@ -207,7 +207,7 @@ impl SessionManager {
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-            /// Max reconnect attempts per (session, source) before giving up.
+            /// Budget for sources that do not guarantee isolated recovery.
             const MAX_RECONNECT_ATTEMPTS: u32 = 3;
             // Keyed by (session_id, source_label) so each source has its own retry budget.
             let mut reconnect_attempts: HashMap<(String, String), u32> = HashMap::new();
@@ -281,8 +281,8 @@ impl SessionManager {
                         }
 
                         // Check for device-lost sources that need reconnection.
-                        // Per-source budget: a source is retried only if it still
-                        // has attempts left.
+                        // Isolated microphone sources retain their slot during
+                        // backoff and can recover after prolonged device loss.
                         if let Some(ref recorder) = session.recorder {
                             if recorder.has_device_lost_sources() {
                                 device_lost_sessions.push(session.id.clone());
@@ -292,10 +292,9 @@ impl SessionManager {
                 } // write lock released
 
                 // Phase 2: attempt reconnection outside the lock on a blocking
-                // thread, one source at a time. If Core Audio deadlocks inside
-                // `source.start()`, only the lone source is leaked into the
-                // orphan thread — the recorder keeps owning every other source
-                // and its writers, so we can still call `stop()` cleanly.
+                // thread, one source at a time. MicSource bounds native work
+                // inside a killable helper (5s), below this defensive timeout
+                // for other AudioSource implementations.
                 /// Hard timeout for a single source restart attempt.
                 const RESTART_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
                 // Sessions whose every source slot became empty after this
@@ -328,7 +327,7 @@ impl SessionManager {
                                     .get(&(sid.clone(), ls.label.clone()))
                                     .copied()
                                     .unwrap_or(0);
-                                if attempts < MAX_RECONNECT_ATTEMPTS {
+                                if ls.persistent_recovery() || attempts < MAX_RECONNECT_ATTEMPTS {
                                     true
                                 } else {
                                     // Over-budget: don't restart, but also don't
@@ -406,17 +405,29 @@ impl SessionManager {
                                 info!("Reconnected source for session {}: {}", sid, label);
                             }
                             Outcome::Err(source, e) => {
-                                // Restart failed but the source came back.
-                                // Under budget: put it back (still flagged
-                                // device-lost) so the next tick retries.
-                                // At the limit: drop it — its Drop impl stops
-                                // any live engine — and surface a notice.
+                                // Isolated sources stay in their slot and retry
+                                // after their own backoff. Other sources retain
+                                // the finite budget as a defensive fallback.
                                 let key = (sid.clone(), label.clone());
                                 let attempts = reconnect_attempts.entry(key).or_insert(0);
-                                *attempts += 1;
+                                *attempts = attempts.saturating_add(1);
                                 warn!("Mic reconnect failed for session {} source {} (attempt {}): {}", sid, label, attempts, e);
-                                if *attempts < MAX_RECONNECT_ATTEMPTS {
+                                let persistent = source.persistent_recovery();
+                                if persistent || *attempts < MAX_RECONNECT_ATTEMPTS {
                                     recorder.put_back_source(&label, source);
+                                    if persistent && *attempts == 1 {
+                                        let _ = event_tx_ref.send(ServerEvent::SessionNotice {
+                                            id: sid.clone(),
+                                            notice: Notice {
+                                                key: None,
+                                                level: NoticeLevel::Warning,
+                                                message: format!("Microphone \"{}\" unavailable; recovery will keep retrying while recording", label),
+                                                platform: Some(std::env::consts::OS.to_string()),
+                                                details: None,
+                                                created_at: Utc::now(),
+                                            },
+                                        });
+                                    }
                                 } else {
                                     recorder.clear_source(&label);
                                     let notice = max_attempts_notice();
@@ -1718,6 +1729,57 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
     }
+    #[tokio::test]
+    async fn isolated_source_recovers_after_more_than_three_failures_without_browser() {
+        use crate::audio::source::{AudioChunk, AudioError};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Recoverable(std::sync::Arc<AtomicUsize>);
+        impl AudioSource for Recoverable {
+            fn start(&mut self, tx: crossbeam_channel::Sender<AudioChunk>) -> Result<(), AudioError> {
+                let attempt = self.0.fetch_add(1, Ordering::SeqCst);
+                if (1..=4).contains(&attempt) {
+                    return Err(AudioError::NoInputDevice);
+                }
+                tx.send(AudioChunk { samples: vec![0.25; 480], channels: 1, sample_rate: 48000, timestamp_us: 0 }).unwrap();
+                Ok(())
+            }
+            fn stop(&mut self) -> Result<(), AudioError> { Ok(()) }
+            fn name(&self) -> &str { "recoverable" }
+            fn persistent_recovery(&self) -> bool { true }
+            fn is_device_lost(&self) -> bool { self.0.load(Ordering::SeqCst) < 6 }
+        }
+        let root = std::env::temp_dir().join(format!("gday-recovery-{}", uuid::Uuid::new_v4()));
+        let manager = SessionManager::new(root.clone());
+        let created = manager.create_session(SessionConfig { format: AudioFormat::Wav, ..Default::default() }).await;
+        let attempts = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut recorder = Recorder::new(created.id.clone(), manager.session_dir(&created.id), 48000,
+            AudioFormat::Wav, Default::default(), Default::default(), vec![(SourceDescriptor {
+                id: "mic".into(), source_type: SourceType::Mic, label: "Recoverable".into(), device_name: None,
+            }, Box::new(Recoverable(attempts.clone())))]);
+        recorder.start().unwrap();
+        {
+            let mut sessions = manager.sessions.write().await;
+            let session = sessions.get_mut(&created.id).unwrap();
+            session.recorder = Some(recorder);
+            session.state = SessionState::Recording;
+            session.files = vec!["recoverable.wav".into(), "metadata.json".into()];
+        }
+        manager.start_file_size_ticker();
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while attempts.load(Ordering::SeqCst) < 6 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            // Let the successful restart return its source to the recorder.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }).await.unwrap();
+        assert_eq!(manager.get_session(&created.id).await.unwrap().state, SessionState::Recording);
+        manager.stop_recording(&created.id).await.unwrap();
+        let wav = hound::WavReader::open(manager.session_dir(&created.id).join("recoverable.wav")).unwrap();
+        assert_eq!(wav.duration(), 960, "audio before and after recovery is finalized");
+        drop(wav);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn reconciliation_preserves_live_recorder_and_stop_merges_external_metadata() {
         use crate::audio::source::{AudioChunk, AudioError};

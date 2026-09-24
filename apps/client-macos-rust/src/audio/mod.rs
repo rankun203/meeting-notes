@@ -1,4 +1,6 @@
 pub mod mic;
+#[cfg(target_os = "macos")]
+mod mic_native;
 pub mod recorder;
 pub mod source;
 pub mod writer;

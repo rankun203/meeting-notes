@@ -117,6 +117,13 @@ fn parse_cli(mut args: Vec<OsString>, executable: &Path) -> Result<Cli, clap::Er
 }
 
 fn main() {
+    // Private capture child: skip desktop/server startup and keep stdout solely
+    // for framed audio. Same executable preserves the app's signing identity.
+    #[cfg(target_os = "macos")]
+    if std::env::args().nth(1).as_deref() == Some("--gday-mic-helper") {
+        let rate = std::env::args().nth(2).and_then(|v| v.parse().ok()).unwrap_or(48000);
+        gday_meetings_client::audio::mic::run_helper(rate);
+    }
     install_signal_handlers();
 
     let cli = parse_cli(
