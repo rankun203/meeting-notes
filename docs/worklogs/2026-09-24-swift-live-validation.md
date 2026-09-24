@@ -1,7 +1,7 @@
 ---
 date: 2026-09-24
 title: Native live audio and recording UI validation
-status: resumed-blocked-on-native-keychain-prompt
+status: available-checks-passed-hardware-gaps-documented
 ---
 
 ## Problem
@@ -68,3 +68,13 @@ The user confirmed readiness for the remaining capture checks. The refreshed ins
 Starting `Validation 2026-09-24 — Route recovery retry` blocked during Settings persistence, before a meeting/capture was created. The UI observation timed out twice, and SecurityAgent was running. Native computer use explicitly refused access to `com.apple.SecurityAgent` for safety reasons. Asked the user to handle the system prompt directly and report the name/result. No route was changed. This is a protected-system-dialog blocker, not a recurrence of the old native pipe startup failure.
 
 All 53 tests in 17 suites passed after the Keychain change; `make install-macos` passed. Existing nine audio-file hashes remain unchanged. The pause-era silent system-only route placeholder independently decoded to 47.817 seconds of stereo Opus. No uploads/transcription occurred. Original outstanding hardware/listening/overflow checks remain untested, not failed.
+
+## Prompt resolved and quit finalization
+
+User reported the native prompt handled. Automation then observed active system-only capture in `Route recovery retry`; the exact Keychain item wording and Allow/Deny choice were not reported, so native wording remains unverified. The stable meter icons were visible and exposed full status through accessibility Help.
+
+Attempted selecting the available ScreenShare Audio virtual output through Sound settings, but refreshed state still showed MacBook Pro Speakers selected. No actual output transition was established; route recovery remains untested rather than failed. Output volume was now 0.5 when read, different from the earlier acoustic comparison; this resumed take was not included in that comparison and this task did not change the volume.
+
+User requested removal of redundant Recording details text during this take; see [recording-copy worklog](2026-09-24-swift-recording-copy.md). Used the active take for the authorized quit-during-capture check: Cmd-Q exited cleanly, persisted duration 136.183 s, and finalized `system.opus` (stereo 48 kHz, 136.164 s container duration). Independent full-file decode succeeded. All nine original audio hashes remain unchanged. No upload or transcription ran.
+
+Final resumed readback: rebuilt/relaunched app listed the quit-finalized take as 2:16, loaded its Opus in the native player, advanced playback, and successfully sought forward before pausing at 23.575 s. Library persistence and native playback after relaunch therefore pass. The app is left idle with playback paused, built-in output selected, and no recording active. Route changes, external-device tests, live overflow scrolling, full VoiceOver, and matched near-end intelligibility remain explicitly untested. No current reproduced product failure remains from the completed checks.

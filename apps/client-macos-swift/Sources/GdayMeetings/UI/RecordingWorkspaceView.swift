@@ -179,7 +179,6 @@ struct RecordingSetupView: View {
 struct RecordingWorkspaceView: View {
     @EnvironmentObject private var store: MeetingStore
     let meetingID: UUID
-    @ViewState private var showDetails = false
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -210,13 +209,6 @@ struct RecordingWorkspaceView: View {
                 RecordingSourceMeter(title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone, saving: store.isFinalizingRecording)
                 RecordingSourceMeter(title: "System Audio", symbol: "speaker.wave.2.fill", source: store.recordingLevels.system, saving: store.isFinalizingRecording)
             }
-            DisclosureGroup("Recording details", isExpanded: $showDetails) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(store.captureHealth.isEmpty ? "Finalizing your audio files." : store.captureHealth)
-                    Text("Each source has its own track. You can keep taking notes while recording.")
-                }.font(.caption).foregroundStyle(.secondary).padding(.top, 7)
-            }
-            .disclosureGroupStyle(RecordingDisclosureStyle())
         }
         .padding(18)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
