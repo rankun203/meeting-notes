@@ -2,6 +2,29 @@
 
 A native macOS meeting app built entirely with SwiftUI, AppKit, AVFoundation, Core Audio, Security, and Foundation. The package has no third-party dependencies and does not launch the Rust client or a browser UI.
 
+## Choose a run mode
+
+The same SwiftUI client supports two explicit modes. Commands below run from the repository root.
+
+| | Full app (default) | UI Preview |
+| --- | --- | --- |
+| Build only | `make build-macos` | `make build-macos-preview` |
+| Build and launch | `make start-macos` | `make start-macos-preview` |
+| Library | Your persistent meetings library | Fresh temporary library with synthetic recordings |
+| Credentials | Reads saved API keys and sign-in tokens from Keychain; macOS may prompt | No Keychain access |
+| Audio | Real playback and recording | Silent playback; recording disabled |
+| Online services | Configured transcription, AI, and server services available | Service network requests blocked |
+| Purpose | Normal use and coordinated hardware/service testing | Independent layout and interaction testing |
+
+UI Preview displays a visible banner and offers System/Light/Dark appearance controls. Use it for UI validation without passwords or real audio. It does not validate capture permissions, audible output, or server behavior. See [UI Preview details and signing](UI_PREVIEW.md).
+
+Build outputs:
+
+- Full app: `.build/macos/Gday Meetings Swift.app`
+- UI Preview: `.build/preview/Gday Meetings UI Preview.app`
+
+These paths are relative to this client directory. Quit the bundle being rebuilt first. Preview packaging currently also rebuilds the full `.build/macos` bundle, so that development copy must be stopped too. A full app running from Applications or `.build/installer` can remain open while building Preview.
+
 ## Build and install
 
 Requires macOS 14.2 or later and Apple's Command Line Tools with Swift 5.9 or later. Install current Command Line Tools for your macOS version; tests use Swift Testing and require Swift 6 or later.
@@ -18,8 +41,8 @@ Other commands:
 
 ```sh
 make doctor-macos    # Show the selected developer tools, Swift and SDK
-make build-macos     # Build and sign without opening Finder
-make start-macos     # Build and launch the app
+make build-macos     # Build and sign the full app without opening Finder
+make start-macos     # Build and launch the full app
 make test-macos      # Run persistence, import and service contract tests
 ```
 
@@ -27,7 +50,7 @@ Builds target the current Mac's architecture. Quit the development or staged app
 
 ### With Xcode
 
-Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/system-audio purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`.
+Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/system-audio purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`. For UI Preview when running the executable from Xcode, add `--ui-preview` to the scheme’s launch arguments; remove it to return to full mode. The packaged Preview target additionally uses a separate bundle identifier to isolate window/preferences state.
 
 ## Native workflows
 
@@ -63,7 +86,7 @@ When recording begins, macOS requests the microphone and system-audio permission
 
 The meetings library lives in `~/.local/share/com.gdaymeetings.macos/`, and the app identity is `com.gdaymeetings.macos`, based on our domain `gdaymeetings.com`. The toolbar folder button opens this directory. On first launch, if the new directory does not exist, the app copies the former `~/Library/Application Support/Gday Meetings Swift/` library into it, preserving the original. Existing destination libraries are never merged or overwritten. Quit older app versions before migration; changes subsequently made in an older version are not synchronized. The Rust client uses its own directory and format. Changing the bundle identity may require granting recording permissions again. OAuth credentials and provider keys are stored in Keychain. Keep a backup of the library to retain audio as well as text.
 
-For isolated development/UI checks, set `GDAY_SWIFT_DATA_DIR` to a disposable directory before launching the app. This overrides the library location, not the system permission identity. Tests use temporary directories and synthetic data.
+For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR` is only a library-location override for development: it does not enable UI Preview, disable recording/network access, or suppress all credential access (server authentication can still read Keychain). Tests use temporary directories and synthetic data.
 
 ## Human Interface Guidelines
 

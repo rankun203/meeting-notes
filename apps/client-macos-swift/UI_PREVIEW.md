@@ -1,6 +1,15 @@
 # UI Preview
 
-Build with `bash apps/client-macos-swift/scripts/preview-macos.sh` from the repository root, then open `apps/client-macos-swift/.build/preview/Gday Meetings UI Preview.app`.
+From the repository root:
+
+```sh
+make build-macos-preview   # Build only
+make start-macos-preview   # Build and launch
+```
+
+The bundle is `apps/client-macos-swift/.build/preview/Gday Meetings UI Preview.app`. The underlying build script remains `bash apps/client-macos-swift/scripts/preview-macos.sh`.
+
+For full mode, use `make build-macos` or `make start-macos`; `make install-macos` stages the full app for installation. See the [mode comparison](README.md#choose-a-run-mode). Quit Preview and the full `.build/macos` development copy before rebuilding Preview, because packaging reuses the full build. Copies running from Applications or `.build/installer` can remain open.
 
 This uses the production SwiftUI screens with a clearly marked preview banner, generated one- and two-track audio, a fresh temporary library on each launch, silent playback, and a local light/dark appearance selector. Keychain reads/writes, recording, and service network requests are disabled. Normal recordings and credentials are not loaded. Temporary fixture libraries are left in the system temporary directory for inspection and normal OS cleanup.
 

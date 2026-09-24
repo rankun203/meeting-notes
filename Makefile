@@ -4,7 +4,7 @@ HOST_OS := $(shell uname -s)
 CLIENT_DIR := apps/client-macos-rust
 SWIFT_CLIENT_DIR := apps/client-macos-swift
 
-.PHONY: doctor-macos build-macos install-macos start-macos test-macos
+.PHONY: doctor-macos build-macos install-macos start-macos build-macos-preview start-macos-preview test-macos
 
 doctor-macos:
 	bash "$(SWIFT_CLIENT_DIR)/scripts/doctor-macos.sh"
@@ -18,6 +18,12 @@ install-macos:
 start-macos:
 	bash "$(SWIFT_CLIENT_DIR)/scripts/run-macos.sh"
 
+build-macos-preview:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/preview-macos.sh"
+
+start-macos-preview: build-macos-preview
+	/usr/bin/open "$(SWIFT_CLIENT_DIR)/.build/preview/Gday Meetings UI Preview.app"
+
 test-macos:
 	bash "$(SWIFT_CLIENT_DIR)/scripts/test-macos.sh"
 
@@ -26,8 +32,10 @@ test-macos:
 help:
 	@printf '%s\n' \
 	  'make install-macos       Build SwiftUI app and open Finder installer (Command Line Tools only)' \
-	  'make build-macos         Build and sign the SwiftUI app' \
-	  'make start-macos         Build and launch the SwiftUI app' \
+	  'make build-macos         Build and sign the full SwiftUI app' \
+	  'make start-macos         Build and launch the full app (real library and Keychain)' \
+	  'make build-macos-preview Build isolated UI Preview without launching' \
+	  'make start-macos-preview Build and launch UI Preview (synthetic data, no Keychain)' \
 	  'make doctor-macos        Check Swift/macOS prerequisites' \
 	  'make test-macos          Run Swift client tests' \
 	  'make doctor              Check native macOS build prerequisites' \
