@@ -91,8 +91,8 @@ final class AudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                     }
                     engine.attach(silence)
                     // VoiceProcessingIO requires its client input and output formats
-                    // to match. A mainMixer's automatic output uses the hardware's stereo
-                    // format even when the built-in microphone is mono, causing -10875.
+                    // to match. The mixer's implicit output format can differ from the
+                    // input client's aggregate default, causing initialization -10875.
                     // Connect the silent source directly to hardware I/O with the exact
                     // microphone client format; the Audio Unit handles the device format.
                     // https://developer.apple.com/documentation/avfaudio/avaudioionode/setvoiceprocessingenabled(_:)
