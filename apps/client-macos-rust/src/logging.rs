@@ -13,6 +13,24 @@ pub fn log_directory() -> Result<PathBuf, String> {
     Ok(home.join("Library/Logs/Gday Meetings"))
 }
 
+/// Daily rotation uses UTC. Select the newest existing client log, including
+/// yesterday's file when no event has triggered rotation since midnight.
+pub fn current_log_file() -> Result<PathBuf, String> {
+    let directory = log_directory()?;
+    std::fs::read_dir(&directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file() && path.file_name().and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("client."))
+                .and_then(|name| name.strip_suffix(".log"))
+                .is_some_and(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
+        })
+        .max()
+        .ok_or_else(|| format!("No client log found in {}", directory.display()))
+}
+
 fn file_writer(directory: &Path) -> Result<RollingFileAppender, String> {
     #[cfg(unix)]
     {

@@ -158,9 +158,10 @@ impl ApplicationHandler<Event> for Shell {
                 }
             }
             Event::Menu(event) if event.id == *self.logs.id() => {
-                match gday_meetings_client::logging::log_directory() {
-                    Ok(path) => open(path.as_os_str()),
-                    Err(error) => tracing::warn!("Cannot reveal logs: {error}"),
+                tracing::info!("Opening current client log in Console.app");
+                match gday_meetings_client::logging::current_log_file() {
+                    Ok(path) => open_with_app(path.as_os_str(), Some("com.apple.Console")),
+                    Err(error) => tracing::warn!("Cannot open current log: {error}"),
                 }
             }
             Event::Menu(_) => {}
@@ -174,14 +175,19 @@ impl ApplicationHandler<Event> for Shell {
 }
 
 fn open(path: impl AsRef<std::ffi::OsStr>) {
+    open_with_app(path, None);
+}
+
+fn open_with_app(path: impl AsRef<std::ffi::OsStr>, app: Option<&'static str>) {
     // `open` exits after handing off to Finder/the browser. Wait on a helper
     // thread so the UI remains responsive and no child process is left unreaped.
     let path = path.as_ref().to_owned();
     std::thread::spawn(move || {
-        match std::process::Command::new("/usr/bin/open")
-            .arg(path)
-            .status()
-        {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        if let Some(app) = app {
+            command.args(["-b", app]);
+        }
+        match command.arg(path).status() {
             Ok(status) if status.success() => {}
             result => tracing::warn!("Could not open menu destination: {result:?}"),
         }
