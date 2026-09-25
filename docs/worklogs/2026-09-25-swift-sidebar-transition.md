@@ -1,7 +1,7 @@
 ---
 date: 2026-09-25
 title: Avoid clipped sidebar reveal
-status: implemented
+status: superseded
 ---
 
 ## Problem
@@ -9,6 +9,8 @@ status: implemented
 The user's 5.49-second screen recording shows the sidebar reveal clipping the left side of labels and moving toolbar content in stages around 3.9–4.2 seconds. Earlier automation observed only settled layouts and missed the transition artifact.
 
 ## Implemented solution
+
+Superseded by [native sidebar and shared scrubbing](2026-09-25-swift-native-sidebar-and-scrubbing.md): user preferred animation and reported the custom button moving between columns. Restored the native toggle after primary-source research confirmed its correct sidebar placement.
 
 LibraryView owns NavigationSplitView column visibility and supplies a labelled sidebar toolbar button with Command-Control-S. The button switches between all three columns and the list/detail columns using a transaction with animations disabled. This scopes the mitigation to the toggle, retaining native split columns, selection, resizing, and the persistent player.
 

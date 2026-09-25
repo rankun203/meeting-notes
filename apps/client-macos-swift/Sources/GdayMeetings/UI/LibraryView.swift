@@ -13,7 +13,6 @@ struct LibraryView: View {
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @ViewState private var deleting: Meeting?
-    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .all
 
     private var recordingActive: Bool { store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording }
     private func showMeeting(_ id: UUID) { selectedMeeting = id; destination = .meetings }
@@ -40,7 +39,7 @@ struct LibraryView: View {
         // Native split views preserve resizing, keyboard navigation and system appearance.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView {
             List(selection: $destination) {
                 Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
                 Label("People", systemImage: "person.2").tag(LibraryDestination.people)
@@ -49,7 +48,6 @@ struct LibraryView: View {
             }
             .navigationTitle("Gday Meetings")
             .navigationSplitViewColumnWidth(min: 150, ideal: 180)
-            .toolbar(removing: .sidebarToggle)
         } content: {
             switch destination {
             case .server: Text("Search your connected Gday server library.").foregroundStyle(.secondary).padding().navigationTitle("Server Library")
@@ -121,21 +119,6 @@ struct LibraryView: View {
         // HIG: toolbar actions apply to the current content and use familiar symbols.
         // https://developer.apple.com/design/human-interface-guidelines/toolbars
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    // The native animated reveal clips sidebar labels and jumps
-                    // toolbar items. Suppress only this visibility transition.
-                    var transaction = Transaction(animation: nil)
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        columnVisibility = columnVisibility == .all ? .doubleColumn : .all
-                    }
-                } label: {
-                    Label(columnVisibility == .all ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.left")
-                }
-                .help(columnVisibility == .all ? "Hide Sidebar" : "Show Sidebar")
-                .keyboardShortcut("s", modifiers: [.command, .control])
-            }
             ToolbarItemGroup {
                 Button {
                     if !NSWorkspace.shared.open(store.dataDirectory) {
@@ -180,6 +163,7 @@ struct LibraryView: View {
         .sheet(isPresented: $store.presentsRecordingSetup) {
             RecordingSetupView(onStarted: showMeeting).environmentObject(store)
         }
+        .background(PlaybackSpaceKey(playback: playback))
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
         .alert("Unable to Complete Action", isPresented: Binding(get: { store.errorMessage != nil && !store.presentsRecordingSetup }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }

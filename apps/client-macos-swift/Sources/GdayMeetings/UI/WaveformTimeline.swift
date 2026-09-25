@@ -10,13 +10,14 @@ struct WaveformTimeline: View {
     var label = "Playback position"
     var dimmed = false
     let seek: (Double) -> Void
-    @ViewState private var dragTime: Double?
+    let scrub: (Double?) -> Void
+    @ViewState private var isScrubbing = false
     @FocusState private var focused: Bool
 
     var body: some View {
         GeometryReader { geometry in
             Canvas { context, size in
-                let position = dragTime ?? time
+                let position = time
                 let columns = max(1, Int(size.width / 3))
                 let normalizer = max(0.01, waveforms.flatMap(\.peaks).max() ?? 1)
                 for column in 0..<columns {
@@ -35,9 +36,13 @@ struct WaveformTimeline: View {
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { value in
                     focused = true
-                    dragTime = min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration))
+                    isScrubbing = true
+                    scrub(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
                 }
-                .onEnded { _ in if let dragTime { seek(dragTime) }; dragTime = nil })
+                .onEnded { value in
+                    seek(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
+                    scrub(nil); isScrubbing = false
+                })
         }
         .frame(height: 24)
         .overlay(alignment: .center) {
@@ -49,7 +54,7 @@ struct WaveformTimeline: View {
         .onKeyPress(.rightArrow) { seek(min(duration, time + 5)); return .handled }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
-        .accessibilityValue("\(playbackTime(dragTime ?? time)) of \(playbackTime(duration))")
+        .accessibilityValue("\(playbackTime(time)) of \(playbackTime(duration))")
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: seek(min(duration, time + 5))
@@ -58,6 +63,7 @@ struct WaveformTimeline: View {
             }
         }
         .help("Click or drag to seek. Arrow keys move five seconds.")
+        .onDisappear { if isScrubbing { scrub(nil) } }
     }
 }
 
@@ -73,14 +79,14 @@ struct PlaybackPosition: View {
     let seek: (Double) -> Void
 
     var body: some View {
-        WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.time,
-                         label: label, dimmed: dimmed, seek: seek)
+        WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.displayedTime,
+                         label: label, dimmed: dimmed, seek: seek, scrub: progress.scrub)
         .overlay(alignment: .bottom) {
             if showsTimes {
                 HStack {
-                    Text(playbackTime(progress.time))
+                    Text(playbackTime(progress.displayedTime))
                     Spacer()
-                    Text("−" + playbackTime(max(0, duration - progress.time)))
+                    Text("−" + playbackTime(max(0, duration - progress.displayedTime)))
                 }.font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                     .offset(y: 18)
             }

@@ -27,6 +27,27 @@ private actor PlaybackAttemptCounter {
 
 @MainActor
 struct MeetingPlaybackTests {
+    @Test func sharedScrubPositionOverridesTicksAndClearsWithSelection() {
+        let playback = MeetingPlayback()
+        var controlUpdates = 0
+        let subscription = playback.objectWillChange.sink { controlUpdates += 1 }
+        playback.progress.update(10)
+        playback.progress.scrub(to: 31)
+        playback.progress.update(11) // Playback may continue during a pointer drag.
+        #expect(playback.progress.displayedTime == 31)
+        #expect(playback.currentTime == 11)
+        playback.progress.scrub(to: .nan)
+        #expect(playback.progress.displayedTime == 31)
+        #expect(controlUpdates == 0)
+        playback.progress.scrub(to: nil)
+        #expect(playback.progress.displayedTime == 11)
+        playback.progress.scrub(to: 40)
+        playback.clear()
+        #expect(playback.progress.scrubTime == nil)
+        #expect(playback.progress.displayedTime == 0)
+        withExtendedLifetime(subscription) {}
+    }
+
     @Test func progressUpdatesDoNotInvalidatePlaybackControls() {
         let playback = MeetingPlayback()
         var controlUpdates = 0

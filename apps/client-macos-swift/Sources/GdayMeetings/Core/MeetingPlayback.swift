@@ -201,6 +201,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     func clear() {
+        progress.scrub(to: nil)
         generation = UUID(); seekGeneration = UUID()
         preparationTask?.cancel(); preparationTask = nil
         seekTask?.cancel(); seekTask = nil
@@ -223,6 +224,7 @@ final class MeetingPlayback: ObservableObject {
     private static func validTrack(_ track: Int, count: Int) -> Int { track >= 0 && track < count ? track : -1 }
 
     private func load(meeting: Meeting, files: [URL], track: Int, position: Double, autoplay: Bool) {
+        progress.scrub(to: nil)
         generation = UUID(); let operation = generation
         preparationTask?.cancel(); seekTask?.cancel()
         releaseCurrentItem()
@@ -330,6 +332,12 @@ final class MeetingPlayback: ObservableObject {
 @MainActor
 final class PlaybackProgress: ObservableObject {
     @Published private(set) var time: Double = 0
+    @Published private(set) var scrubTime: Double?
+    var displayedTime: Double { scrubTime ?? time }
+    func scrub(to value: Double?) {
+        guard value == nil || value!.isFinite, scrubTime != value else { return }
+        scrubTime = value
+    }
     func update(_ value: Double) {
         guard value.isFinite, value != time else { return }
         time = value

@@ -25,6 +25,7 @@ struct GdayMeetingsApp: App {
         }
         .defaultSize(width: 1200, height: 800)
         .commands {
+            SidebarCommands()
             // HIG: expose frequent commands in the menu bar, with standard shortcuts.
             // https://developer.apple.com/design/human-interface-guidelines/designing-for-macos
             CommandGroup(replacing: .newItem) {
