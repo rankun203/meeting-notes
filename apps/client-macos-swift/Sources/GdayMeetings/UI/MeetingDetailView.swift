@@ -25,7 +25,7 @@ struct MeetingDetailView: View {
                 if store.recordingID == meetingID {
                     RecordingWorkspaceView(meetingID: meetingID)
                 } else if !meeting.audioFiles.isEmpty {
-                    recordingOverview(meeting)
+                    playbackButton(meeting)
                 }
                 // HIG: standard segmented navigation maintains a predictable content
                 // hierarchy and keyboard accessibility without custom hit targets.
@@ -105,33 +105,19 @@ struct MeetingDetailView: View {
     }
 
 
-    private func recordingOverview(_ meeting: Meeting) -> some View {
+    private func playbackButton(_ meeting: Meeting) -> some View {
         // HIG Playing Audio: start playback only after an intentional action.
         // Library browsing does not replace or pause the current recording.
         // https://developer.apple.com/design/human-interface-guidelines/playing-audio
-        HStack(spacing: 14) {
-            Image(systemName: "waveform")
-                .font(.title2).foregroundStyle(.tint)
-                .frame(width: 52, height: 52)
-                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Meeting Recording").font(.headline)
-                Text(audioSourceSummary(meeting)).font(.callout).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 12)
-            Button {
-                if playback.meetingID == meetingID { playback.togglePlayPause() }
-                else { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
-            } label: {
-                Label(playbackActionTitle, systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
-            .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "Listen to this meeting")
+        Button {
+            if playback.meetingID == meetingID { playback.togglePlayPause() }
+            else { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
+        } label: {
+            Label(playbackActionTitle, systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill")
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
+        .buttonStyle(.bordered)
+        .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
+        .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "Listen to this meeting")
     }
 
     private var playbackActionTitle: String {
@@ -139,14 +125,6 @@ struct MeetingDetailView: View {
         if playback.isLoading { return "Loading…" }
         if playback.isPlaying { return "Pause" }
         return "Play"
-    }
-
-    private func audioSourceSummary(_ meeting: Meeting) -> String {
-        let names = meeting.audioFiles.map { file in
-            let name = URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
-            return name == "microphone" ? "Microphone" : name == "system" ? "System Audio" : name
-        }
-        return names.joined(separator: " · ")
     }
 
     @ViewBuilder
