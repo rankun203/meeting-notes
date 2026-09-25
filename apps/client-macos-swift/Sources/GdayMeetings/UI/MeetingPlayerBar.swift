@@ -7,6 +7,10 @@ struct MeetingPlayerBar: View {
     @EnvironmentObject private var playback: MeetingPlayback
     let showMeeting: (UUID) -> Void
     @ViewState private var tracksExpanded = false
+    @ViewState private var tracksSpaceExpanded = false
+    @ViewState private var tracksVisible = false
+    @ViewState private var tracksTransition = UUID()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,7 +60,7 @@ struct MeetingPlayerBar: View {
                     .frame(minWidth: 130, maxWidth: .infinity)
 
                 HStack(spacing: 10) {
-                    Button { tracksExpanded.toggle() } label: {
+                    Button(action: toggleTracks) {
                         Image(systemName: tracksExpanded ? "chevron.down" : "waveform")
                             .frame(width: 36, height: 36)
                     }
@@ -89,7 +93,7 @@ struct MeetingPlayerBar: View {
                 }
             }
             .padding(.horizontal, 20).padding(.vertical, 18)
-            if tracksExpanded {
+            Group {
                 ScrollView {
                     VStack(spacing: 10) {
                         ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in
@@ -115,8 +119,14 @@ struct MeetingPlayerBar: View {
                             }
                         }
                     }.padding(.horizontal, 20).padding(.bottom, 12)
-                }.frame(height: min(200, CGFloat(playback.trackNames.count) * 46 + 12))
+                }.frame(height: tracksHeight)
+                    .opacity(tracksVisible ? 1 : 0)
+                    .offset(y: tracksVisible || reduceMotion ? 0 : 8)
+                    .allowsHitTesting(tracksVisible)
+                    .accessibilityHidden(!tracksVisible)
             }
+            .frame(height: tracksSpaceExpanded ? tracksHeight : 0, alignment: .top)
+            .clipped()
             if let error = playback.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.secondary)
@@ -125,7 +135,51 @@ struct MeetingPlayerBar: View {
             }
         }
         .background(.bar)
-        .onChange(of: playback.meetingID) { _, _ in tracksExpanded = false }
+        .onChange(of: playback.meetingID) { _, _ in resetTracks() }
+        .onDisappear { resetTracks() }
+    }
+
+    private var tracksHeight: CGFloat {
+        min(200, CGFloat(playback.trackNames.count) * 46 + 12)
+    }
+
+    private func resetTracks() {
+        tracksTransition = UUID()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            tracksExpanded = false
+            tracksSpaceExpanded = false
+            tracksVisible = false
+        }
+    }
+
+    private func toggleTracks() {
+        let transition = UUID()
+        tracksTransition = transition
+        tracksExpanded.toggle()
+        if reduceMotion {
+            tracksSpaceExpanded = tracksExpanded
+            tracksVisible = tracksExpanded
+            return
+        }
+        if tracksExpanded {
+            // Reveal only after the full-size viewport has made room for the rows.
+            withAnimation(.easeInOut(duration: 0.25), completionCriteria: .removed) {
+                tracksSpaceExpanded = true
+            } completion: {
+                guard tracksTransition == transition, tracksExpanded else { return }
+                withAnimation(.easeInOut(duration: 0.18)) { tracksVisible = true }
+            }
+        } else {
+            // Reverse the sequence, keeping row geometry stable while it fades.
+            withAnimation(.easeInOut(duration: 0.18), completionCriteria: .removed) {
+                tracksVisible = false
+            } completion: {
+                guard tracksTransition == transition, !tracksExpanded else { return }
+                withAnimation(.easeInOut(duration: 0.25)) { tracksSpaceExpanded = false }
+            }
+        }
     }
 
     private var audibleWaveforms: [AudioWaveform] {
