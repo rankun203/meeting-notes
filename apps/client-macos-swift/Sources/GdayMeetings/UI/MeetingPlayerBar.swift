@@ -40,9 +40,9 @@ struct MeetingPlayerBar: View {
                         Group {
                             if playback.isLoading { ProgressView().controlSize(.small) }
                             else { Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.title2) }
-                        }.frame(width: 38, height: 38).contentShape(Circle())
+                        }.frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PlayerControlStyle())
                     .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
                     .help(playback.isPlaying ? "Pause playback" : "Play recording")
                     .disabled(playback.isPlaybackBlocked || playback.isLoading)
@@ -58,17 +58,18 @@ struct MeetingPlayerBar: View {
                 HStack(spacing: 10) {
                     Button { tracksExpanded.toggle() } label: {
                         Image(systemName: tracksExpanded ? "chevron.down" : "waveform")
-                            .frame(width: 28, height: 30)
+                            .frame(width: 36, height: 36)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PlayerControlStyle())
                     .accessibilityLabel(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
                     .help(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
                     Menu {
                         Picker("Playback Speed", selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })) {
                             ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in Text("\(rate.formatted())×").tag(rate) }
                         }
-                    } label: { Text("\(playback.playbackRate.formatted())×").monospacedDigit() }
+                    } label: { Text("\(playback.playbackRate.formatted())×").monospacedDigit().frame(minWidth: 36, minHeight: 36).contentShape(Rectangle()) }
                     .menuStyle(.borderlessButton).fixedSize()
+                    .modifier(PlayerControlHover())
                     .accessibilityLabel("Playback speed")
                     .help("Playback speed")
 
@@ -79,8 +80,9 @@ struct MeetingPlayerBar: View {
                         }
                         Divider()
                         Button("Close Player", systemImage: "xmark") { playback.clear() }
-                    } label: { Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1) }
+                    } label: { Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1).frame(minHeight: 36).contentShape(Rectangle()) }
                     .menuStyle(.borderlessButton).frame(maxWidth: 140)
+                    .modifier(PlayerControlHover())
                     .accessibilityLabel("Audio track and player options")
                     .accessibilityValue(selectedTrackName)
                     .help("Choose microphone, system audio, or all tracks")
@@ -97,8 +99,8 @@ struct MeetingPlayerBar: View {
                                     Spacer()
                                     Button { playback.toggleMute(index) } label: {
                                         Image(systemName: playback.mutedTracks.contains(index) ? "speaker.slash" : "speaker.wave.2")
-                                            .frame(width: 28, height: 28)
-                                    }.buttonStyle(.plain)
+                                            .frame(width: 36, height: 36)
+                                    }.buttonStyle(PlayerControlStyle())
                                         .accessibilityLabel("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
                                         .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
                                         .disabled(playback.isLoading || playback.isPlaybackBlocked)
@@ -138,9 +140,34 @@ struct MeetingPlayerBar: View {
     }
 
     private func transportButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.title3).frame(width: 30, height: 34).contentShape(Rectangle()) }
-            .buttonStyle(.plain).accessibilityLabel(title).help(title)
+        Button(action: action) { Image(systemName: symbol).font(.title3).frame(width: 36, height: 36) }
+            .buttonStyle(PlayerControlStyle()).accessibilityLabel(title).help(title)
             .disabled(playback.isLoading || playback.isPlaybackBlocked || playback.duration <= 0)
+    }
+}
+
+/// Full-area pointer targets with feedback that does not change layout geometry.
+/// https://developer.apple.com/design/human-interface-guidelines/buttons
+private struct PlayerControlStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .modifier(PlayerControlHover(pressed: configuration.isPressed))
+    }
+}
+
+private struct PlayerControlHover: ViewModifier {
+    var pressed = false
+    @ViewState private var hovered = false
+    @Environment(\.isEnabled) private var enabled
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.primary.opacity(enabled ? (pressed ? 0.16 : hovered ? 0.08 : 0) : 0))
+            }
+            .onHover { hovered = $0 }
     }
 }
 
