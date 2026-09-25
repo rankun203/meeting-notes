@@ -90,9 +90,17 @@ struct MeetingDetailView: View {
                 }
                 if store.tags.isEmpty { Text("Add tags in the sidebar") }
             }
-        } label: { Label("People & Tags", systemImage: "person.2") }
-        .menuStyle(.borderlessButton).fixedSize()
-        .modifier(ActionHover()).help("Manage people and tags")
+        } label: {
+            HStack(spacing: 4) {
+                Label("People & Tags", systemImage: "person.2")
+                Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
+            }
+            .padding(.horizontal, 10)
+            .frame(minWidth: 28, minHeight: 28)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(ActionButtonStyle()).fixedSize()
+        .help("Manage people and tags")
     }
 
 
