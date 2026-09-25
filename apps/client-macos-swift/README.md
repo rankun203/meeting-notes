@@ -50,6 +50,24 @@ The first build compiles the pinned audio libraries from source archives include
 
 Builds target the current Mac's architecture. Quit the development or staged app before rebuilding its bundle. The original Rust client retains `make install`, `make start`, and `make test-client`.
 
+### Swift formatting
+
+Run `make format-macos` before committing Swift changes and `make lint-macos`
+to check them without modifying files. Both use Apple's `xcrun swift-format`
+with the checked-in `.swift-format`: four-space indentation, a 120-column target,
+ordered imports, and one statement per line. Refactoring and API-policy rules
+are disabled; formatting does not replace code review or tests. Keep the
+`swift-tools-version` directive on the first line of `Package.swift`, separated
+from imports by a blank line.
+
+The commands cover the package manifest, app sources, and tests. They exclude
+vendored sources and build output; C bridges are outside Swift formatter scope.
+GitHub Actions checks formatting on macOS and logs the selected toolchain.
+Formatter output can change with Apple toolchain updates; review any new baseline
+in a separate formatting commit. Use current Command Line Tools if `swift-format`
+is unavailable. No Homebrew formatter is required, and normal build/install
+commands do not run or require formatting tools.
+
 ### With Xcode
 
 Run `bash apps/client-macos-swift/scripts/build-audio-dependencies.sh` once from the repository root, then open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/system-audio purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`. For UI Preview when running the executable from Xcode, add `--ui-preview` to the scheme’s launch arguments; remove it to return to full mode. The packaged Preview target additionally uses a separate bundle identifier to isolate window/preferences state.

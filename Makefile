@@ -4,7 +4,7 @@ HOST_OS := $(shell uname -s)
 CLIENT_DIR := apps/client-macos-rust
 SWIFT_CLIENT_DIR := apps/client-macos-swift
 
-.PHONY: doctor-macos build-macos install-macos start-macos build-macos-preview start-macos-preview test-macos
+.PHONY: doctor-macos build-macos install-macos start-macos build-macos-preview start-macos-preview test-macos format-macos lint-macos
 
 doctor-macos:
 	bash "$(SWIFT_CLIENT_DIR)/scripts/doctor-macos.sh"
@@ -27,6 +27,12 @@ start-macos-preview: build-macos-preview
 test-macos:
 	bash "$(SWIFT_CLIENT_DIR)/scripts/test-macos.sh"
 
+format-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/format-macos.sh" format
+
+lint-macos:
+	bash "$(SWIFT_CLIENT_DIR)/scripts/format-macos.sh" lint
+
 .PHONY: help doctor start build install stop server-start server-stop server-logs worker-start worker-start-gpu worker-stop worker-stop-gpu worker-logs test-client test-server test-worker
 
 help:
@@ -38,6 +44,8 @@ help:
 	  'make start-macos-preview Build and launch UI Preview (synthetic data, no Keychain)' \
 	  'make doctor-macos        Check Swift/macOS prerequisites' \
 	  'make test-macos          Run Swift client tests' \
+	  'make format-macos        Format Swift client sources and tests' \
+	  'make lint-macos          Check Swift formatting without changing files' \
 	  'make doctor              Check native macOS build prerequisites' \
 	  'make start               Build and run the native client (macOS)' \
 	  'make build               Build the macOS .app without launching it' \

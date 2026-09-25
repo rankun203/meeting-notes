@@ -1,0 +1,29 @@
+name: Swift formatting
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/client-macos-swift/**'
+      - 'Makefile'
+      - '.github/workflows/swift-format.yml'
+  pull_request:
+    paths:
+      - 'apps/client-macos-swift/**'
+      - 'Makefile'
+      - '.github/workflows/swift-format.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Show Apple toolchain
+        run: |
+          xcrun swift --version
+          xcrun swift-format --version
+      - run: make lint-macos
