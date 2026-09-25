@@ -75,6 +75,7 @@ struct LibraryView: View {
             case .people: PeopleView(selection: $selectedPerson)
             case .tags: TagsView(selection: $selectedTag)
             default:
+                ScrollViewReader { scroll in
                 List(selection: $selectedMeeting) {
                     ForEach(filteredMeetings) { meeting in
                         VStack(alignment: .leading, spacing: 4) {
@@ -116,6 +117,17 @@ struct LibraryView: View {
                 .modifier(AudioFileDrop())
                 .navigationTitle("Meetings")
                 .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
+                .onChange(of: store.meetings.map(\.id)) { previous, current in
+                    // Inserting above the visible rows can retain the native list's
+                    // old scroll position, leaving the new first row partly clipped.
+                    // Reveal additions without changing selection or playback. Edits,
+                    // deletions, search changes and track imports keep their position.
+                    let existing = Set(previous)
+                    guard current.contains(where: { !existing.contains($0) }),
+                          let added = filteredMeetings.first(where: { !existing.contains($0.id) }) else { return }
+                    scroll.scrollTo(added.id, anchor: .top)
+                }
+                }
             }
             }.frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
             Group {
