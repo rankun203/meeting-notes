@@ -92,6 +92,8 @@ For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR`
 
 ## Human Interface Guidelines
 
+**Liquid Glass is the default design direction for all future UI changes.** Follow [UI_DESIGN.md](UI_DESIGN.md) for appearance, interaction, accessibility, compatibility, and validation requirements. Apple Music's capsule tabs and soft sidebar selection are visual references; use supported native APIs and preserve older-macOS fallbacks. Existing views have not all been migrated yet.
+
 The source cites the relevant Apple HIG principles beside the controls implementing them:
 
 | Principle | Implementation |
