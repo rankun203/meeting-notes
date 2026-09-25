@@ -67,31 +67,11 @@ private struct SecurityCredentialStorage: CredentialStorage {
             var query = base(account, service: service)
             query.merge(attributes) { _, new in new }
             query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            // The file-based Keychain prompt uses the access descriptor, not an
-            // app-provided purpose-string field. Keep the default trust policy.
-            // https://developer.apple.com/documentation/security/secaccesscreate(_:_:_:)
-            var access: SecAccess?
-            let accessStatus = SecAccessCreate(label as CFString, nil, &access)
-            guard accessStatus == errSecSuccess, let access else { throw ServiceError("Unable to describe Keychain credentials (\(accessStatus)).") }
-            query[kSecAttrAccess as String] = access
+            // Use SecItem attributes only; preserve existing access policies.
             let added = SecItemAdd(query as CFDictionary, nil)
             guard added == errSecSuccess else { throw ServiceError("Unable to save credentials to Keychain (\(added)).") }
         } else if status != errSecSuccess {
             throw ServiceError("Unable to update Keychain (\(status)).")
-        } else {
-            var query = base(account, service: service)
-            query[kSecReturnRef as String] = true
-            var result: CFTypeRef?
-            let found = SecItemCopyMatching(query as CFDictionary, &result)
-            guard found == errSecSuccess, let result else { throw ServiceError("Unable to find saved Keychain credentials (\(found)).") }
-            let item = result as! SecKeychainItem
-            var access: SecAccess?
-            let copied = SecKeychainItemCopyAccess(item, &access)
-            guard copied == errSecSuccess, let access else { throw ServiceError("Unable to read Keychain description (\(copied)).") }
-            if try KeychainPrompt.rename(access, to: label) {
-                let updated = SecKeychainItemSetAccess(item, access)
-                guard updated == errSecSuccess else { throw ServiceError("Credentials saved, but their Keychain description could not be updated (\(updated)).") }
-            }
         }
     }
     func remove(account: String, service: String) throws {
@@ -111,30 +91,6 @@ enum KeychainPrompt {
         case "gday-oauth": return "Gday Meetings — server sign-in tokens"
         default: return "Gday Meetings — saved online credentials"
         }
-    }
-    /// Rename the prompt only; retain every ACL's trusted apps, authorizations,
-    /// and prompt flags. Never replace an existing item's access with defaults.
-    static func rename(_ access: SecAccess, to label: String) throws -> Bool {
-        var list: CFArray?
-        let status = SecAccessCopyACLList(access, &list)
-        guard status == errSecSuccess, let entries = list as? [SecACL] else { throw ServiceError("Unable to read Keychain access descriptions (\(status)).") }
-        var changed = false
-        for entry in entries {
-            // Only the secret-read prompt has a human-readable description.
-            // Other ACL descriptions may contain structured partition metadata.
-            let authorizations = SecACLCopyAuthorizations(entry) as! [String]
-            guard authorizations.contains(kSecACLAuthorizationDecrypt as String) else { continue }
-            var applications: CFArray?
-            var description: CFString?
-            var selector = SecKeychainPromptSelector(rawValue: 0)
-            let copied = SecACLCopyContents(entry, &applications, &description, &selector)
-            guard copied == errSecSuccess else { throw ServiceError("Unable to read Keychain prompt (\(copied)).") }
-            guard description as String? != label else { continue }
-            let updated = SecACLSetContents(entry, applications, label as CFString, selector)
-            guard updated == errSecSuccess else { throw ServiceError("Unable to describe Keychain prompt (\(updated)).") }
-            changed = true
-        }
-        return changed
     }
 }
 

@@ -45,6 +45,7 @@ struct SettingsView: View {
             }.tabItem { Label("Recording", systemImage: "mic") }
             Form {
                 Section("Gday Server") {
+                    Text("Keychain securely stores your API keys and server sign-in tokens.").font(.caption).foregroundStyle(.secondary)
                     TextField("Server URL", text: $serverURL).textContentType(.URL)
                     if server.connected {
                         LabeledContent("Signed in", value: server.email ?? "Connected")
@@ -65,6 +66,7 @@ struct SettingsView: View {
             }.tabItem { Label("Transcription", systemImage: "text.bubble") }
             Form {
                 Section("Language Model") {
+                    Text("Your API key is stored securely in Keychain.").font(.caption).foregroundStyle(.secondary)
                     TextField("API Base URL", text: setting(\.llmBaseURL))
                     TextField("Model", text: setting(\.llmModel))
                     SecureField("API Key", text: setting(\.llmAPIKey))
