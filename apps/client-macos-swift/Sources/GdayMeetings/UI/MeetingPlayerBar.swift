@@ -59,7 +59,7 @@ struct MeetingPlayerBar: View {
                     .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
                     .frame(minWidth: 130, maxWidth: .infinity)
 
-                HStack(spacing: 10) {
+                HStack(spacing: 4) {
                     Button(action: toggleTracks) {
                         Image(systemName: tracksExpanded ? "chevron.down" : "waveform")
                             .frame(width: 44, height: 44)
@@ -75,7 +75,7 @@ struct MeetingPlayerBar: View {
                         HStack(spacing: 4) {
                             Text("\(playback.playbackRate.formatted())×").monospacedDigit()
                             Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
-                        }.padding(.horizontal, 6).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                        }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                     }
                     .menuStyle(.button).buttonStyle(ActionButtonStyle()).fixedSize()
                     .accessibilityLabel("Playback speed")
@@ -92,7 +92,7 @@ struct MeetingPlayerBar: View {
                         HStack(spacing: 4) {
                             Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1)
                             Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
-                        }.padding(.horizontal, 6).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                        }.padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                     }
                     .menuStyle(.button).buttonStyle(ActionButtonStyle()).frame(maxWidth: 140)
                     .accessibilityLabel("Audio track and player options")

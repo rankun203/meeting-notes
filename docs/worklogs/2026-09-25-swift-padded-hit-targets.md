@@ -23,3 +23,7 @@ Release, preview and installer builds passed. Preview screenshot shows padded Sa
 ## Technical debt
 
 Existing narrow-window fit remains to be validated with the larger requested controls. If targets crowd at minimum window width, introduce an adaptive compact arrangement without shrinking hit regions. Do not substitute hover decoration for actual target sizing again.
+
+## Follow-up: menu spacing
+
+User requested more left/right padding and less gap. Increased speed/track label horizontal padding from 6 to 12 pt and reduced option-group spacing from 10 to 4 pt. Kept 44 pt height, symbol sizes and existing track-menu width limit. Installer and preview builds passed; rebuilt preview screenshot confirms centered controls and readable labels/chevrons. No new technical debt beyond the narrow-window validation already recorded. Existing linker-path warnings remain.
