@@ -6,6 +6,13 @@
 - Before committing, inspect the complete diff and run the relevant checks.
 - For standalone or temporary Python scripts, use `uv run --no-project` and add required third-party packages with `--with` (for example, `uv run --no-project --with httpx script.py`). Use the repository's normal project environment for project-owned Python code.
 
+## Current APIs and deprecations (all apps)
+
+- Prefer the latest stable, supported APIs and platform features across all apps in this repository, while respecting their declared minimum platform versions.
+- Treat deprecation warnings as actionable maintenance work. When encountered during development or validation, investigate and migrate affected code to the supported replacement; do not silently ignore or suppress the warnings.
+- Check current official documentation for replacement APIs and validate the resulting behavior. Do not introduce deprecated APIs into new code.
+- If migration is blocked by a dependency or a supported older platform, document the warning, reason, compatibility fallback, and concrete follow-up in the worklog. Report remaining warnings explicitly; do not describe a build as warning-free when it is not.
+
 ## Worklogs
 
 When a task changes repository code, create or update a concise worklog under
