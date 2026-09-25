@@ -119,9 +119,9 @@ struct MeetingDetailView: View {
             Label(playbackActionTitle, systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill")
                 .labelStyle(.iconOnly)
                 .font(.title3)
-                .frame(width: 32, height: 32)
+                .frame(width: 44, height: 44)
         }
-        .buttonStyle(ActionButtonStyle(cornerRadius: 16))
+        .buttonStyle(ActionButtonStyle(cornerRadius: 22))
         .modifier(MeetingGlassSurface())
         .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
         .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "\(playbackActionTitle) this meeting")

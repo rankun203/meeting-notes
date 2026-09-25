@@ -65,9 +65,11 @@ struct PreviewContainer<Content: View>: View {
                     if let meeting = store.meetings.first(where: { $0.audioFiles.count == 2 }) {
                         ForEach(Array(store.audioURLs(for: meeting).enumerated()), id: \.offset) { index, url in
                             Label("Sample \(index + 1)", systemImage: "doc")
+                                .padding(.horizontal, 6)
+                                .frame(minWidth: 28, minHeight: 28)
                                 .contentShape(Rectangle())
                                 .onDrag { NSItemProvider(object: url as NSURL) }
-                                .modifier(ActionHover(outlined: true))
+                                .modifier(ActionHover())
                                 .accessibilityElement(children: .combine)
                                 .accessibilityHint("Drag into the meetings list to import, or into a meeting to add a track")
                                 .help("Drag this synthetic audio file into the list or a meeting")

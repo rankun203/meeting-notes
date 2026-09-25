@@ -62,7 +62,7 @@ struct MeetingPlayerBar: View {
                 HStack(spacing: 10) {
                     Button(action: toggleTracks) {
                         Image(systemName: tracksExpanded ? "chevron.down" : "waveform")
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(ActionButtonStyle())
                     .accessibilityLabel(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
@@ -71,9 +71,13 @@ struct MeetingPlayerBar: View {
                         Picker("Playback Speed", selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })) {
                             ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in Text("\(rate.formatted())×").tag(rate) }
                         }
-                    } label: { Text("\(playback.playbackRate.formatted())×").monospacedDigit().frame(minWidth: 36, minHeight: 36).contentShape(Rectangle()) }
-                    .menuStyle(.borderlessButton).fixedSize()
-                    .modifier(ActionHover(outlined: true))
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\(playback.playbackRate.formatted())×").monospacedDigit()
+                            Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
+                        }.padding(.horizontal, 6).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                    }
+                    .menuStyle(.button).buttonStyle(ActionButtonStyle()).fixedSize()
                     .accessibilityLabel("Playback speed")
                     .help("Playback speed")
 
@@ -84,9 +88,13 @@ struct MeetingPlayerBar: View {
                         }
                         Divider()
                         Button("Close Player", systemImage: "xmark") { playback.clear() }
-                    } label: { Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1).frame(minHeight: 36).contentShape(Rectangle()) }
-                    .menuStyle(.borderlessButton).frame(maxWidth: 140)
-                    .modifier(ActionHover(outlined: true))
+                    } label: {
+                        HStack(spacing: 4) {
+                            Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
+                        }.padding(.horizontal, 6).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                    }
+                    .menuStyle(.button).buttonStyle(ActionButtonStyle()).frame(maxWidth: 140)
                     .accessibilityLabel("Audio track and player options")
                     .accessibilityValue(selectedTrackName)
                     .help("Choose microphone, system audio, or all tracks")
@@ -103,7 +111,7 @@ struct MeetingPlayerBar: View {
                                     Spacer()
                                     Button { playback.toggleMute(index) } label: {
                                         Image(systemName: playback.mutedTracks.contains(index) ? "speaker.slash" : "speaker.wave.2")
-                                            .frame(width: 36, height: 36)
+                                            .frame(width: 44, height: 44)
                                     }.buttonStyle(ActionButtonStyle())
                                         .accessibilityLabel("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
                                         .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
@@ -143,7 +151,7 @@ struct MeetingPlayerBar: View {
     }
 
     private var tracksHeight: CGFloat {
-        min(200, CGFloat(playback.trackNames.count) * 46 + 12)
+        min(200, CGFloat(playback.trackNames.count) * 54 + 12)
     }
 
     private func resetTracks() {
@@ -197,7 +205,7 @@ struct MeetingPlayerBar: View {
     }
 
     private func transportButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.title3).frame(width: 36, height: 36) }
+        Button(action: action) { Image(systemName: symbol).font(.title3).frame(width: 44, height: 44) }
             .buttonStyle(ActionButtonStyle()).accessibilityLabel(title).help(title)
             .disabled(playback.isLoading || playback.isPlaybackBlocked || playback.duration <= 0)
     }
