@@ -203,6 +203,11 @@ struct LibraryView: View {
                     .frame(width: 220)
                 }
             }
+            ToolbarItem(id: "meeting-actions", placement: .automatic) {
+                if destination == .meetings, let meeting = store.meetings.first(where: { $0.id == selectedMeeting }) {
+                    MeetingActionsMenu(meeting: meeting)
+                }
+            }
         }
         // HIG Feedback: keep the activity visible while people browse other content.
         // A single persistent transport replaces scattered status and action rows.

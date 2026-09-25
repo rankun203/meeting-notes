@@ -3,7 +3,6 @@ import SwiftUI
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
-    @ObservedObject private var server = GdayServerService.shared
     let meetingID: UUID
     @ViewState private var tab = 0
     @ViewState private var chatDraft = ""
@@ -31,17 +30,6 @@ struct MeetingDetailView: View {
             .padding(24)
             .modifier(AudioFileDrop(meetingID: meetingID))
             .navigationTitle(meeting.title)
-            .toolbar {
-                Menu {
-                    Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription", systemImage: "text.bubble") { Task { await store.transcribe(id: meetingID) } }
-                        .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meetingID)
-                    Divider()
-                    Button("Export Meeting Text…", systemImage: "square.and.arrow.up") { MeetingPanels.export(meeting, store: store) }
-                    Button("Archive to Server", systemImage: "icloud.and.arrow.up") { Task { await store.archiveToServer(id: meetingID) } }
-                        .disabled(!server.connected || store.isBusy || store.recordingID == meetingID)
-                } label: { Label("Meeting Actions", systemImage: "ellipsis.circle") }
-                .help("Transcribe, export, or archive this meeting")
-            }
             // Reading or editing a meeting never changes the app-owned playback.
             .onAppear { if store.recordingID == meetingID { tab = 1 } }
             .onChange(of: store.recordingID) { _, id in if id == meetingID { tab = 1 } }
@@ -275,3 +263,22 @@ struct MeetingDetailView: View {
 }
 
 private func formatTime(_ seconds: Double) -> String { let value = seconds.isFinite ? max(0, Int(min(seconds, Double(Int.max / 2)))) : 0; return String(format: "%d:%02d", value / 60, value % 60) }
+
+// The library owns this menu so detail replacement cannot duplicate toolbar items.
+struct MeetingActionsMenu: View {
+    @EnvironmentObject private var store: MeetingStore
+    @ObservedObject private var server = GdayServerService.shared
+    let meeting: Meeting
+
+    var body: some View {
+        Menu {
+            Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription", systemImage: "text.bubble") { Task { await store.transcribe(id: meeting.id) } }
+                .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meeting.id)
+            Divider()
+            Button("Export Meeting Text…", systemImage: "square.and.arrow.up") { MeetingPanels.export(meeting, store: store) }
+            Button("Archive to Server", systemImage: "icloud.and.arrow.up") { Task { await store.archiveToServer(id: meeting.id) } }
+                .disabled(!server.connected || store.isBusy || store.recordingID == meeting.id)
+        } label: { Label("Meeting Actions", systemImage: "ellipsis.circle") }
+        .help("Transcribe, export, or archive this meeting")
+    }
+}
