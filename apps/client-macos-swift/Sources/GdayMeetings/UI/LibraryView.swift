@@ -58,6 +58,7 @@ struct LibraryView: View {
             }
             .listStyle(.sidebar)
             .contentMargins(.top, 10, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
             .allowsHitTesting(sidebarRowsVisible)
             .accessibilityHidden(!sidebarRowsVisible)
             }
@@ -88,6 +89,9 @@ struct LibraryView: View {
                         }.padding(.vertical, 4).tag(meeting.id)
                     }
                 }
+                .listStyle(.inset)
+                .contentMargins(.top, 10, for: .scrollContent)
+                .scrollBounceBehavior(.basedOnSize)
                 // Native primary action: single click selects, double click plays.
                 // https://developer.apple.com/documentation/swiftui/view/contextmenu(forselectiontype:menu:primaryaction:)
                 .contextMenu(forSelectionType: UUID.self) { ids in
