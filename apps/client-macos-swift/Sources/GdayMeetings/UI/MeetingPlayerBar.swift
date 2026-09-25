@@ -55,7 +55,7 @@ struct MeetingPlayerBar: View {
 
                 PlaybackPosition(progress: playback.progress, waveforms: audibleWaveforms,
                                  duration: playback.duration, dimmed: playback.mutedTracks.count == playback.trackNames.count,
-                                 showsTimes: true, seek: playback.seek)
+                                 showsTimes: true, isLoading: playback.isLoadingWaveforms, seek: playback.seek)
                     .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
                     .frame(minWidth: 130, maxWidth: .infinity)
 
@@ -122,7 +122,7 @@ struct MeetingPlayerBar: View {
                                     waveforms: playback.waveforms.indices.contains(index) ? [playback.waveforms[index]].compactMap { $0 } : [],
                                     duration: playback.duration,
                                     label: "\(name) playback position",
-                                    dimmed: playback.mutedTracks.contains(index), seek: playback.seek)
+                                    dimmed: playback.mutedTracks.contains(index), isLoading: playback.isLoadingWaveforms, seek: playback.seek)
                                     .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
                             }
                         }

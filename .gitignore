@@ -4,10 +4,16 @@ target/
 # Swift Package Manager and locally packaged apps
 .build/
 .swiftpm/
+# Native compilation outputs (vendored source archives remain tracked)
+*.o
+*.a
+*.dylib
+*.dSYM/
 
 # IDE
 .idea/
 .codex/
+.vscode/launch.json
 *.swp
 *.swo
 *~

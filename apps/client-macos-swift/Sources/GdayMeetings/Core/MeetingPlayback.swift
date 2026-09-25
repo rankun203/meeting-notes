@@ -28,57 +28,38 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var isPlaybackBlocked = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var waveforms: [AudioWaveform?] = []
+    @Published private(set) var isLoadingWaveforms = false
     @Published private(set) var mutedTracks: Set<Int> = []
-    private var sourceCompositionTracks: [[AVCompositionTrack]] = []
     var hasSelection: Bool { meetingID != nil }
 
     typealias AudioPreparer = @Sendable (URL) async throws -> PreparedPlaybackAudio
+    typealias WaveformLoader = @Sendable (URL, URL) async throws -> AudioWaveform
     private let prepareAudio: AudioPreparer
-    private let player = AVPlayer()
+    private let readWaveform: WaveformLoader
+    private var transport: StreamingPlayback?
+    private var playTask: Task<Void, Never>?
     private var sourceMeeting: Meeting?
     private var sourceFiles: [URL] = []
     private var temporaryURLs: [URL] = []
     private var preparationTask: Task<Void, Never>?
+    private var waveformTask: Task<Void, Never>?
+    private var cacheTask: Task<Void, Never>?
     private var seekTask: Task<Void, Never>?
     private var generation = UUID()
     private var seekGeneration = UUID()
     private var wantsPlayback = false
     private var pendingPosition: Double = 0
     private var isSeeking = false
-    private var periodicObserver: Any?
-    private var playbackObservation: NSKeyValueObservation?
-    private var itemObservation: NSKeyValueObservation?
-    private var endObserver: NSObjectProtocol?
-    private var failureObserver: NSObjectProtocol?
-
-    init(prepareAudio: @escaping AudioPreparer = { url in try await AudioPlaybackPreparation.prepare(url) }) {
-        player.isMuted = UIPreview.enabled
+    init(readWaveform: @escaping WaveformLoader = { source, readable in
+        try await WaveformCache.shared.waveform(source: source, readable: readable)
+    }, prepareAudio: @escaping AudioPreparer = { url in PreparedPlaybackAudio(url: url, temporary: false) }) {
         self.prepareAudio = prepareAudio
-        player.actionAtItemEnd = .pause
-        periodicObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                if !self.isSeeking && !self.isLoading {
-                    let time = self.player.currentTime().seconds
-                    if time.isFinite { self.currentTime = Self.clampedTime(time, duration: self.duration) }
-                }
-            }
-        }
-        playbackObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isPlaying = self.player.timeControlStatus == .playing && !self.isPlaybackBlocked
-            }
-        }
+        self.readWaveform = readWaveform
     }
 
     deinit {
-        preparationTask?.cancel(); seekTask?.cancel()
-        player.pause(); player.replaceCurrentItem(with: nil)
-        if let periodicObserver { player.removeTimeObserver(periodicObserver) }
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
-        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver) }
-        for url in temporaryURLs { try? FileManager.default.removeItem(at: url) }
+        preparationTask?.cancel(); seekTask?.cancel(); playTask?.cancel(); waveformTask?.cancel(); cacheTask?.cancel()
+        transport?.close(removing: temporaryURLs)
     }
 
     /// Selection prepares a paused item. Browsing elsewhere never needs to call this.
@@ -113,14 +94,14 @@ final class MeetingPlayback: ObservableObject {
         }
         wantsPlayback = true
         if isLoading { return }
-        guard player.currentItem != nil else { return }
+        guard transport != nil else { return }
         if hasEnded || (duration > 0 && currentTime >= duration) { seek(to: 0) }
-        else { player.playImmediately(atRate: Float(playbackRate)) }
+        else { startPlayback() }
     }
 
     func pause() {
         wantsPlayback = false
-        player.pause(); isPlaying = false
+        playTask?.cancel(); transport?.pause(); isPlaying = false
     }
 
     func togglePlayPause() { if wantsPlayback || isPlaying { pause() } else { play() } }
@@ -130,18 +111,38 @@ final class MeetingPlayback: ObservableObject {
         let target = duration > 0 ? Self.clampedTime(seconds, duration: duration) : max(0, seconds)
         pendingPosition = target; currentTime = target; hasEnded = duration > 0 && target >= duration
         if isLoading { return }
-        guard let item = player.currentItem else { return }
-        seekTask?.cancel(); item.cancelPendingSeeks()
+        guard let transport else { return }
+        seekTask?.cancel(); playTask?.cancel()
         let operation = UUID(); seekGeneration = operation
         let currentGeneration = generation
-        isSeeking = true
+        isSeeking = true; isPlaying = false
         seekTask = Task { [weak self] in
-            guard let self else { return }
-            let completed = await self.player.seek(to: CMTime(seconds: target, preferredTimescale: 48000), toleranceBefore: .zero, toleranceAfter: .zero)
-            guard !Task.isCancelled, self.generation == currentGeneration, self.seekGeneration == operation, self.player.currentItem === item else { return }
-            self.isSeeking = false
-            if completed, self.wantsPlayback, !self.isPlaybackBlocked, !self.hasEnded { self.player.playImmediately(atRate: Float(self.playbackRate)) }
-            else if self.hasEnded { self.pause() }
+            do {
+                try await transport.seek(to: target, revision: operation)
+                guard let self, !Task.isCancelled, self.generation == currentGeneration, self.seekGeneration == operation else { return }
+                self.isSeeking = false
+                if self.wantsPlayback, !self.isPlaybackBlocked, !self.hasEnded { self.startPlayback() }
+                else if self.hasEnded { self.pause() }
+            } catch is CancellationError { }
+            catch {
+                guard let self, self.generation == currentGeneration, self.seekGeneration == operation else { return }
+                self.isSeeking = false; self.pause(); self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func startPlayback() {
+        guard let transport, !isSeeking else { return }
+        let operation = generation
+        playTask?.cancel()
+        playTask = Task { [weak self] in
+            guard let self, self.wantsPlayback, !self.isPlaybackBlocked else { return }
+            do { try await transport.play(rate: self.playbackRate) }
+            catch is CancellationError { }
+            catch {
+                guard self.generation == operation else { return }
+                self.pause(); self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -150,7 +151,7 @@ final class MeetingPlayback: ObservableObject {
     func setRate(_ rate: Double) {
         guard rate.isFinite else { return }
         playbackRate = min(2, max(0.5, rate))
-        if isPlaying && !isPlaybackBlocked { player.rate = Float(playbackRate) }
+        transport?.setRate(playbackRate)
     }
 
     func selectTrack(_ track: Int) {
@@ -169,17 +170,7 @@ final class MeetingPlayback: ObservableObject {
     }
 
     private func applyMix() {
-        guard let item = player.currentItem else { return }
-        let count = sourceCompositionTracks.enumerated().reduce(0) { $0 + (mutedTracks.contains($1.offset) ? 0 : $1.element.count) }
-        let mix = AVMutableAudioMix()
-        mix.inputParameters = sourceCompositionTracks.enumerated().flatMap { index, tracks in
-            tracks.map { track in
-                let parameter = AVMutableAudioMixInputParameters(track: track)
-                parameter.setVolume(mutedTracks.contains(index) ? 0 : 1 / Float(max(1, count)), at: .zero)
-                return parameter
-            }
-        }
-        item.audioMix = mix
+        transport?.setMuted(mutedTracks)
     }
 
     /// Recording prevents the app's own audio from feeding back into the new meeting.
@@ -204,17 +195,22 @@ final class MeetingPlayback: ObservableObject {
         progress.scrub(to: nil)
         generation = UUID(); seekGeneration = UUID()
         preparationTask?.cancel(); preparationTask = nil
+        waveformTask?.cancel(); waveformTask = nil
+        cacheTask?.cancel(); cacheTask = nil
         seekTask?.cancel(); seekTask = nil
         releaseCurrentItem()
         sourceMeeting = nil; sourceFiles = []
         meetingID = nil; title = ""; trackNames = []; selectedTrack = -1
         waveforms = []; mutedTracks = []
+        isLoadingWaveforms = false
         currentTime = 0; duration = 0; pendingPosition = 0
         isLoading = false; isSeeking = false; hasEnded = false; errorMessage = nil
     }
 
     /// Lets lifecycle/fixture checks await owned work without depending on UI sleeps.
     func waitForPreparation() async { await preparationTask?.value }
+    func waitForWaveforms() async { await waveformTask?.value }
+    func waitForCachedWaveforms() async { await cacheTask?.value }
 
     static func clampedTime(_ seconds: Double, duration: Double) -> Double {
         guard seconds.isFinite, duration.isFinite else { return 0 }
@@ -226,11 +222,12 @@ final class MeetingPlayback: ObservableObject {
     private func load(meeting: Meeting, files: [URL], track: Int, position: Double, autoplay: Bool) {
         progress.scrub(to: nil)
         generation = UUID(); let operation = generation
-        preparationTask?.cancel(); seekTask?.cancel()
+        preparationTask?.cancel(); seekTask?.cancel(); waveformTask?.cancel(); cacheTask?.cancel()
         releaseCurrentItem()
         sourceMeeting = meeting; sourceFiles = files
         meetingID = meeting.id; title = meeting.title; selectedTrack = track
-        waveforms = []; mutedTracks = track < 0 ? [] : Set(files.indices.filter { $0 != track })
+        waveforms = Array(repeating: nil, count: files.count); mutedTracks = track < 0 ? [] : Set(files.indices.filter { $0 != track })
+        isLoadingWaveforms = !files.isEmpty
         trackNames = files.map { file in
             let name = file.deletingPathExtension().lastPathComponent
             return name == "microphone" ? "Microphone" : name == "system" ? "System Audio" : name
@@ -240,93 +237,81 @@ final class MeetingPlayback: ObservableObject {
         wantsPlayback = autoplay && !isPlaybackBlocked
         guard !files.isEmpty else { errorMessage = "This meeting has no audio files to play."; isLoading = false; return }
         isLoading = true
+        // Read small cached envelopes independently, even while an Opus source is
+        // still being prepared. Never wait for waveform work to begin playback.
+        cacheTask = Task { [weak self] in
+            for (index, file) in files.enumerated() {
+                guard !Task.isCancelled else { return }
+                let cached = await WaveformCache.shared.cached(file)
+                guard let self, self.generation == operation, !Task.isCancelled else { return }
+                if let cached, self.waveforms[index] == nil {
+                    self.waveforms[index] = cached
+                    self.duration = max(self.duration, cached.duration)
+                }
+            }
+        }
         let prepare = prepareAudio
+        let readWaveform = readWaveform
         preparationTask = Task { [weak self] in
             var temporary: [URL] = []
             var transferred = false
-            defer { if !transferred { for url in temporary { try? FileManager.default.removeItem(at: url) } } }
+            let transport = StreamingPlayback(silent: UIPreview.enabled)
             do {
-                let composition = AVMutableComposition()
-                var sourceTracks: [[AVCompositionTrack]] = []
-                var envelopes: [AudioWaveform?] = []
+                var readableFiles: [URL] = []
                 for file in files {
-                    var compositionTracks: [AVCompositionTrack] = []
                     try Task.checkCancellation()
                     let prepared = try await prepare(file)
                     if prepared.temporary { temporary.append(prepared.url) }
-                    try Task.checkCancellation()
-                    let asset = AVURLAsset(url: prepared.url)
-                    let audioTracks = try await asset.loadTracks(withMediaType: .audio)
-                    let length = try await asset.load(.duration)
-                    guard length.isNumeric, CMTimeCompare(length, .zero) > 0, !audioTracks.isEmpty else { throw MeetingError.message("An audio track is empty or cannot be played.") }
-                    for audio in audioTracks {
-                        guard let destination = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw MeetingError.message("Unable to prepare audio playback.") }
-                        try destination.insertTimeRange(CMTimeRange(start: .zero, duration: length), of: audio, at: .zero)
-                        compositionTracks.append(destination)
-                    }
-                    sourceTracks.append(compositionTracks)
-                    // A missing envelope must not prevent otherwise valid playback.
-                    envelopes.append(try? await AudioWaveform.read(prepared.url))
+                    readableFiles.append(prepared.url)
                 }
                 try Task.checkCancellation()
-                guard let self, self.generation == operation else { return }
-                let length = composition.duration.seconds
-                guard length.isFinite, length > 0 else { throw MeetingError.message("This recording has no playable duration.") }
-                let item = AVPlayerItem(asset: composition)
-                self.sourceCompositionTracks = sourceTracks
-                self.waveforms = envelopes
+                transport.onUpdate = { [weak self] snapshot in
+                    Task { @MainActor in
+                        guard let self, self.generation == operation, self.seekGeneration == snapshot.revision, !self.isSeeking else { return }
+                        self.currentTime = snapshot.time
+                        self.isPlaying = snapshot.playing && self.wantsPlayback && !self.isPlaybackBlocked
+                        if snapshot.ended { self.hasEnded = true; self.wantsPlayback = false }
+                        if let error = snapshot.error { self.pause(); self.errorMessage = error }
+                    }
+                }
+                let length = try await transport.prepare(files: readableFiles)
+                try Task.checkCancellation()
+                guard let self, self.generation == operation else { throw CancellationError() }
+                self.transport = transport
                 self.temporaryURLs = temporary; transferred = true
                 self.duration = length
-                self.player.replaceCurrentItem(with: item)
                 self.applyMix()
-                self.observe(item, generation: operation)
                 self.isLoading = false
                 self.seek(to: self.pendingPosition)
+                self.waveformTask = Task { [weak self] in
+                    for (index, readable) in readableFiles.enumerated() {
+                        guard !Task.isCancelled else { return }
+                        let envelope = try? await readWaveform(files[index], readable)
+                        guard let self, self.generation == operation, !Task.isCancelled else { return }
+                        if let envelope { self.waveforms[index] = envelope }
+                    }
+                    guard let self, self.generation == operation else { return }
+                    self.isLoadingWaveforms = false
+                }
             } catch is CancellationError {
                 // Replacing/clearing selection owns the published state; stale work only cleans up.
             } catch {
-                guard let self, self.generation == operation, !Task.isCancelled else { return }
-                self.pause(); self.isLoading = false
-                self.errorMessage = "Unable to load meeting audio: " + error.localizedDescription
-            }
-        }
-    }
-
-    private func observe(_ item: AVPlayerItem, generation operation: UUID) {
-        itemObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observed, _ in
-            Task { @MainActor in
-                guard let self, self.generation == operation, self.player.currentItem === observed else { return }
-                if observed.status == .failed {
+                if let self, self.generation == operation, !Task.isCancelled {
                     self.pause(); self.isLoading = false
-                    self.errorMessage = observed.error?.localizedDescription ?? "Audio playback failed."
+                    self.isLoadingWaveforms = false
+                    self.errorMessage = "Unable to load meeting audio: " + error.localizedDescription
                 }
             }
-        }
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.generation == operation else { return }
-                self.pause(); self.currentTime = self.duration; self.hasEnded = true
-            }
-        }
-        failureObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.generation == operation else { return }
-                self.pause(); self.errorMessage = item.error?.localizedDescription ?? "The recording could not finish playing."
-            }
+            if !transferred { await transport.shutdown(removing: temporary) }
         }
     }
 
     private func releaseCurrentItem() {
         pause()
-        itemObservation?.invalidate(); itemObservation = nil
-        if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
-        if let failureObserver { NotificationCenter.default.removeObserver(failureObserver); self.failureObserver = nil }
-        player.currentItem?.cancelPendingSeeks()
-        player.replaceCurrentItem(with: nil)
-        for url in temporaryURLs { try? FileManager.default.removeItem(at: url) }
-        temporaryURLs = []
-        sourceCompositionTracks = []
+        transport?.close(removing: temporaryURLs)
+        transport = nil; temporaryURLs = []
     }
+
 }
 
 @MainActor

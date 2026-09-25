@@ -9,6 +9,7 @@ struct WaveformTimeline: View {
     let time: Double
     var label = "Playback position"
     var dimmed = false
+    var isLoading = false
     let seek: (Double) -> Void
     let scrub: (Double?) -> Void
     @ViewState private var isScrubbing = false
@@ -47,7 +48,7 @@ struct WaveformTimeline: View {
         .frame(height: 24)
         .modifier(ActionHover(pressed: isScrubbing, cornerRadius: 4))
         .overlay(alignment: .center) {
-            if waveforms.isEmpty { Text("Waveform unavailable").font(.caption2).foregroundStyle(.secondary).allowsHitTesting(false) }
+            if waveforms.isEmpty { Text(isLoading ? "Loading waveform…" : "Waveform unavailable").font(.caption2).foregroundStyle(.secondary).allowsHitTesting(false) }
         }
         .focusable().focused($focused)
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(focused ? Color.accentColor : .clear, lineWidth: 2))
@@ -77,11 +78,12 @@ struct PlaybackPosition: View {
     var label = "Playback position"
     var dimmed = false
     var showsTimes = false
+    var isLoading = false
     let seek: (Double) -> Void
 
     var body: some View {
         WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.displayedTime,
-                         label: label, dimmed: dimmed, seek: seek, scrub: progress.scrub)
+                         label: label, dimmed: dimmed, isLoading: isLoading, seek: seek, scrub: progress.scrub)
         .overlay(alignment: .bottom) {
             if showsTimes {
                 HStack {

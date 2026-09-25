@@ -86,6 +86,7 @@ struct MeetingPlaybackTests {
         await playback.waitForPreparation()
         #expect(playback.selectedTrack == 0)
         #expect(abs(playback.duration - 3) < 0.01)
+        await playback.waitForWaveforms()
         #expect(playback.waveforms.compactMap { $0 }.count == 2)
         #expect(playback.mutedTracks == [1])
         playback.toggleMute(0)
@@ -121,11 +122,11 @@ struct MeetingPlaybackTests {
         let temporary = directory.appendingPathComponent("temporary.wav")
         try makeSilence(source, seconds: 0.2)
         let gate = PlaybackPreparationGate()
-        let playback = MeetingPlayback { url in
+        let playback = MeetingPlayback(prepareAudio: { url in
             try FileManager.default.copyItem(at: url, to: temporary)
             await gate.suspend() // Deliberately ignores cancellation like some framework work.
             return PreparedPlaybackAudio(url: temporary, temporary: true)
-        }
+        })
         playback.select(meeting: Meeting(title: "Old"), files: [source])
         let oldWork = Task { await playback.waitForPreparation() }
         await gate.waitUntilStarted()
@@ -139,7 +140,7 @@ struct MeetingPlaybackTests {
     }
 
     @Test func failedPreparationReportsErrorWithoutStartingPlayback() async throws {
-        let playback = MeetingPlayback { _ in throw ServiceError("Fixture decode failed") }
+        let playback = MeetingPlayback(prepareAudio: { _ in throw ServiceError("Fixture decode failed") })
         playback.select(meeting: Meeting(title: "Broken"), files: [URL(fileURLWithPath: "/fixture/invalid.opus")])
         await playback.waitForPreparation()
         #expect(playback.errorMessage?.contains("Fixture decode failed") == true)
@@ -150,10 +151,11 @@ struct MeetingPlaybackTests {
 
     @Test func playRetriesFailedSelectionButRecordingPreventsRetry() async {
         let counter = PlaybackAttemptCounter()
-        let playback = MeetingPlayback { _ in
+        let playback = MeetingPlayback(prepareAudio: { _ in
             let attempt = await counter.next()
             throw ServiceError("Fixture failure \(attempt)")
-        }
+        })
+
         let meeting = Meeting(title: "Retry fixture")
         let files = [URL(fileURLWithPath: "/fixture/microphone.opus"), URL(fileURLWithPath: "/fixture/system.opus")]
         playback.select(meeting: meeting, files: files, track: 1)
@@ -174,6 +176,57 @@ struct MeetingPlaybackTests {
         #expect(playback.selectedTrack == 1)
         #expect(!playback.isPlaying)
         #expect(!playback.isLoading)
+        playback.clear()
+    }
+
+    @Test func playbackReadyBeforeWaveformAndStaleWaveformCannotPublish() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.wav")
+        try makeSilence(source, seconds: 2)
+        let gate = PlaybackPreparationGate()
+        let playback = MeetingPlayback(readWaveform: { _, _ in
+            await gate.suspend()
+            return AudioWaveform(duration: 2, peaks: [0.5])
+        })
+        playback.select(meeting: Meeting(title: "Fixture"), files: [source])
+        await playback.waitForPreparation()
+        await gate.waitUntilStarted()
+        #expect(!playback.isLoading)
+        #expect(playback.duration == 2)
+        #expect(playback.isLoadingWaveforms)
+        let oldWork = Task { await playback.waitForWaveforms() }
+        await Task.yield()
+        playback.clear()
+        await gate.release()
+        await oldWork.value
+        #expect(playback.waveforms.isEmpty)
+        #expect(!playback.isLoadingWaveforms)
+    }
+
+    @Test func cachedWaveformAppearsBeforeAudioPreparationCompletes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.wav")
+        try makeSilence(source, seconds: 2)
+        let envelope = try await WaveformCache.shared.waveform(source: source, readable: source)
+        defer { try? FileManager.default.removeItem(at: WaveformCache.shared.entryURL(for: source)) }
+        let gate = PlaybackPreparationGate()
+        let playback = MeetingPlayback(prepareAudio: { file in
+            await gate.suspend()
+            return PreparedPlaybackAudio(url: file, temporary: false)
+        })
+        playback.select(meeting: Meeting(title: "Cached fixture"), files: [source])
+        await gate.waitUntilStarted()
+        await playback.waitForCachedWaveforms()
+        #expect(playback.isLoading)
+        #expect(playback.waveforms == [envelope])
+        #expect(playback.duration == 2)
+        await gate.release()
+        await playback.waitForPreparation()
+        await playback.waitForWaveforms()
         playback.clear()
     }
 

@@ -36,6 +36,7 @@ check_tools() {
 }
 
 swift_package() {
+    /bin/bash "$client_dir/scripts/build-audio-dependencies.sh"
     # Keep build caches local to the checkout, including on managed Macs.
     mkdir -p "$build_dir/cache" "$build_dir/clang-cache"
     CLANG_MODULE_CACHE_PATH="$build_dir/clang-cache" \

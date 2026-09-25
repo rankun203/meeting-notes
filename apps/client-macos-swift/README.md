@@ -1,6 +1,6 @@
 # Gday Meetings — SwiftUI client
 
-A native macOS meeting app built entirely with SwiftUI, AppKit, AVFoundation, Core Audio, Security, and Foundation. The package has no third-party dependencies and does not launch the Rust client or a browser UI.
+A native macOS meeting app built with SwiftUI, AppKit, AVFoundation, Core Audio, Security, and Foundation. Ogg Opus playback uses statically linked libopusfile, libopus, and libogg and does not launch the Rust client or a browser UI.
 
 ## Choose a run mode
 
@@ -46,11 +46,13 @@ make start-macos     # Build and launch the full app
 make test-macos      # Run persistence, import and service contract tests
 ```
 
+The first build compiles the pinned audio libraries from source archives included in the repository; later builds reuse them. This step needs no internet or separate package manager. See [audio dependency versions, licenses, and upgrades](ThirdParty/README.md).
+
 Builds target the current Mac's architecture. Quit the development or staged app before rebuilding its bundle. The original Rust client retains `make install`, `make start`, and `make test-client`.
 
 ### With Xcode
 
-Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/system-audio purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`. For UI Preview when running the executable from Xcode, add `--ui-preview` to the scheme’s launch arguments; remove it to return to full mode. The packaged Preview target additionally uses a separate bundle identifier to isolate window/preferences state.
+Run `bash apps/client-macos-swift/scripts/build-audio-dependencies.sh` once from the repository root, then open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme to build and debug. No generated `.xcodeproj` is needed. To run with the microphone/system-audio purpose strings and stable app identity, use `make start-macos` to launch the packaged app; Xcode can attach to its `GdayMeetings` process. The same Make commands work with Xcode selected through `xcode-select` or `DEVELOPER_DIR`. For UI Preview when running the executable from Xcode, add `--ui-preview` to the scheme’s launch arguments; remove it to return to full mode. The packaged Preview target additionally uses a separate bundle identifier to isolate window/preferences state.
 
 ## Native workflows
 
@@ -59,12 +61,13 @@ Open `Package.swift` in Xcode and select the **GdayMeetings** executable scheme 
 - Drop audio/video files onto the meetings list to create one meeting per file. Drop files onto a meeting detail to add separate tracks; imported tracks start together at time zero. Originals are copied, and a failed batch is rolled back. Finish recording or a pending transcription before changing tracks. Importing never automatically transcribes or uploads.
 - Play all tracks together or individual tracks in the persistent player. Continue browsing, searching, and editing other meetings while listening; use 15-second skips, speed selection, the scrubber, or transcript timestamps. Starting a recording pauses playback; it resumes only when you choose Play.
 - Space toggles playback in the library window, except while editing text or using a sheet. Dragging any waveform previews the same time across the mix and individual tracks; release to seek all tracks together.
+- Waveforms are cached locally and load independently of playback. Long-file overviews sample up to 1,024 frames per time bucket (1,200 buckets), so brief sounds between samples may be absent. Cached envelopes can appear while audio is still preparing. Playback does not wait for waveform generation. Ogg Opus decodes incrementally with libopusfile; native formats use incremental AVAudioFile reads. All tracks share one AVAudioEngine clock and a fixed-size buffer, with no whole-recording PCM conversion.
 - Edit transcripts, rename speakers, write notes, and generate/edit summaries and action items.
 - Organize meetings with people and tags, and chat using meeting, person or tag context.
 - Configure a Gday Meetings server with browser-based OAuth sign-in, or use an OpenAI-compatible transcription endpoint. Summaries and chat use a separately configured OpenAI-compatible language model.
 - Export meeting text as JSON or Markdown, import text archives, or copy recordings from the Rust client's library using **File → Import Existing Gday Library**. JSON text exports do not embed audio.
 - Search server meetings and import their transcript text, or use **Meeting Actions → Archive to Server** to retain a verified server snapshot of a local meeting and its audio.
-- Use the menu bar recording controls, **Command-N** for a meeting, **Command-O** for audio import, **Command-Shift-R** for recording, and **Command-comma** for Settings.
+- Use the menu bar's **Start Recording** to record immediately with saved settings. Hold **Option** to reveal **New Recording…** and configure the session first (on macOS 14, Option-click **Start Recording**). Use **Command-N** for a meeting, **Command-O** for audio import, **Command-Shift-R** for recording, and **Command-comma** for Settings.
 
 Server transcription checkpoints its upload inputs, stable attempt key, and task ID locally. If the app exits or a request fails, choose **Resume Transcription** to check the same durable job. The server and worker run separately; installing this client does not install them. A working server must have a worker configured before it can transcribe.
 
@@ -80,7 +83,7 @@ The native client currently supports one active recording with the default micro
 
 Settings → Recording offers optional **Microphone voice processing** using Apple's echo cancellation, noise suppression, and automatic gain control. It is off by default because processing can affect other apps' playback volume. The implementation requests minimum ducking, never monitors the microphone through speakers, and saves system audio separately. Echo removal depends on the device route; headphones provide the most reliable acoustic separation. Voice processing cannot guarantee echo-free recordings from every third-party calling app.
 
-The audio pipeline aligns track timestamps to a shared host-clock timeline, preserves gaps with silence, and uses bounded asynchronous PCM file writes during capture. Settings → Recording selects Opus (default), M4A/AAC, or WAV. After stopping, each track is encoded separately; compressed-file metadata is saved before temporary WAV sources are removed. Conversion failure preserves the WAV recording. Opus uses native Apple codecs and standard Ogg wrapping without FFmpeg or third-party runtime dependencies. Playback prepares temporary decoded audio because AVKit does not directly read Ogg Opus on the tested macOS release. Device/format changes finalize the partial recording with a visible error. Effective processing, sample rates, and channel counts are retained in the meeting's recording profile. Transcription uses compatible copies when needed; it does not replace the saved recording. See [audio research, design decisions, and hardware validation matrix](docs/AUDIO_DESIGN.md).
+The audio pipeline aligns track timestamps to a shared host-clock timeline, preserves gaps with silence, and uses bounded asynchronous PCM file writes during capture. Settings → Recording selects Opus (default), M4A/AAC, or WAV. After stopping, each track is encoded separately; compressed-file metadata is saved before temporary WAV sources are removed. Conversion failure preserves the WAV recording. Opus encoding uses native Apple codecs and standard Ogg wrapping without FFmpeg. Playback uses bundled, statically linked Xiph libraries and AVAudioEngine; users install no extra runtime libraries. Device/format changes finalize the partial recording with a visible error. Effective processing, sample rates, and channel counts are retained in the meeting's recording profile. Transcription uses compatible copies when needed; it does not replace the saved recording. See [audio research, design decisions, and hardware validation matrix](docs/AUDIO_DESIGN.md).
 
 ## Recording permissions and storage
 

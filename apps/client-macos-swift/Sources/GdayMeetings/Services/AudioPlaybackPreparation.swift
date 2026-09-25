@@ -7,7 +7,9 @@ struct PreparedPlaybackAudio {
 }
 
 enum AudioPlaybackPreparation {
-    /// The caller owns temporary files and removes them only after AVPlayer releases its item.
+    /// Compatibility conversion for transcription/service inputs. Interactive
+    /// playback uses OpusFileDecoder/StreamingPlayback and never calls this path.
+    /// The caller owns the temporary file and removes it after its consumer finishes.
     static func prepare(_ source: URL) async throws -> PreparedPlaybackAudio {
         guard ["opus", "ogg"].contains(source.pathExtension.lowercased()) else { return .init(url: source, temporary: false) }
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent("gday-playback-\(UUID().uuidString).caf")

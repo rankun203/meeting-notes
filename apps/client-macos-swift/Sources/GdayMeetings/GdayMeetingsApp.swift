@@ -107,8 +107,43 @@ private struct RecordingMenuView: View {
         } else if let started = store.recordingStartedAt {
             Text("Recording since \(started.formatted(date: .omitted, time: .shortened))")
         }
-        Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
+        Group {
+            if #available(macOS 15.0, *), store.recordingID == nil {
+                // Native Option-key menu replacement, including while the menu is open.
+                // https://developer.apple.com/documentation/swiftui/view/modifierkeyalternate(_:_:)
+                recordingButton.modifierKeyAlternate(.option) {
+                    Button(action: openRecordingSetup) {
+                        Label("New Recording…", systemImage: "slider.horizontal.3")
+                    }
+                }
+            } else {
+                recordingButton
+            }
+        }.disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
+        Button {
+            openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+        } label: {
+            Label("Show app", systemImage: "macwindow")
+        }
+        Divider()
+        Button { NSApp.terminate(nil) } label: {
+            Label("Quit Gday Meetings", systemImage: "power")
+        }.keyboardShortcut("q")
+    }
+
+    private func openRecordingSetup() {
+        openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+        store.presentsRecordingSetup = true
+    }
+
+    private var recordingButton: some View {
+        Button {
             if store.recordingID == nil {
+                // macOS 14 lacks modifierKeyAlternate; preserve Option-click behavior.
+                if #unavailable(macOS 15.0), NSEvent.modifierFlags.contains(.option) {
+                    openRecordingSetup()
+                    return
+                }
                 Task {
                     await store.startRecording()
                     if store.recordingID == nil, store.errorMessage != nil || store.recordingPermissionNeeded != nil {
@@ -116,13 +151,9 @@ private struct RecordingMenuView: View {
                     }
                 }
             } else { Task { await store.stopRecording() } }
-        }.disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
-        Button("Recording Setup…") {
-            openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
-            store.presentsRecordingSetup = true
-        }.disabled(store.recordingID != nil || store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
-        Button("Show Gday Meetings") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-        Divider()
-        Button("Quit Gday Meetings") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        } label: {
+            Label(store.recordingID == nil ? "Start Recording" : "Stop Recording",
+                  systemImage: store.recordingID == nil ? "record.circle" : "stop.circle")
+        }
     }
 }
