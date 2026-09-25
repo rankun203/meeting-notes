@@ -13,6 +13,8 @@ struct LibraryView: View {
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @ViewState private var deleting: Meeting?
+    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .all
+    @ViewState private var sidebarRowsVisible = true
 
     private var recordingActive: Bool { store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording }
     private func showMeeting(_ id: UUID) { selectedMeeting = id; destination = .meetings }
@@ -39,13 +41,22 @@ struct LibraryView: View {
         // Native split views preserve resizing, keyboard navigation and system appearance.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: Binding(get: { columnVisibility }, set: { value in
+            guard value != columnVisibility else { return }
+            // Mask rows before AppKit begins revealing the column. Keep the list
+            // mounted so its selection and column sizing do not change.
+            sidebarRowsVisible = false
+            columnVisibility = value
+        })) {
             List(selection: $destination) {
                 Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
                 Label("People", systemImage: "person.2").tag(LibraryDestination.people)
                 Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
                 Label("Server Library", systemImage: "network").tag(LibraryDestination.server)
             }
+            .opacity(sidebarRowsVisible ? 1 : 0)
+            .allowsHitTesting(sidebarRowsVisible)
+            .accessibilityHidden(!sidebarRowsVisible)
             .navigationTitle("Gday Meetings")
             .navigationSplitViewColumnWidth(min: 150, ideal: 180)
         } content: {
@@ -116,6 +127,17 @@ struct LibraryView: View {
                 }
             }
         }
+        .task(id: columnVisibility) {
+            guard columnVisibility == .all || columnVisibility == .automatic else { return }
+            if !sidebarRowsVisible {
+                // Native split-view animations have no SwiftUI completion callback.
+                // Leave a short settling interval before presenting the row content.
+                do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+                sidebarRowsVisible = true
+            }
+        }
+        .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         // HIG: toolbar actions apply to the current content and use familiar symbols.
         // https://developer.apple.com/design/human-interface-guidelines/toolbars
         .toolbar {
