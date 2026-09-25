@@ -16,6 +16,7 @@ struct ActionButtonStyle: ButtonStyle {
 /// Also supplements native borderless controls and custom seeking surfaces.
 /// Native controls retain their own pressed and keyboard-focus treatment.
 struct ActionHover: ViewModifier {
+    var outlined = false
     var pressed = false
     var cornerRadius: CGFloat = 8
     @ViewState private var hovered = false
@@ -24,15 +25,16 @@ struct ActionHover: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .contentShape(Rectangle())
             .background {
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(.primary.opacity(enabled ? (pressed ? 0.16 : hovered ? 0.08 : 0) : 0))
+                    .fill(.primary.opacity(enabled ? (pressed ? 0.16 : hovered ? (outlined ? 0.14 : 0.08) : 0) : 0))
                     .allowsHitTesting(false)
             }
             .overlay {
-                if enabled && (hovered || pressed) && contrast == .increased {
+                if enabled && (hovered || pressed) && (outlined || contrast == .increased) {
                     RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(.primary, lineWidth: 1)
+                        .strokeBorder(.primary.opacity(contrast == .increased ? 1 : 0.25), lineWidth: 1)
                         .allowsHitTesting(false)
                 }
             }

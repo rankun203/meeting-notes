@@ -73,7 +73,7 @@ struct MeetingPlayerBar: View {
                         }
                     } label: { Text("\(playback.playbackRate.formatted())×").monospacedDigit().frame(minWidth: 36, minHeight: 36).contentShape(Rectangle()) }
                     .menuStyle(.borderlessButton).fixedSize()
-                    .modifier(ActionHover())
+                    .modifier(ActionHover(outlined: true))
                     .accessibilityLabel("Playback speed")
                     .help("Playback speed")
 
@@ -86,7 +86,7 @@ struct MeetingPlayerBar: View {
                         Button("Close Player", systemImage: "xmark") { playback.clear() }
                     } label: { Label(selectedTrackName, systemImage: "slider.horizontal.3").lineLimit(1).frame(minHeight: 36).contentShape(Rectangle()) }
                     .menuStyle(.borderlessButton).frame(maxWidth: 140)
-                    .modifier(ActionHover())
+                    .modifier(ActionHover(outlined: true))
                     .accessibilityLabel("Audio track and player options")
                     .accessibilityValue(selectedTrackName)
                     .help("Choose microphone, system audio, or all tracks")

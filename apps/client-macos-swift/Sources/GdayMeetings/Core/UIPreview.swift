@@ -67,6 +67,9 @@ struct PreviewContainer<Content: View>: View {
                             Label("Sample \(index + 1)", systemImage: "doc")
                                 .contentShape(Rectangle())
                                 .onDrag { NSItemProvider(object: url as NSURL) }
+                                .modifier(ActionHover(outlined: true))
+                                .accessibilityElement(children: .combine)
+                                .accessibilityHint("Drag into the meetings list to import, or into a meeting to add a track")
                                 .help("Drag this synthetic audio file into the list or a meeting")
                         }
                     }
