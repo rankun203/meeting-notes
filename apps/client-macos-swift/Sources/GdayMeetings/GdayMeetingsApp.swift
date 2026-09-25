@@ -37,7 +37,7 @@ struct GdayMeetingsApp: App {
             }
             CommandMenu("Recording") {
                 Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
-                    if store.recordingID == nil { store.presentsRecordingSetup = true }
+                    if store.recordingID == nil { Task { await store.startRecording() } }
                     else { Task { await store.stopRecording() } }
                 }.keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
@@ -102,15 +102,25 @@ private struct RecordingMenuView: View {
     var body: some View {
         if store.isFinalizingRecording {
             Text("Saving recording…")
+        } else if store.isStartingRecording {
+            Text("Starting recording…")
         } else if let started = store.recordingStartedAt {
             Text("Recording since \(started.formatted(date: .omitted, time: .shortened))")
         }
         Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
             if store.recordingID == nil {
-                openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
-                store.presentsRecordingSetup = true
+                Task {
+                    await store.startRecording()
+                    if store.recordingID == nil, store.errorMessage != nil || store.recordingPermissionNeeded != nil {
+                        openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+                    }
+                }
             } else { Task { await store.stopRecording() } }
         }.disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
+        Button("Recording Setup…") {
+            openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+            store.presentsRecordingSetup = true
+        }.disabled(store.recordingID != nil || store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
         Button("Show Gday Meetings") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
         Divider()
         Button("Quit Gday Meetings") { NSApp.terminate(nil) }.keyboardShortcut("q")
