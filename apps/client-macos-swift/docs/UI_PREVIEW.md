@@ -11,7 +11,7 @@ The bundle is `apps/client-macos-swift/.build/preview/Gday Meetings UI Preview.a
 
 For full mode, use `make build-macos` or `make start-macos`; `make install-macos` stages the full app for installation. See the [mode comparison](../README.md#choose-a-run-mode). Quit Preview and the full `.build/macos` development copy before rebuilding Preview, because packaging reuses the full build. Copies running from Applications or `.build/installer` can remain open.
 
-The preview banner includes draggable Sample 1 and Sample 2 files for manual drop checks.
+The preview banner identifies the mode and provides an Appearance selector for UI testing. Use audio files from Finder for manual drop checks: drop files into the meetings list to create separate meetings, or onto a meeting to add tracks. Generated `microphone.wav` and `system.wav` fixtures can be copied from the temporary preview library for this purpose.
 
 This uses the production SwiftUI screens with a clearly marked preview banner, generated one- and two-track audio, a fresh temporary library on each launch, silent playback, and a local light/dark appearance selector. Keychain reads/writes, recording, and service network requests are disabled. Normal recordings and credentials are not loaded. Temporary fixture libraries are left in the system temporary directory for inspection and normal OS cleanup.
 

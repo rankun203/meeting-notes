@@ -53,7 +53,6 @@ enum UIPreview {
 }
 
 struct PreviewContainer<Content: View>: View {
-    @EnvironmentObject private var store: MeetingStore
     @ViewBuilder let content: () -> Content
     @ViewState private var appearance = 0
     var body: some View {
@@ -62,19 +61,6 @@ struct PreviewContainer<Content: View>: View {
                 HStack {
                     Label("UI Preview · Synthetic audio · Silent playback", systemImage: "eye")
                     Spacer()
-                    if let meeting = store.meetings.first(where: { $0.audioFiles.count == 2 }) {
-                        ForEach(Array(store.audioURLs(for: meeting).enumerated()), id: \.offset) { index, url in
-                            Label("Sample \(index + 1)", systemImage: "doc")
-                                .padding(.horizontal, 6)
-                                .frame(minWidth: 28, minHeight: 20)
-                                .contentShape(Rectangle())
-                                .onDrag { NSItemProvider(object: url as NSURL) }
-                                .modifier(ActionHover())
-                                .accessibilityElement(children: .combine)
-                                .accessibilityHint("Drag into the meetings list to import, or into a meeting to add a track")
-                                .help("Drag this synthetic audio file into the list or a meeting")
-                        }
-                    }
                     Picker("Appearance", selection: $appearance) {
                         Text("System").tag(0)
                         Text("Light").tag(1)
