@@ -12,6 +12,7 @@ struct LibraryView: View {
     @ViewState private var selectedPerson: UUID?
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
+    @FocusState private var searchFocused: Bool
     @ViewState private var deleting: Meeting?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ViewState private var sidebarExpanded = true
@@ -45,16 +46,18 @@ struct LibraryView: View {
         VStack(spacing: 0) {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-            List(selection: $destination) {
+            List(selection: Binding(get: { sidebarRowsVisible ? destination : nil }, set: { if sidebarRowsVisible { destination = $0 } })) {
+                Group {
                 Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
                 Label("People", systemImage: "person.2").tag(LibraryDestination.people)
                 Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
                 Label("Server Library", systemImage: "network").tag(LibraryDestination.server)
+                }
+                .opacity(sidebarRowsVisible ? 1 : 0)
+                .animation(nil, value: sidebarRowsVisible)
             }
             .listStyle(.sidebar)
             .contentMargins(.top, 10, for: .scrollContent)
-            .opacity(sidebarRowsVisible ? 1 : 0)
-            .animation(nil, value: sidebarRowsVisible)
             .allowsHitTesting(sidebarRowsVisible)
             .accessibilityHidden(!sidebarRowsVisible)
             }
@@ -105,7 +108,6 @@ struct LibraryView: View {
                     playback.play(meeting: meeting, files: files)
                 }
                 .modifier(AudioFileDrop())
-                .searchable(text: $search, prompt: "Search meetings and transcripts")
                 .navigationTitle("Meetings")
                 .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
             }
@@ -142,6 +144,7 @@ struct LibraryView: View {
                 Text(destinationTitle).font(.headline)
             }
             ToolbarItemGroup {
+                Spacer()
                 Button {
                     if !NSWorkspace.shared.open(store.dataDirectory) {
                         store.errorMessage = "Could not open the meetings folder in Finder."
@@ -164,6 +167,23 @@ struct LibraryView: View {
                     Button("Import Meeting Archive…") { MeetingPanels.importArchive(store) }
                 } label: { Label("Library Actions", systemImage: "ellipsis") }
                 .help("New notes and library imports").disabled(store.isBusy)
+                if destination == .meetings {
+                    HStack(spacing: 4) {
+                        Button { searchFocused = true } label: { Image(systemName: "magnifyingglass") }
+                            .buttonStyle(.plain).help("Search meetings and transcripts")
+                            .keyboardShortcut("f", modifiers: .command)
+                        TextField("Search meetings and transcripts", text: $search)
+                            .textFieldStyle(.plain).focused($searchFocused)
+                            .accessibilityLabel("Search meetings and transcripts")
+                        if !search.isEmpty {
+                            Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.plain).accessibilityLabel("Clear search")
+                        }
+                    }
+                    .padding(6)
+                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
+                    .frame(width: 220)
+                }
             }
         }
         // HIG Feedback: keep the activity visible while people browse other content.
