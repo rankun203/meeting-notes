@@ -13,7 +13,6 @@ target/
 # IDE
 .idea/
 .codex/
-.vscode/launch.json
 *.swp
 *.swo
 *~

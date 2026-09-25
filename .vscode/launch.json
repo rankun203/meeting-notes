@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:meeting-notes}/apps/client-macos-swift",
+            "name": "Debug GdayMeetings (apps/client-macos-swift)",
+            "target": "GdayMeetings",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug GdayMeetings (apps/client-macos-swift)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:meeting-notes}/apps/client-macos-swift",
+            "name": "Release GdayMeetings (apps/client-macos-swift)",
+            "target": "GdayMeetings",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release GdayMeetings (apps/client-macos-swift)"
+        }
+    ]
+}

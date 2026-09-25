@@ -35,6 +35,6 @@ Initial sandboxed engine tests could not load Apple's audio components. Two auto
 
 ## Source-only installation verification
 
-Repository ignore rules exclude native object/static/dynamic libraries, debug-symbol bundles, and the local VS Code launch configuration. Vendored source archives remain tracked; generated dependency builds remain under ignored `.build` directories.
+Repository ignore rules exclude native object/static/dynamic libraries and debug-symbol bundles. Vendored source archives remain tracked; generated dependency builds remain under ignored `.build` directories. At the user's request, the VS Code debug/release launch configuration and Gday spelling entry are also included in version control.
 
 Confirmed the three vendored archives contain no compiled library/object/executable entries. Clarified in ThirdParty/README.md that archives are source distributions and the normal installation command automatically compiles them. A fresh dependency build in `/tmp/gday-clt-only-audio-20260925` passed with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, excluding Homebrew and other user-installed tools. App release build, packaging, and signing also passed with that restricted PATH and `/Library/Developer/CommandLineTools` selected. No extra tool installation was required. This validates the local CLT-only path, not every historical macOS/CLT combination; the documented minimum versions still apply.
