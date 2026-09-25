@@ -22,6 +22,8 @@ CI uses the macos-26 runner's selected Apple toolchain; hosted images and local 
 
 ## Validation
 
+Follow-up: removed `.github/workflows/swift-format.yml` at the user's request and updated README. Local formatting commands and shared rules remain. Release/build CI is being discussed separately; no release workflow was added.
+
 Passed: `make format-macos`, `make lint-macos`, repeat-run diff comparison (identical), shell syntax, workflow YAML parsing, and `git diff --check`. A temporary badly spaced Swift fixture caused the lint command to fail as expected and was removed. All 67 regression tests in 19 suites passed after formatting. Initial import sorting moved the package tools directive; separating it with a blank line fixed the manifest and subsequent runs preserve it.
 
 Reviewed token differences across all 51 changed Swift files: layout, import ordering, statement separation, trailing commas, numeric separators, splitting multi-variable declarations, and redundant-parenthesis removal. One block comment became a line comment. No functional changes or C changes intended. The existing CLT linker search-path warnings remain as documented in the keychain/deprecations worklog; no new deprecation warnings. CI is configured but has not yet run on GitHub. UI screenshots were not repeated for source-formatting-only changes.

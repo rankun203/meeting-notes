@@ -62,7 +62,7 @@ from imports by a blank line.
 
 The commands cover the package manifest, app sources, and tests. They exclude
 vendored sources and build output; C bridges are outside Swift formatter scope.
-GitHub Actions checks formatting on macOS and logs the selected toolchain.
+Formatting checks run locally; there is no dedicated formatting CI workflow.
 Formatter output can change with Apple toolchain updates; review any new baseline
 in a separate formatting commit. Use current Command Line Tools if `swift-format`
 is unavailable. No Homebrew formatter is required, and normal build/install
