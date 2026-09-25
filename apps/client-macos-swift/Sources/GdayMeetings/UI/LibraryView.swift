@@ -176,14 +176,14 @@ struct LibraryView: View {
                 if destination == .meetings {
                     HStack(spacing: 4) {
                         Button { searchFocused = true } label: { Image(systemName: "magnifyingglass") }
-                            .buttonStyle(.plain).help("Search meetings and transcripts")
+                            .buttonStyle(ActionButtonStyle()).help("Search meetings and transcripts").accessibilityLabel("Search meetings and transcripts")
                             .keyboardShortcut("f", modifiers: .command)
                         TextField("Search meetings and transcripts", text: $search)
                             .textFieldStyle(.plain).focused($searchFocused)
                             .accessibilityLabel("Search meetings and transcripts")
                         if !search.isEmpty {
                             Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.plain).accessibilityLabel("Clear search")
+                                .buttonStyle(ActionButtonStyle()).accessibilityLabel("Clear search").help("Clear search")
                         }
                     }
                     .padding(6)
@@ -260,7 +260,7 @@ struct LibraryView: View {
                     .frame(width: 88, height: 88)
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ActionButtonStyle(cornerRadius: 44))
             .accessibilityLabel("New Recording")
             .help("New Recording")
             .disabled(store.isBusy || recordingActive)
@@ -280,7 +280,7 @@ struct LibraryView: View {
                     Text(store.isStartingRecording ? "Preparing Recording" : store.isFinalizingRecording ? "Saving Recording" : "Recording")
                         .font(.callout.weight(.semibold))
                     if let id = store.recordingID, let meeting = store.meetings.first(where: { $0.id == id }) {
-                        Button(meeting.title) { showMeeting(id) }.buttonStyle(.plain).font(.caption).foregroundStyle(.secondary).lineLimit(1).help("Return to this recording")
+                        Button(meeting.title) { showMeeting(id) }.buttonStyle(ActionButtonStyle()).font(.caption).foregroundStyle(.secondary).lineLimit(1).help("Return to this recording")
                     } else { Text("Complete the macOS audio consent prompt.").font(.caption).foregroundStyle(.secondary) }
                 }
                 if let started = store.recordingStartedAt {

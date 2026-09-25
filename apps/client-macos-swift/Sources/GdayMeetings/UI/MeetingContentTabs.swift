@@ -19,7 +19,7 @@ struct MeetingContentTabs: View {
                         .frame(maxWidth: .infinity, minHeight: 30)
                         .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ActionButtonStyle(cornerRadius: 18))
                 .background {
                     if selection == index { Capsule().fill(.quaternary) }
                 }

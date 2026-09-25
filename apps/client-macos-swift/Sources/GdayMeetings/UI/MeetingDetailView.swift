@@ -104,6 +104,7 @@ struct MeetingDetailView: View {
             }
         } label: { Label("People & Tags", systemImage: "person.2") }
         .menuStyle(.borderlessButton).fixedSize()
+        .modifier(ActionHover()).help("Manage people and tags")
     }
 
 
@@ -120,7 +121,7 @@ struct MeetingDetailView: View {
                 .font(.title3)
                 .frame(width: 32, height: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ActionButtonStyle(cornerRadius: 16))
         .modifier(MeetingGlassSurface())
         .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
         .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "\(playbackActionTitle) this meeting")
@@ -236,7 +237,7 @@ struct MeetingDetailView: View {
                         Toggle(isOn: Binding(get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.isCompleted ?? false }, set: { value in change { meeting in if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) { meeting.todos[index].isCompleted = value } } })) { Text("Completed").hidden() }.labelsHidden().accessibilityLabel("Mark \(todo.title) complete")
                         TextField("To-do", text: Binding(get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.title ?? "" }, set: { value in change { meeting in if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) { meeting.todos[index].title = value } } })).strikethrough(todo.isCompleted)
                         Spacer()
-                        Button("Delete To-Do", systemImage: "trash", role: .destructive) { change { $0.todos.removeAll { $0.id == todo.id } } }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                        Button("Delete To-Do", systemImage: "trash", role: .destructive) { change { $0.todos.removeAll { $0.id == todo.id } } }.labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover()).help("Delete to-do")
                     }
                 }
             }

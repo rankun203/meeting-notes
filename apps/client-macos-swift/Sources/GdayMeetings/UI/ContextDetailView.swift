@@ -29,7 +29,7 @@ struct ContextDetailView: View {
             List(meetings) { meeting in
                 Button { selectedMeeting = meeting.id } label: {
                     HStack { Text(meeting.title); Spacer(); Text(meeting.createdAt, style: .date).foregroundStyle(.secondary) }
-                }.buttonStyle(.plain)
+                }.buttonStyle(ActionButtonStyle())
             }.frame(minHeight: 100, maxHeight: 200)
             Divider()
             Text("Ask across these meetings").font(.headline)

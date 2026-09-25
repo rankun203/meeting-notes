@@ -9,14 +9,14 @@ struct PeopleView: View {
         VStack(alignment: .leading) {
             HStack {
                 TextField("New person", text: $name).onSubmit(add)
-                Button("Add", systemImage: "plus", action: add).labelStyle(.iconOnly).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Add", systemImage: "plus", action: add).help("Add").labelStyle(.iconOnly).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding()
             List(selection: $selection) {
                 ForEach(store.people) { person in
                     HStack {
                         Label(person.name, systemImage: "person.crop.circle")
                         Spacer()
-                        Button("Delete Person…", systemImage: "trash", role: .destructive) { deleting = person }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                        Button("Delete Person…", systemImage: "trash", role: .destructive) { deleting = person }.help("Delete person").labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(person.id)
                 }
             }
@@ -37,7 +37,7 @@ struct TagsView: View {
         VStack(alignment: .leading) {
             HStack {
                 TextField("New tag", text: $name).onSubmit(add)
-                Button("Add", systemImage: "plus", action: add).labelStyle(.iconOnly).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Add", systemImage: "plus", action: add).help("Add").labelStyle(.iconOnly).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding()
             List(selection: $selection) {
                 ForEach(store.tags) { tag in
@@ -45,7 +45,7 @@ struct TagsView: View {
                         TextField("Tag name", text: Binding(get: { store.tags.first(where: { $0.id == tag.id })?.name ?? "" }, set: { value in var changed = tag; changed.name = value; store.updateTag(changed) }))
                         Spacer()
                         Text("\(store.meetings.filter { $0.tagIDs.contains(tag.id) }.count)").foregroundStyle(.secondary)
-                        Button("Delete Tag…", systemImage: "trash", role: .destructive) { deleting = tag }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                        Button("Delete Tag…", systemImage: "trash", role: .destructive) { deleting = tag }.help("Delete tag").labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover())
                     }.tag(tag.id)
                 }
             }

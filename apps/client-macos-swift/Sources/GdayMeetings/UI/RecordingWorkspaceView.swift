@@ -246,7 +246,7 @@ struct RecordingDisclosureStyle: DisclosureGroupStyle {
                 .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ActionButtonStyle())
             .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
 
             if configuration.isExpanded {

@@ -45,6 +45,7 @@ struct WaveformTimeline: View {
                 })
         }
         .frame(height: 24)
+        .modifier(ActionHover(pressed: isScrubbing, cornerRadius: 4))
         .overlay(alignment: .center) {
             if waveforms.isEmpty { Text("Waveform unavailable").font(.caption2).foregroundStyle(.secondary).allowsHitTesting(false) }
         }
