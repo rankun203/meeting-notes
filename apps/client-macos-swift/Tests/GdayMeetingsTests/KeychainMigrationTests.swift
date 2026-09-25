@@ -1,4 +1,5 @@
 import Testing
+
 @testable import GdayMeetings
 
 private final class MemoryCredentialStorage: CredentialStorage {

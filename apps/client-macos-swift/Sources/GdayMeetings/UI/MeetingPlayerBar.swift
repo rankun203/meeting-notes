@@ -27,8 +27,12 @@ struct MeetingPlayerBar: View {
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(playback.title).font(.callout.weight(.semibold)).lineLimit(1)
-                            Text(playback.isLoading ? "Preparing audio…" : playback.isPlaying ? "Now Playing" : playback.hasEnded ? "Finished" : "Paused")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text(
+                                playback.isLoading
+                                    ? "Preparing audio…"
+                                    : playback.isPlaying ? "Now Playing" : playback.hasEnded ? "Finished" : "Paused"
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }.contentShape(Rectangle())
@@ -40,10 +44,16 @@ struct MeetingPlayerBar: View {
 
                 HStack(spacing: 9) {
                     transportButton("Back 15 Seconds", symbol: "gobackward.15") { playback.skip(by: -15) }
-                    Button { playback.togglePlayPause() } label: {
+                    Button {
+                        playback.togglePlayPause()
+                    } label: {
                         Group {
-                            if playback.isLoading { ProgressView().controlSize(.small) }
-                            else { Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.title2) }
+                            if playback.isLoading {
+                                ProgressView().controlSize(.small)
+                            }
+                            else {
+                                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.title2)
+                            }
                         }.frame(width: 44, height: 44)
                     }
                     .buttonStyle(ActionButtonStyle())
@@ -53,11 +63,13 @@ struct MeetingPlayerBar: View {
                     transportButton("Forward 15 Seconds", symbol: "goforward.15") { playback.skip(by: 15) }
                 }
 
-                PlaybackPosition(progress: playback.progress, waveforms: audibleWaveforms,
-                                 duration: playback.duration, dimmed: playback.mutedTracks.count == playback.trackNames.count,
-                                 showsTimes: true, isLoading: playback.isLoadingWaveforms, seek: playback.seek)
-                    .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
-                    .frame(minWidth: 130, maxWidth: .infinity)
+                PlaybackPosition(
+                    progress: playback.progress, waveforms: audibleWaveforms,
+                    duration: playback.duration, dimmed: playback.mutedTracks.count == playback.trackNames.count,
+                    showsTimes: true, isLoading: playback.isLoadingWaveforms, seek: playback.seek
+                )
+                .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                .frame(minWidth: 130, maxWidth: .infinity)
 
                 HStack(spacing: 4) {
                     Button(action: toggleTracks) {
@@ -68,8 +80,13 @@ struct MeetingPlayerBar: View {
                     .accessibilityLabel(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
                     .help(tracksExpanded ? "Hide audio tracks" : "Show audio tracks")
                     Menu {
-                        Picker("Playback Speed", selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })) {
-                            ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in Text("\(rate.formatted())×").tag(rate) }
+                        Picker(
+                            "Playback Speed",
+                            selection: Binding(get: { playback.playbackRate }, set: { playback.setRate($0) })
+                        ) {
+                            ForEach([0.75, 1, 1.25, 1.5, 2], id: \.self) { rate in
+                                Text("\(rate.formatted())×").tag(rate)
+                            }
                         }
                     } label: {
                         HStack(spacing: 4) {
@@ -82,9 +99,14 @@ struct MeetingPlayerBar: View {
                     .help("Playback speed")
 
                     Menu {
-                        Picker("Audio Track", selection: Binding(get: { playback.selectedTrack }, set: { playback.selectTrack($0) })) {
+                        Picker(
+                            "Audio Track",
+                            selection: Binding(get: { playback.selectedTrack }, set: { playback.selectTrack($0) })
+                        ) {
                             Text("All Tracks").tag(-1)
-                            ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in Text(name).tag(index) }
+                            ForEach(Array(playback.trackNames.enumerated()), id: \.offset) { index, name in
+                                Text(name).tag(index)
+                            }
                         }
                         Divider()
                         Button("Close Player", systemImage: "xmark") { playback.clear() }
@@ -109,21 +131,31 @@ struct MeetingPlayerBar: View {
                                 HStack {
                                     Text(name).font(.caption).lineLimit(1)
                                     Spacer()
-                                    Button { playback.toggleMute(index) } label: {
-                                        Image(systemName: playback.mutedTracks.contains(index) ? "speaker.slash" : "speaker.wave.2")
-                                            .frame(width: 44, height: 44)
+                                    Button {
+                                        playback.toggleMute(index)
+                                    } label: {
+                                        Image(
+                                            systemName: playback.mutedTracks.contains(index)
+                                                ? "speaker.slash" : "speaker.wave.2"
+                                        )
+                                        .frame(width: 44, height: 44)
                                     }.buttonStyle(ActionButtonStyle())
-                                        .accessibilityLabel("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
+                                        .accessibilityLabel(
+                                            "\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)"
+                                        )
                                         .help("\(playback.mutedTracks.contains(index) ? "Unmute" : "Mute") \(name)")
                                         .disabled(playback.isLoading || playback.isPlaybackBlocked)
                                 }.frame(width: 160)
                                 PlaybackPosition(
                                     progress: playback.progress,
-                                    waveforms: playback.waveforms.indices.contains(index) ? [playback.waveforms[index]].compactMap { $0 } : [],
+                                    waveforms: playback.waveforms.indices.contains(index)
+                                        ? [playback.waveforms[index]].compactMap { $0 } : [],
                                     duration: playback.duration,
                                     label: "\(name) playback position",
-                                    dimmed: playback.mutedTracks.contains(index), isLoading: playback.isLoadingWaveforms, seek: playback.seek)
-                                    .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
+                                    dimmed: playback.mutedTracks.contains(index),
+                                    isLoading: playback.isLoadingWaveforms, seek: playback.seek
+                                )
+                                .disabled(playback.isLoading || playback.duration <= 0 || playback.isPlaybackBlocked)
                             }
                         }
                     }.padding(.horizontal, 20).padding(.bottom, 12)
@@ -182,7 +214,8 @@ struct MeetingPlayerBar: View {
                 guard tracksTransition == transition, tracksExpanded else { return }
                 withAnimation(.easeInOut(duration: 0.18)) { tracksVisible = true }
             }
-        } else {
+        }
+        else {
             // Reverse the sequence, keeping row geometry stable while it fades.
             withAnimation(.easeInOut(duration: 0.18), completionCriteria: .removed) {
                 tracksVisible = false
@@ -195,13 +228,16 @@ struct MeetingPlayerBar: View {
 
     private var audibleWaveforms: [AudioWaveform] {
         if playback.mutedTracks.count == playback.trackNames.count { return playback.waveforms.compactMap { $0 } }
-        return playback.waveforms.enumerated().compactMap { playback.mutedTracks.contains($0.offset) ? nil : $0.element }
+        return playback.waveforms.enumerated().compactMap {
+            playback.mutedTracks.contains($0.offset) ? nil : $0.element
+        }
     }
 
     private var selectedTrackName: String {
         if playback.mutedTracks.count == playback.trackNames.count { return "All Muted" }
         if playback.selectedTrack < 0 && !playback.mutedTracks.isEmpty { return "Custom Mix" }
-        return playback.trackNames.indices.contains(playback.selectedTrack) ? playback.trackNames[playback.selectedTrack] : "All Tracks"
+        return playback.trackNames.indices.contains(playback.selectedTrack)
+            ? playback.trackNames[playback.selectedTrack] : "All Tracks"
     }
 
     private func transportButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {

@@ -6,7 +6,9 @@ struct ContextDetailView: View {
     let personID: UUID?
     let tagID: UUID?
     @ViewState private var draft = ""
-    private var messages: [ChatMessage] { store.contextualChats[MeetingStore.contextChatKey(personID: personID, tagID: tagID)] ?? [] }
+    private var messages: [ChatMessage] {
+        store.contextualChats[MeetingStore.contextChatKey(personID: personID, tagID: tagID)] ?? []
+    }
     @ViewState private var selectedMeeting: UUID?
     private var meetings: [Meeting] {
         store.meetings.filter { meeting in
@@ -27,8 +29,14 @@ struct ContextDetailView: View {
             }
             Text("\(meetings.count) associated meetings").foregroundStyle(.secondary)
             List(meetings) { meeting in
-                Button { selectedMeeting = meeting.id } label: {
-                    HStack { Text(meeting.title); Spacer(); Text(meeting.createdAt, style: .date).foregroundStyle(.secondary) }
+                Button {
+                    selectedMeeting = meeting.id
+                } label: {
+                    HStack {
+                        Text(meeting.title)
+                        Spacer()
+                        Text(meeting.createdAt, style: .date).foregroundStyle(.secondary)
+                    }
                 }.buttonStyle(ActionButtonStyle())
             }.frame(minHeight: 100, maxHeight: 200)
             Divider()
@@ -36,26 +44,43 @@ struct ContextDetailView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(messages) { message in
-                        VStack(alignment: .leading, spacing: 5) { Text(message.role == "user" ? "You" : "Gday").font(.headline); Text(message.content).textSelection(.enabled) }.frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(message.role == "user" ? "You" : "Gday").font(.headline)
+                            Text(message.content).textSelection(.enabled)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
             HStack {
                 TextField("Ask a question", text: $draft, axis: .vertical).lineLimit(1...5).onSubmit(send)
-                Button("Send", systemImage: "arrow.up", action: send).disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy || meetings.isEmpty)
+                Button("Send", systemImage: "arrow.up", action: send).disabled(
+                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy || meetings.isEmpty)
             }
         }.padding(20).navigationTitle(title)
-        .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
-            if let selectedMeeting {
-                VStack { HStack { Spacer(); Button("Done") { self.selectedMeeting = nil }.keyboardShortcut(.cancelAction) }.padding(); MeetingDetailView(meetingID: selectedMeeting) }.frame(width: 800, height: 650)
+            .sheet(isPresented: Binding(get: { selectedMeeting != nil }, set: { if !$0 { selectedMeeting = nil } })) {
+                if let selectedMeeting {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button("Done") { self.selectedMeeting = nil }.keyboardShortcut(.cancelAction)
+                        }.padding()
+                        MeetingDetailView(meetingID: selectedMeeting)
+                    }.frame(width: 800, height: 650)
+                }
             }
-        }
     }
     private func personBinding(_ person: Person, _ path: WritableKeyPath<Person, String>) -> Binding<String> {
-        Binding(get: { store.people.first(where: { $0.id == person.id })?[keyPath: path] ?? "" }, set: { value in guard var updated = store.people.first(where: { $0.id == person.id }) else { return }; updated[keyPath: path] = value; store.updatePerson(updated) })
+        Binding(
+            get: { store.people.first(where: { $0.id == person.id })?[keyPath: path] ?? "" },
+            set: { value in
+                guard var updated = store.people.first(where: { $0.id == person.id }) else { return }
+                updated[keyPath: path] = value
+                store.updatePerson(updated)
+            })
     }
     private func send() {
-        let question = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !question.isEmpty else { return }
+        let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
         draft = ""
         Task { _ = await store.sendContextChat(personID: personID, tagID: tagID, message: question) }
     }

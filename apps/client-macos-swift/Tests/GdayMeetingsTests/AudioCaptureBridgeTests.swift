@@ -1,11 +1,14 @@
-import AudioCaptureBridge
 import AVFoundation
+import AudioCaptureBridge
 import Testing
 
 /// Synthetic input only: these tests never start a HAL device or request permission.
 struct AudioCaptureBridgeTests {
-    private func buffer(channels: UInt32 = 2, interleaved: Bool = false, frames: UInt32 = 3) throws -> AVAudioPCMBuffer {
-        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: channels, interleaved: interleaved))
+    private func buffer(channels: UInt32 = 2, interleaved: Bool = false, frames: UInt32 = 3) throws -> AVAudioPCMBuffer
+    {
+        let format = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: channels, interleaved: interleaved))
         let value = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
         value.frameLength = frames
         let list = UnsafeMutableAudioBufferListPointer(value.mutableAudioBufferList)
@@ -55,8 +58,12 @@ struct AudioCaptureBridgeTests {
         // Fill the bounded queue, then verify a failed push never overwrites pending data.
         for value in 1...4 {
             var time = timestamp(UInt64(value))
-            if GdayAudioRingPush(ring, input.audioBufferList, &time) { accepted.append(UInt64(value)) }
-            else { break }
+            if GdayAudioRingPush(ring, input.audioBufferList, &time) {
+                accepted.append(UInt64(value))
+            }
+            else {
+                break
+            }
         }
         #expect(accepted == [1, 2])
         #expect(GdayAudioRingFailure(ring) == 1)
@@ -107,7 +114,8 @@ struct AudioCaptureBridgeTests {
     @Test func disabledHALBufferBecomesSilenceAndQueuedMemoryIsOwned() throws {
         let ring = try #require(GdayAudioRingCreate(1, true, 3, 2))
         defer { GdayAudioRingDestroy(ring) }
-        var input = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(mNumberChannels: 1, mDataByteSize: 12, mData: nil))
+        var input = AudioBufferList(
+            mNumberBuffers: 1, mBuffers: AudioBuffer(mNumberChannels: 1, mDataByteSize: 12, mData: nil))
         var time = timestamp(100)
         #expect(GdayAudioRingPush(ring, &input, &time))
         var source: [Float] = [0.1, 0.2, 0.3]
@@ -118,7 +126,7 @@ struct AudioCaptureBridgeTests {
             let samples = bytes.bindMemory(to: Float.self)
             for index in samples.indices { samples[index] = -1 }
         }
-        #expect(source == [-1, -1, -1]) // HAL can reuse input memory after return.
+        #expect(source == [-1, -1, -1])  // HAL can reuse input memory after return.
         var output = [Float](repeating: -1, count: 3)
         var frames: UInt32 = 0
         var host: UInt64 = 0

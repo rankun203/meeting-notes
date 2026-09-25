@@ -1,12 +1,14 @@
 import AVFoundation
 import Foundation
 import Testing
+
 @testable import GdayMeetings
 
 struct RecordingMeterTests {
     @Test(arguments: [false, true])
     func measuresPlanarAndInterleavedStereo(interleaved: Bool) throws {
-        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: interleaved))
+        let format = try #require(
+            AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: interleaved))
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480))
         buffer.frameLength = 480
         for audio in UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList) {

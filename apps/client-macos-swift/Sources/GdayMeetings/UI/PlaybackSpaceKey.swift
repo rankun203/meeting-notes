@@ -19,13 +19,14 @@ struct PlaybackSpaceKey: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, let window = self.window,
-                      event.window === window, window.isKeyWindow,
-                      window.attachedSheet == nil,
-                      event.charactersIgnoringModifiers == " ",
-                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
-                      !Self.isEditingText(window.firstResponder),
-                      let playback = self.playback, playback.hasSelection,
-                      !playback.isLoading, !playback.isPlaybackBlocked else { return event }
+                    event.window === window, window.isKeyWindow,
+                    window.attachedSheet == nil,
+                    event.charactersIgnoringModifiers == " ",
+                    event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+                    !Self.isEditingText(window.firstResponder),
+                    let playback = self.playback, playback.hasSelection,
+                    !playback.isLoading, !playback.isPlaybackBlocked
+                else { return event }
                 if !event.isARepeat { playback.togglePlayPause() }
                 return nil
             }

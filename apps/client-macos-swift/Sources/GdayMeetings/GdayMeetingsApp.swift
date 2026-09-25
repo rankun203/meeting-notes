@@ -1,6 +1,6 @@
-import SwiftUI
 import AppKit
 import Combine
+import SwiftUI
 
 @main
 struct GdayMeetingsApp: App {
@@ -17,7 +17,8 @@ struct GdayMeetingsApp: App {
                         playback.select(meeting: meeting, files: store.audioURLs(for: meeting))
                     }
                 }
-                .onReceive(store.$isStartingRecording.combineLatest(store.$recordingID, store.$isFinalizingRecording)) { starting, recording, saving in
+                .onReceive(store.$isStartingRecording.combineLatest(store.$recordingID, store.$isFinalizingRecording)) {
+                    starting, recording, saving in
                     playback.setRecordingActive(starting || recording != nil || saving)
                 }
                 .onReceive(store.$meetings) { meetings in playback.reconcile(meetings: meetings) }
@@ -37,8 +38,12 @@ struct GdayMeetingsApp: App {
             }
             CommandMenu("Recording") {
                 Button(store.recordingID == nil ? "Start Recording" : "Stop Recording") {
-                    if store.recordingID == nil { Task { await store.startRecording() } }
-                    else { Task { await store.stopRecording() } }
+                    if store.recordingID == nil {
+                        Task { await store.startRecording() }
+                    }
+                    else {
+                        Task { await store.stopRecording() }
+                    }
                 }.keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
             }
@@ -59,7 +64,8 @@ struct GdayMeetingsApp: App {
         } label: {
             if store.recordingID == nil {
                 Image(nsImage: MenuBarArtwork.waveform).accessibilityLabel("Gday Meetings")
-            } else {
+            }
+            else {
                 Image(systemName: "record.circle.fill").accessibilityLabel("Gday Meetings — Recording")
             }
         }
@@ -95,16 +101,17 @@ final class MeetingsAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-
 private struct RecordingMenuView: View {
     @EnvironmentObject private var store: MeetingStore
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         if store.isFinalizingRecording {
             Text("Saving recording…")
-        } else if store.isStartingRecording {
+        }
+        else if store.isStartingRecording {
             Text("Starting recording…")
-        } else if let started = store.recordingStartedAt {
+        }
+        else if let started = store.recordingStartedAt {
             Text("Recording since \(started.formatted(date: .omitted, time: .shortened))")
         }
         Group {
@@ -116,23 +123,28 @@ private struct RecordingMenuView: View {
                         Label("New Recording…", systemImage: "slider.horizontal.3")
                     }
                 }
-            } else {
+            }
+            else {
                 recordingButton
             }
         }.disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
         Button {
-            openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
         } label: {
             Label("Show app", systemImage: "macwindow")
         }
         Divider()
-        Button { NSApp.terminate(nil) } label: {
+        Button {
+            NSApp.terminate(nil)
+        } label: {
             Label("Quit Gday Meetings", systemImage: "power")
         }.keyboardShortcut("q")
     }
 
     private func openRecordingSetup() {
-        openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
         store.presentsRecordingSetup = true
     }
 
@@ -147,13 +159,18 @@ private struct RecordingMenuView: View {
                 Task {
                     await store.startRecording()
                     if store.recordingID == nil, store.errorMessage != nil || store.recordingPermissionNeeded != nil {
-                        openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+                        openWindow(id: "main")
+                        NSApp.activate(ignoringOtherApps: true)
                     }
                 }
-            } else { Task { await store.stopRecording() } }
+            }
+            else {
+                Task { await store.stopRecording() }
+            }
         } label: {
-            Label(store.recordingID == nil ? "Start Recording" : "Stop Recording",
-                  systemImage: store.recordingID == nil ? "record.circle" : "stop.circle")
+            Label(
+                store.recordingID == nil ? "Start Recording" : "Stop Recording",
+                systemImage: store.recordingID == nil ? "record.circle" : "stop.circle")
         }
     }
 }

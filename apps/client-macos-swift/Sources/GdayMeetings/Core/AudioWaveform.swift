@@ -1,5 +1,5 @@
-import Accelerate
 import AVFoundation
+import Accelerate
 import Foundation
 
 /// Fixed-size peak envelope, derived locally from decoded audio. All channels
@@ -25,7 +25,9 @@ struct AudioWaveform: Sendable, Equatable, Codable {
                     let window = sampleWindow(length: decoder.totalFrames, bucket: bucket, count: count)
                     if decoder.position != window.start { try decoder.seek(frame: window.start) }
                     try decoder.read(into: buffer, frames: UInt32(window.count))
-                    guard buffer.frameLength == window.count else { throw MeetingError.message("Incomplete Opus waveform samples.") }
+                    guard buffer.frameLength == window.count else {
+                        throw MeetingError.message("Incomplete Opus waveform samples.")
+                    }
                     for channel in 0..<2 {
                         var peak: Float = 0
                         vDSP_maxmgv(buffer.floatChannelData![channel], 1, &peak, vDSP_Length(buffer.frameLength))
@@ -37,7 +39,8 @@ struct AudioWaveform: Sendable, Equatable, Codable {
             let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
             let format = file.processingFormat
             guard file.length > 0, format.sampleRate > 0,
-                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024) else {
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024)
+            else {
                 throw MeetingError.message("No audio samples available for waveform.")
             }
             let count = min(max(1, bucketCount), 4096, Int(min(file.length, 4096)))

@@ -51,7 +51,10 @@ final class OpusFileDecoder: StreamingAudioReading {
 
     func read(into buffer: AVAudioPCMBuffer, frames: AVAudioFrameCount) throws {
         precondition(buffer.format == StreamingAudioReader.format && frames <= buffer.frameCapacity)
-        if atEnd { buffer.frameLength = 0; return }
+        if atEnd {
+            buffer.frameLength = 0
+            return
+        }
         let output = buffer.floatChannelData!
         var written = 0
         while written < Int(frames) {
@@ -82,18 +85,21 @@ private final class NativeAudioReader: StreamingAudioReading {
     init(_ url: URL) throws {
         file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard file.length > 0, file.processingFormat.sampleRate > 0,
-              let converter = AVAudioConverter(from: file.processingFormat, to: StreamingAudioReader.format),
-              let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8192) else {
+            let converter = AVAudioConverter(from: file.processingFormat, to: StreamingAudioReader.format),
+            let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8192)
+        else {
             throw ServiceError("This audio file has no playable samples.")
         }
-        self.converter = converter; self.input = input
+        self.converter = converter
+        self.input = input
         // Avoid adding priming silence when seeking; the converter handles rate
         // conversion with one continuous state per track.
         converter.primeMethod = .none
         totalFrames = Int64((Double(file.length) / file.processingFormat.sampleRate * 48000).rounded())
     }
     func seek(frame: Int64) throws {
-        file.framePosition = min(file.length, max(0, Int64((Double(frame) / 48000 * file.processingFormat.sampleRate).rounded())))
+        file.framePosition = min(
+            file.length, max(0, Int64((Double(frame) / 48000 * file.processingFormat.sampleRate).rounded())))
         converter.reset()
     }
     func read(into buffer: AVAudioPCMBuffer, frames: AVAudioFrameCount) throws {
@@ -110,8 +116,11 @@ private final class NativeAudioReader: StreamingAudioReading {
                 try file.read(into: input, frameCount: min(requested, input.frameCapacity))
                 state.pointee = input.frameLength > 0 ? .haveData : .endOfStream
                 return input.frameLength > 0 ? input : nil
-            } catch {
-                readError = error; state.pointee = .endOfStream; return nil
+            }
+            catch {
+                readError = error
+                state.pointee = .endOfStream
+                return nil
             }
         }
         if let readError { throw readError }

@@ -4,7 +4,8 @@ import SwiftUI
 
 /// Explicit opt-in: never load the normal library, credentials, or remote services.
 enum UIPreview {
-    static let enabled = ProcessInfo.processInfo.arguments.contains("--ui-preview")
+    static let enabled =
+        ProcessInfo.processInfo.arguments.contains("--ui-preview")
         || Bundle.main.object(forInfoDictionaryKey: "GdayUIPreview") as? Bool == true
 
     static func requireLiveServices() throws {
@@ -29,7 +30,8 @@ enum UIPreview {
             }
             _ = store.addPerson(name: "Preview Person")
             _ = store.addTag(name: "Preview")
-        } catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
+        }
+        catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         return store
     }
 
@@ -75,7 +77,9 @@ struct PreviewContainer<Content: View>: View {
             // Use one AppKit appearance source for native controls and SwiftUI.
             // Removing preferredColorScheme left stale dark foregrounds until
             // window activation; nil here restores live system inheritance.
-            NSApp.appearance = selection == 1 ? NSAppearance(named: .aqua)
+            NSApp.appearance =
+                selection == 1
+                ? NSAppearance(named: .aqua)
                 : selection == 2 ? NSAppearance(named: .darkAqua) : nil
         }
     }

@@ -1,7 +1,8 @@
 import AVFoundation
-import Foundation
 import Combine
+import Foundation
 import Testing
+
 @testable import GdayMeetings
 
 private actor PlaybackPreparationGate {
@@ -10,19 +11,26 @@ private actor PlaybackPreparationGate {
     private var releaseWaiter: CheckedContinuation<Void, Never>?
     func suspend() async {
         started = true
-        for waiter in startWaiters { waiter.resume() }; startWaiters = []
+        for waiter in startWaiters { waiter.resume() }
+        startWaiters = []
         await withCheckedContinuation { releaseWaiter = $0 }
     }
     func waitUntilStarted() async {
         if started { return }
         await withCheckedContinuation { startWaiters.append($0) }
     }
-    func release() { releaseWaiter?.resume(); releaseWaiter = nil }
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
 }
 
 private actor PlaybackAttemptCounter {
     private(set) var count = 0
-    func next() -> Int { count += 1; return count }
+    func next() -> Int {
+        count += 1
+        return count
+    }
 }
 
 @MainActor
@@ -33,7 +41,7 @@ struct MeetingPlaybackTests {
         let subscription = playback.objectWillChange.sink { controlUpdates += 1 }
         playback.progress.update(10)
         playback.progress.scrub(to: 31)
-        playback.progress.update(11) // Playback may continue during a pointer drag.
+        playback.progress.update(11)  // Playback may continue during a pointer drag.
         #expect(playback.progress.displayedTime == 31)
         #expect(playback.currentTime == 11)
         playback.progress.scrub(to: .nan)
@@ -55,7 +63,7 @@ struct MeetingPlaybackTests {
         let controlSubscription = playback.objectWillChange.sink { controlUpdates += 1 }
         let clockSubscription = playback.progress.objectWillChange.sink { clockUpdates += 1 }
         for tick in 1...40 { playback.progress.update(Double(tick) / 4) }
-        playback.progress.update(10) // A repeated position should not redraw either.
+        playback.progress.update(10)  // A repeated position should not redraw either.
         #expect(playback.currentTime == 10)
         #expect(clockUpdates == 40)
         #expect(controlUpdates == 0)
@@ -99,7 +107,8 @@ struct MeetingPlaybackTests {
         #expect(playback.currentTime == playback.duration)
         playback.skip(by: -15)
         #expect(playback.currentTime == 0)
-        var renamed = meeting; renamed.title = "Renamed"
+        var renamed = meeting
+        renamed.title = "Renamed"
         playback.reconcile(meetings: [renamed])
         #expect(playback.title == "Renamed")
         #expect(playback.selectedTrack == 0)
@@ -124,7 +133,7 @@ struct MeetingPlaybackTests {
         let gate = PlaybackPreparationGate()
         let playback = MeetingPlayback(prepareAudio: { url in
             try FileManager.default.copyItem(at: url, to: temporary)
-            await gate.suspend() // Deliberately ignores cancellation like some framework work.
+            await gate.suspend()  // Deliberately ignores cancellation like some framework work.
             return PreparedPlaybackAudio(url: temporary, temporary: true)
         })
         playback.select(meeting: Meeting(title: "Old"), files: [source])
@@ -237,6 +246,7 @@ struct MeetingPlaybackTests {
         buffer.frameLength = frames
         buffer.floatChannelData![0].initialize(repeating: 0, count: Int(frames))
         var file: AVAudioFile? = try AVAudioFile(forWriting: url, settings: format.settings)
-        try file?.write(from: buffer); file = nil
+        try file?.write(from: buffer)
+        file = nil
     }
 }

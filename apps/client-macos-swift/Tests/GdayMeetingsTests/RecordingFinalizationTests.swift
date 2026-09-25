@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Testing
+
 @testable import GdayMeetings
 
 @MainActor struct RecordingFinalizationTests {
@@ -36,7 +37,8 @@ import Testing
         try writeFixture(source)
         let original = try Data(contentsOf: source)
         var meeting = try #require(store.meetings.first)
-        meeting.audioFiles = [source.lastPathComponent]; store.updateMeeting(meeting)
+        meeting.audioFiles = [source.lastPathComponent]
+        store.updateMeeting(meeting)
         let library = root.appendingPathComponent("library.json")
         try files.moveItem(at: library, to: root.appendingPathComponent("saved-library.json"))
         try files.createDirectory(at: library, withIntermediateDirectories: false)
@@ -49,8 +51,10 @@ import Testing
     @Test func olderSettingsChooseOpusAndPersistFormatSelection() throws {
         let old = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         #expect(old.recordingFormat == .opus)
-        var selected = old; selected.recordingFormat = .m4a
-        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(selected)).recordingFormat == .m4a)
+        var selected = old
+        selected.recordingFormat = .m4a
+        #expect(
+            try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(selected)).recordingFormat == .m4a)
     }
 
     private func writeFixture(_ url: URL) throws {
@@ -59,6 +63,7 @@ import Testing
         buffer.frameLength = 4800
         for frame in 0..<4800 { buffer.floatChannelData![0][frame] = 0.2 * sin(Float(frame) * 0.1) }
         let writer = try TimedAudioWriter(url: url, format: format, epoch: 0)
-        try writer.append(buffer, hostSeconds: 0); try writer.finish()
+        try writer.append(buffer, hostSeconds: 0)
+        try writer.finish()
     }
 }

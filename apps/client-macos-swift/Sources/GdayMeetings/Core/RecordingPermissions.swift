@@ -1,5 +1,5 @@
-import AppKit
 import AVFoundation
+import AppKit
 
 enum RecordingPermission: Equatable {
     case microphone, systemAudio
@@ -7,9 +7,11 @@ enum RecordingPermission: Equatable {
     var explanation: String {
         switch self {
         case .microphone:
-            return "Gday Meetings needs microphone access to record your voice. macOS has not made that access available to this app. No recording has started."
+            return
+                "Gday Meetings needs microphone access to record your voice. macOS has not made that access available to this app. No recording has started."
         case .systemAudio:
-            return "Allow Gday Meetings to record system audio in the macOS audio-recording prompt. If access was denied, enable it in System Settings → Privacy & Security → Screen & System Audio Recording, then try again. Gday Meetings does not request screen capture."
+            return
+                "Allow Gday Meetings to record system audio in the macOS audio-recording prompt. If access was denied, enable it in System Settings → Privacy & Security → Screen & System Audio Recording, then try again. Gday Meetings does not request screen capture."
         }
     }
 }

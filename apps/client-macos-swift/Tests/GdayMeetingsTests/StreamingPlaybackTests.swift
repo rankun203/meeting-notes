@@ -1,7 +1,8 @@
 import AVFoundation
-import OpusFileBridge
 import Foundation
+import OpusFileBridge
 import Testing
+
 @testable import GdayMeetings
 
 struct StreamingPlaybackTests {
@@ -46,23 +47,26 @@ struct StreamingPlaybackTests {
             second.withUnsafeBufferPointer { gday_playback_write_track(ring, 1, $0.baseAddress, $0.baseAddress, count) }
             gday_playback_commit(ring, count)
         }
-        var left = [Float](repeating: 0, count: 8), right = left
+        var left = [Float](repeating: 0, count: 8)
+        var right = left
         func render(_ count: UInt32) -> UInt32 {
             left.withUnsafeMutableBufferPointer { l in
-                right.withUnsafeMutableBufferPointer { r in gday_playback_render(ring, l.baseAddress, r.baseAddress, count) }
+                right.withUnsafeMutableBufferPointer { r in
+                    gday_playback_render(ring, l.baseAddress, r.baseAddress, count)
+                }
             }
         }
         write(8)
         #expect(render(5) == 5)
         #expect(Array(left.prefix(5)) == [Float](repeating: 0.5, count: 5))
         gday_playback_set_audible(ring, 1)
-        write(5) // wraps across the end of the fixed ring
+        write(5)  // wraps across the end of the fixed ring
         #expect(render(8) == 8)
         #expect(left == [Float](repeating: 0.25, count: 8))
         #expect(gday_playback_consumed(ring) == 13)
         #expect(render(8) == 0)
         #expect(left == [Float](repeating: 0, count: 8))
-        #expect(gday_playback_consumed(ring) == 13) // silence does not advance media time
+        #expect(gday_playback_consumed(ring) == 13)  // silence does not advance media time
         #expect(gday_playback_underruns(ring) == 1)
         gday_playback_reset(ring)
         #expect(gday_playback_consumed(ring) == 0)
@@ -78,7 +82,8 @@ struct StreamingPlaybackTests {
         for page in 1...7200 { try writer.writeAudio(packets, granule: Int64(page) * 240000, final: page == 7200) }
         try writer.close()
         let size = try #require(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize)
-        let clock = ContinuousClock(); let start = clock.now
+        let clock = ContinuousClock()
+        let start = clock.now
         let decoder = try OpusFileDecoder(url)
         #expect(decoder.totalFrames == 48000 * 36000)
         #expect(decoder.position == 0)
@@ -90,7 +95,9 @@ struct StreamingPlaybackTests {
         try decoder.read(into: buffer, frames: 4096)
         #expect(decoder.position == 48000 * 35990 + 4096)
         #expect(decoder.bytesRead < UInt64(size / 2))
-        print("10h Opus open + first block + seek near end: \(start.duration(to: clock.now)); read \(decoder.bytesRead)/\(size) bytes")
+        print(
+            "10h Opus open + first block + seek near end: \(start.duration(to: clock.now)); read \(decoder.bytesRead)/\(size) bytes"
+        )
         let waveformStart = clock.now
         let waveform = try await AudioWaveform.read(url)
         #expect(waveform.duration == 36000)
@@ -109,8 +116,13 @@ struct StreamingPlaybackTests {
         let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
         let source = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100)!
         source.frameLength = 44100
-        for frame in 0..<44100 { source.floatChannelData![0][frame] = Float(sin(Double(frame) * 2 * .pi * 440 / 44100)) * 0.25 }
-        do { let file = try AVAudioFile(forWriting: native, settings: format.settings); try file.write(from: source) }
+        for frame in 0..<44100 {
+            source.floatChannelData![0][frame] = Float(sin(Double(frame) * 2 * .pi * 440 / 44100)) * 0.25
+        }
+        do {
+            let file = try AVAudioFile(forWriting: native, settings: format.settings)
+            try file.write(from: source)
+        }
         let player = StreamingPlayback(manualRendering: true)
         defer { player.close() }
         let duration = try await player.prepare(files: [opus, native])
@@ -131,6 +143,9 @@ struct StreamingPlaybackTests {
         var final: AVAudioPCMBuffer?
         for _ in 0..<5 { final = try await player.renderOffline(frames: 4096) }
         #expect((0..<Int(final!.frameLength)).allSatisfy { abs(final!.floatChannelData![0][$0]) < 0.00001 })
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == ["microphone.wav", "system.opus"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == [
+                "microphone.wav", "system.opus",
+            ])
     }
 }

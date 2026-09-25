@@ -26,34 +26,50 @@ struct WaveformTimeline: View {
                     let end = Double(column + 1) / Double(columns) * duration
                     let peak = waveforms.map { $0.peak(from: start, to: end) }.max() ?? 0
                     let height = max(1, CGFloat(sqrt(peak / normalizer)) * (size.height - 6))
-                    let rect = CGRect(x: CGFloat(column) * size.width / CGFloat(columns), y: (size.height - height) / 2, width: 2, height: height)
-                    context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(start < position ? .accentColor : .secondary.opacity(0.55)))
+                    let rect = CGRect(
+                        x: CGFloat(column) * size.width / CGFloat(columns), y: (size.height - height) / 2, width: 2,
+                        height: height)
+                    context.fill(
+                        Path(roundedRect: rect, cornerRadius: 1),
+                        with: .color(start < position ? .accentColor : .secondary.opacity(0.55)))
                 }
                 let x = CGFloat(min(1, max(0, position / max(0.01, duration)))) * max(0, size.width - 1)
                 context.fill(Path(CGRect(x: x, y: 0, width: 1.5, height: size.height)), with: .color(.primary))
             }
             .opacity(dimmed ? 0.55 : 1)
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    focused = true
-                    isScrubbing = true
-                    scrub(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
-                }
-                .onEnded { value in
-                    seek(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
-                    scrub(nil); isScrubbing = false
-                })
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        focused = true
+                        isScrubbing = true
+                        scrub(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
+                    }
+                    .onEnded { value in
+                        seek(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
+                        scrub(nil)
+                        isScrubbing = false
+                    })
         }
         .frame(height: 24)
         .modifier(ActionHover(pressed: isScrubbing, cornerRadius: 4))
         .overlay(alignment: .center) {
-            if waveforms.isEmpty { Text(isLoading ? "Loading waveform…" : "Waveform unavailable").font(.caption2).foregroundStyle(.secondary).allowsHitTesting(false) }
+            if waveforms.isEmpty {
+                Text(isLoading ? "Loading waveform…" : "Waveform unavailable").font(.caption2).foregroundStyle(
+                    .secondary
+                ).allowsHitTesting(false)
+            }
         }
         .focusable().focused($focused)
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(focused ? Color.accentColor : .clear, lineWidth: 2))
-        .onKeyPress(.leftArrow) { seek(max(0, time - 5)); return .handled }
-        .onKeyPress(.rightArrow) { seek(min(duration, time + 5)); return .handled }
+        .onKeyPress(.leftArrow) {
+            seek(max(0, time - 5))
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            seek(min(duration, time + 5))
+            return .handled
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue("\(playbackTime(time)) of \(playbackTime(duration))")
@@ -82,8 +98,10 @@ struct PlaybackPosition: View {
     let seek: (Double) -> Void
 
     var body: some View {
-        WaveformTimeline(waveforms: waveforms, duration: duration, time: progress.displayedTime,
-                         label: label, dimmed: dimmed, isLoading: isLoading, seek: seek, scrub: progress.scrub)
+        WaveformTimeline(
+            waveforms: waveforms, duration: duration, time: progress.displayedTime,
+            label: label, dimmed: dimmed, isLoading: isLoading, seek: seek, scrub: progress.scrub
+        )
         .overlay(alignment: .bottom) {
             if showsTimes {
                 HStack {

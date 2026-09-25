@@ -16,7 +16,7 @@ private final class PlaybackRing: @unchecked Sendable {
 /// touches the C SPSC ring. All tracks advance under one consumer cursor, so a
 /// slow disk inserts shared silence rather than letting one track drift.
 final class StreamingPlayback: @unchecked Sendable {
-    static let capacity: UInt32 = 16384 // 341 ms at 48 kHz, independent of duration.
+    static let capacity: UInt32 = 16384  // 341 ms at 48 kHz, independent of duration.
     static let blockSize: UInt32 = 4096
     struct Snapshot: Sendable {
         let time: Double
@@ -45,7 +45,8 @@ final class StreamingPlayback: @unchecked Sendable {
     private let manualRendering: Bool
 
     init(silent: Bool = false, manualRendering: Bool = false) {
-        self.silent = silent; self.manualRendering = manualRendering
+        self.silent = silent
+        self.manualRendering = manualRendering
     }
     deinit {
         timer?.cancel()
@@ -74,7 +75,9 @@ final class StreamingPlayback: @unchecked Sendable {
             let ring = try PlaybackRing(tracks: readers.count)
             self.ring = ring
             buffers = try readers.map { _ in
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: Self.blockSize) else {
+                guard
+                    let buffer = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: Self.blockSize)
+                else {
                     throw ServiceError("Cannot allocate playback buffer.")
                 }
                 return buffer
@@ -82,18 +85,29 @@ final class StreamingPlayback: @unchecked Sendable {
             let engine = AVAudioEngine()
             let source = AVAudioSourceNode(format: StreamingAudioReader.format) { _, _, frames, audio in
                 let buffers = UnsafeMutableAudioBufferListPointer(audio)
-                guard buffers.count == 2, let left = buffers[0].mData, let right = buffers[1].mData else { return kAudio_ParamError }
-                gday_playback_render(ring.pointer, left.assumingMemoryBound(to: Float.self), right.assumingMemoryBound(to: Float.self), frames)
+                guard buffers.count == 2, let left = buffers[0].mData, let right = buffers[1].mData else {
+                    return kAudio_ParamError
+                }
+                gday_playback_render(
+                    ring.pointer, left.assumingMemoryBound(to: Float.self), right.assumingMemoryBound(to: Float.self),
+                    frames)
                 return noErr
             }
             let pitch = AVAudioUnitTimePitch()
-            engine.attach(source); engine.attach(pitch)
+            engine.attach(source)
+            engine.attach(pitch)
             engine.connect(source, to: pitch, format: StreamingAudioReader.format)
             engine.connect(pitch, to: engine.mainMixerNode, format: StreamingAudioReader.format)
             engine.mainMixerNode.outputVolume = silent ? 0 : 1
-            if manualRendering { try engine.enableManualRenderingMode(.offline, format: StreamingAudioReader.format, maximumFrameCount: Self.blockSize) }
-            self.engine = engine; self.pitch = pitch
-            configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
+            if manualRendering {
+                try engine.enableManualRenderingMode(
+                    .offline, format: StreamingAudioReader.format, maximumFrameCount: Self.blockSize)
+            }
+            self.engine = engine
+            self.pitch = pitch
+            configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+            ) { [weak self] _ in
                 self?.queue.async { [weak self] in
                     guard let self, !self.closed else { return }
                     self.fail("Audio output changed. Press Play to resume with the current device.")
@@ -107,10 +121,15 @@ final class StreamingPlayback: @unchecked Sendable {
     func seek(to seconds: Double, revision: UUID) async throws {
         try await perform { [self] in
             guard !closed, let ring, let engine else { throw CancellationError() }
-            playing = false; timer?.cancel(); timer = nil
-            engine.stop(); engine.reset()
+            playing = false
+            timer?.cancel()
+            timer = nil
+            engine.stop()
+            engine.reset()
             origin = min(totalFrames, max(0, Int64((seconds * 48000).rounded())))
-            produced = origin; self.revision = revision; drainStarted = nil
+            produced = origin
+            self.revision = revision
+            drainStarted = nil
             gday_playback_reset(ring.pointer)
             for reader in readers { try reader.seek(frame: min(origin, reader.totalFrames)) }
             try fill()
@@ -124,16 +143,23 @@ final class StreamingPlayback: @unchecked Sendable {
             pitch.rate = Float(rate)
             try fill()
             try engine.start()
-            playing = true; drainStarted = nil
+            playing = true
+            drainStarted = nil
             if !manualRendering {
                 let timer = DispatchSource.makeTimerSource(queue: queue)
                 timer.schedule(deadline: .now(), repeating: 1.0 / 60, leeway: .milliseconds(1))
                 timer.setEventHandler { [weak self] in
                     guard let self, !self.closed, self.playing else { return }
-                    do { try self.fill(); self.updateEnd(); self.publish() }
+                    do {
+                        try self.fill()
+                        self.updateEnd()
+                        self.publish()
+                    }
                     catch { self.fail(error.localizedDescription) }
                 }
-                self.timer?.cancel(); self.timer = timer; timer.resume()
+                self.timer?.cancel()
+                self.timer = timer
+                timer.resume()
             }
             publish()
         }
@@ -141,7 +167,10 @@ final class StreamingPlayback: @unchecked Sendable {
     func pause() {
         queue.async { [self] in
             guard !closed else { return }
-            playing = false; engine?.pause(); timer?.cancel(); timer = nil
+            playing = false
+            engine?.pause()
+            timer?.cancel()
+            timer = nil
             publish()
         }
     }
@@ -161,15 +190,25 @@ final class StreamingPlayback: @unchecked Sendable {
     }
     func shutdown(removing temporary: [URL] = []) async {
         await withCheckedContinuation { continuation in
-            queue.async { [self] in closeOnQueue(removing: temporary); continuation.resume() }
+            queue.async { [self] in
+                closeOnQueue(removing: temporary)
+                continuation.resume()
+            }
         }
     }
     private func closeOnQueue(removing temporary: [URL]) {
-        closed = true; playing = false; timer?.cancel(); timer = nil
+        closed = true
+        playing = false
+        timer?.cancel()
+        timer = nil
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
         configurationObserver = nil
-        engine?.stop(); engine = nil; pitch = nil
-        readers = []; buffers = []; ring = nil
+        engine?.stop()
+        engine = nil
+        pitch = nil
+        readers = []
+        buffers = []
+        ring = nil
         for url in temporary { try? FileManager.default.removeItem(at: url) }
     }
 
@@ -191,7 +230,9 @@ final class StreamingPlayback: @unchecked Sendable {
         }
     }
     private var position: Double {
-        min(Double(totalFrames) / 48000, Double(origin + Int64(ring.map { gday_playback_consumed($0.pointer) } ?? 0)) / 48000)
+        min(
+            Double(totalFrames) / 48000,
+            Double(origin + Int64(ring.map { gday_playback_consumed($0.pointer) } ?? 0)) / 48000)
     }
     private func updateEnd() {
         guard let ring, produced >= totalFrames, gday_playback_available(ring.pointer) == 0 else { return }
@@ -200,15 +241,24 @@ final class StreamingPlayback: @unchecked Sendable {
         // Let time-pitch/output latency drain instead of truncating the last block.
         let tail = max(0.1, (pitch?.auAudioUnit.latency ?? 0) + (engine?.outputNode.presentationLatency ?? 0))
         if now - (drainStarted ?? now) >= tail {
-            playing = false; engine?.pause(); timer?.cancel(); timer = nil
+            playing = false
+            engine?.pause()
+            timer?.cancel()
+            timer = nil
         }
     }
     private func publish(error: String? = nil) {
-        onUpdate?(Snapshot(time: position, playing: playing, ended: !playing && produced >= totalFrames && position >= Double(totalFrames) / 48000,
-                           revision: revision, error: error))
+        onUpdate?(
+            Snapshot(
+                time: position, playing: playing,
+                ended: !playing && produced >= totalFrames && position >= Double(totalFrames) / 48000,
+                revision: revision, error: error))
     }
     private func fail(_ message: String) {
-        playing = false; engine?.pause(); timer?.cancel(); timer = nil
+        playing = false
+        engine?.pause()
+        timer?.cancel()
+        timer = nil
         publish(error: message)
     }
 
@@ -216,7 +266,8 @@ final class StreamingPlayback: @unchecked Sendable {
     func renderOffline(frames: UInt32) async throws -> AVAudioPCMBuffer {
         try await perform { [self] in
             guard manualRendering, let engine,
-                  let result = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: frames) else { throw ServiceError("Offline rendering is not enabled.") }
+                let result = AVAudioPCMBuffer(pcmFormat: StreamingAudioReader.format, frameCapacity: frames)
+            else { throw ServiceError("Offline rendering is not enabled.") }
             try fill()
             let status = try engine.renderOffline(frames, to: result)
             guard status == .success else { throw ServiceError("Offline render failed: \(status.rawValue)") }

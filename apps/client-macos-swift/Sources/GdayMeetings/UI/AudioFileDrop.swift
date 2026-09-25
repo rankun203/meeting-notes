@@ -29,14 +29,22 @@ struct AudioFileDrop: ViewModifier {
                 let batch = AudioDropBatch(count: providers.count) { result in
                     Task { @MainActor in
                         do { _ = try await store.importAudioFiles(result.get(), into: destination) }
-                        catch { store.errorMessage = error.localizedDescription }
+                        catch {
+                            store.errorMessage = error.localizedDescription
+                        }
                     }
                 }
                 for (index, provider) in providers.enumerated() {
                     _ = provider.loadObject(ofClass: URL.self) { url, error in
                         Task { @MainActor in
-                            if let url { batch.receive(.success(url), at: index) }
-                            else { batch.receive(.failure(error ?? MeetingError.message("Could not read the dropped file.")), at: index) }
+                            if let url {
+                                batch.receive(.success(url), at: index)
+                            }
+                            else {
+                                batch.receive(
+                                    .failure(error ?? MeetingError.message("Could not read the dropped file.")),
+                                    at: index)
+                            }
                         }
                     }
                 }

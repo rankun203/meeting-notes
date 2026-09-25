@@ -39,7 +39,10 @@ struct Meeting: Codable, Identifiable, Equatable {
     var todos: [MeetingTodo] = []
     var recordingProfile: RecordingProfile?
     var serverTranscription: ServerTranscriptionAttempt?
-    enum CodingKeys: String, CodingKey { case id, title, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat, todos, recordingProfile, serverTranscription }
+    enum CodingKeys: String, CodingKey {
+        case id, title, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat, todos,
+            recordingProfile, serverTranscription
+    }
 
 }
 struct Person: Codable, Identifiable, Equatable {
@@ -73,8 +76,12 @@ struct AppSettings: Codable, Equatable {
     var captureMicrophone = true
     var microphoneVoiceProcessing = false
     var recordingFormat: RecordingFormat = .opus
-    var summarizationPrompt = "Summarize this meeting with decisions, key points, and action items. Do not invent information."
-    enum CodingKeys: String, CodingKey { case llmBaseURL, llmModel, transcriptionBaseURL, transcriptionModel, autoTranscribe, captureSystemAudio, captureMicrophone, microphoneVoiceProcessing, recordingFormat, summarizationPrompt }
+    var summarizationPrompt =
+        "Summarize this meeting with decisions, key points, and action items. Do not invent information."
+    enum CodingKeys: String, CodingKey {
+        case llmBaseURL, llmModel, transcriptionBaseURL, transcriptionModel, autoTranscribe, captureSystemAudio,
+            captureMicrophone, microphoneVoiceProcessing, recordingFormat, summarizationPrompt
+    }
 
 }
 struct MeetingLibrary: Codable {
@@ -88,7 +95,11 @@ struct MeetingLibrary: Codable {
 }
 enum MeetingError: LocalizedError {
     case message(String)
-    var errorDescription: String? { switch self { case .message(let text): return text } }
+    var errorDescription: String? {
+        switch self {
+        case .message(let text): return text
+        }
+    }
 }
 
 extension TranscriptSegment {
@@ -172,14 +183,17 @@ extension AppSettings {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         llmBaseURL = try values.decodeIfPresent(String.self, forKey: .llmBaseURL) ?? "https://api.openai.com/v1"
         llmModel = try values.decodeIfPresent(String.self, forKey: .llmModel) ?? "gpt-4o-mini"
-        transcriptionBaseURL = try values.decodeIfPresent(String.self, forKey: .transcriptionBaseURL) ?? "https://api.openai.com/v1"
+        transcriptionBaseURL =
+            try values.decodeIfPresent(String.self, forKey: .transcriptionBaseURL) ?? "https://api.openai.com/v1"
         transcriptionModel = try values.decodeIfPresent(String.self, forKey: .transcriptionModel) ?? "whisper-1"
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         microphoneVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .microphoneVoiceProcessing) ?? false
         recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
-        summarizationPrompt = try values.decodeIfPresent(String.self, forKey: .summarizationPrompt) ?? "Summarize this meeting with decisions, key points, and action items. Do not invent information."
+        summarizationPrompt =
+            try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)
+            ?? "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     }
 }
 

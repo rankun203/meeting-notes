@@ -50,15 +50,21 @@ final class MeetingPlayback: ObservableObject {
     private var wantsPlayback = false
     private var pendingPosition: Double = 0
     private var isSeeking = false
-    init(readWaveform: @escaping WaveformLoader = { source, readable in
-        try await WaveformCache.shared.waveform(source: source, readable: readable)
-    }, prepareAudio: @escaping AudioPreparer = { url in PreparedPlaybackAudio(url: url, temporary: false) }) {
+    init(
+        readWaveform: @escaping WaveformLoader = { source, readable in
+            try await WaveformCache.shared.waveform(source: source, readable: readable)
+        }, prepareAudio: @escaping AudioPreparer = { url in PreparedPlaybackAudio(url: url, temporary: false) }
+    ) {
         self.prepareAudio = prepareAudio
         self.readWaveform = readWaveform
     }
 
     deinit {
-        preparationTask?.cancel(); seekTask?.cancel(); playTask?.cancel(); waveformTask?.cancel(); cacheTask?.cancel()
+        preparationTask?.cancel()
+        seekTask?.cancel()
+        playTask?.cancel()
+        waveformTask?.cancel()
+        cacheTask?.cancel()
         transport?.close(removing: temporaryURLs)
     }
 
@@ -67,7 +73,8 @@ final class MeetingPlayback: ObservableObject {
         guard !isPlaybackBlocked else { return }
         let track = Self.validTrack(track, count: files.count)
         if meetingID == meeting.id, sourceFiles == files, selectedTrack == track, errorMessage == nil {
-            title = meeting.title; sourceMeeting = meeting
+            title = meeting.title
+            sourceMeeting = meeting
             return
         }
         let sameMeeting = meetingID == meeting.id
@@ -77,7 +84,8 @@ final class MeetingPlayback: ObservableObject {
     func play(meeting: Meeting, files: [URL], at position: Double = 0) {
         guard !isPlaybackBlocked else { return }
         if meetingID == meeting.id, sourceFiles == files, errorMessage == nil {
-            title = meeting.title; sourceMeeting = meeting
+            title = meeting.title
+            sourceMeeting = meeting
             wantsPlayback = true
             seek(to: position)
             return
@@ -95,38 +103,65 @@ final class MeetingPlayback: ObservableObject {
         wantsPlayback = true
         if isLoading { return }
         guard transport != nil else { return }
-        if hasEnded || (duration > 0 && currentTime >= duration) { seek(to: 0) }
-        else { startPlayback() }
+        if hasEnded || (duration > 0 && currentTime >= duration) {
+            seek(to: 0)
+        }
+        else {
+            startPlayback()
+        }
     }
 
     func pause() {
         wantsPlayback = false
-        playTask?.cancel(); transport?.pause(); isPlaying = false
+        playTask?.cancel()
+        transport?.pause()
+        isPlaying = false
     }
 
-    func togglePlayPause() { if wantsPlayback || isPlaying { pause() } else { play() } }
+    func togglePlayPause() {
+        if wantsPlayback || isPlaying {
+            pause()
+        }
+        else {
+            play()
+        }
+    }
 
     func seek(to seconds: Double) {
         guard hasSelection, seconds.isFinite else { return }
         let target = duration > 0 ? Self.clampedTime(seconds, duration: duration) : max(0, seconds)
-        pendingPosition = target; currentTime = target; hasEnded = duration > 0 && target >= duration
+        pendingPosition = target
+        currentTime = target
+        hasEnded = duration > 0 && target >= duration
         if isLoading { return }
         guard let transport else { return }
-        seekTask?.cancel(); playTask?.cancel()
-        let operation = UUID(); seekGeneration = operation
+        seekTask?.cancel()
+        playTask?.cancel()
+        let operation = UUID()
+        seekGeneration = operation
         let currentGeneration = generation
-        isSeeking = true; isPlaying = false
+        isSeeking = true
+        isPlaying = false
         seekTask = Task { [weak self] in
             do {
                 try await transport.seek(to: target, revision: operation)
-                guard let self, !Task.isCancelled, self.generation == currentGeneration, self.seekGeneration == operation else { return }
+                guard let self, !Task.isCancelled, self.generation == currentGeneration,
+                    self.seekGeneration == operation
+                else { return }
                 self.isSeeking = false
-                if self.wantsPlayback, !self.isPlaybackBlocked, !self.hasEnded { self.startPlayback() }
-                else if self.hasEnded { self.pause() }
-            } catch is CancellationError { }
+                if self.wantsPlayback, !self.isPlaybackBlocked, !self.hasEnded {
+                    self.startPlayback()
+                }
+                else if self.hasEnded {
+                    self.pause()
+                }
+            }
+            catch is CancellationError {}
             catch {
                 guard let self, self.generation == currentGeneration, self.seekGeneration == operation else { return }
-                self.isSeeking = false; self.pause(); self.errorMessage = error.localizedDescription
+                self.isSeeking = false
+                self.pause()
+                self.errorMessage = error.localizedDescription
             }
         }
     }
@@ -138,10 +173,11 @@ final class MeetingPlayback: ObservableObject {
         playTask = Task { [weak self] in
             guard let self, self.wantsPlayback, !self.isPlaybackBlocked else { return }
             do { try await transport.play(rate: self.playbackRate) }
-            catch is CancellationError { }
+            catch is CancellationError {}
             catch {
                 guard self.generation == operation else { return }
-                self.pause(); self.errorMessage = error.localizedDescription
+                self.pause()
+                self.errorMessage = error.localizedDescription
             }
         }
     }
@@ -163,7 +199,12 @@ final class MeetingPlayback: ObservableObject {
 
     func toggleMute(_ index: Int) {
         guard sourceFiles.indices.contains(index), !isPlaybackBlocked, !isLoading else { return }
-        if mutedTracks.contains(index) { mutedTracks.remove(index) } else { mutedTracks.insert(index) }
+        if mutedTracks.contains(index) {
+            mutedTracks.remove(index)
+        }
+        else {
+            mutedTracks.insert(index)
+        }
         let audible = sourceFiles.indices.filter { !mutedTracks.contains($0) }
         selectedTrack = audible.count == 1 ? audible[0] : -1
         applyMix()
@@ -182,29 +223,50 @@ final class MeetingPlayback: ObservableObject {
 
     func reconcile(meetings: [Meeting]) {
         guard let id = meetingID else { return }
-        guard let meeting = meetings.first(where: { $0.id == id }) else { clear(); return }
+        guard let meeting = meetings.first(where: { $0.id == id }) else {
+            clear()
+            return
+        }
         title = meeting.title
         if sourceMeeting?.audioFiles != meeting.audioFiles {
             // The owner resolves URLs when starting the new recording revision.
             // Release old assets now so removed/replaced files cannot keep playing.
             clear()
-        } else { sourceMeeting = meeting }
+        }
+        else {
+            sourceMeeting = meeting
+        }
     }
 
     func clear() {
         progress.scrub(to: nil)
-        generation = UUID(); seekGeneration = UUID()
-        preparationTask?.cancel(); preparationTask = nil
-        waveformTask?.cancel(); waveformTask = nil
-        cacheTask?.cancel(); cacheTask = nil
-        seekTask?.cancel(); seekTask = nil
+        generation = UUID()
+        seekGeneration = UUID()
+        preparationTask?.cancel()
+        preparationTask = nil
+        waveformTask?.cancel()
+        waveformTask = nil
+        cacheTask?.cancel()
+        cacheTask = nil
+        seekTask?.cancel()
+        seekTask = nil
         releaseCurrentItem()
-        sourceMeeting = nil; sourceFiles = []
-        meetingID = nil; title = ""; trackNames = []; selectedTrack = -1
-        waveforms = []; mutedTracks = []
+        sourceMeeting = nil
+        sourceFiles = []
+        meetingID = nil
+        title = ""
+        trackNames = []
+        selectedTrack = -1
+        waveforms = []
+        mutedTracks = []
         isLoadingWaveforms = false
-        currentTime = 0; duration = 0; pendingPosition = 0
-        isLoading = false; isSeeking = false; hasEnded = false; errorMessage = nil
+        currentTime = 0
+        duration = 0
+        pendingPosition = 0
+        isLoading = false
+        isSeeking = false
+        hasEnded = false
+        errorMessage = nil
     }
 
     /// Lets lifecycle/fixture checks await owned work without depending on UI sleeps.
@@ -221,21 +283,37 @@ final class MeetingPlayback: ObservableObject {
 
     private func load(meeting: Meeting, files: [URL], track: Int, position: Double, autoplay: Bool) {
         progress.scrub(to: nil)
-        generation = UUID(); let operation = generation
-        preparationTask?.cancel(); seekTask?.cancel(); waveformTask?.cancel(); cacheTask?.cancel()
+        generation = UUID()
+        let operation = generation
+        preparationTask?.cancel()
+        seekTask?.cancel()
+        waveformTask?.cancel()
+        cacheTask?.cancel()
         releaseCurrentItem()
-        sourceMeeting = meeting; sourceFiles = files
-        meetingID = meeting.id; title = meeting.title; selectedTrack = track
-        waveforms = Array(repeating: nil, count: files.count); mutedTracks = track < 0 ? [] : Set(files.indices.filter { $0 != track })
+        sourceMeeting = meeting
+        sourceFiles = files
+        meetingID = meeting.id
+        title = meeting.title
+        selectedTrack = track
+        waveforms = Array(repeating: nil, count: files.count)
+        mutedTracks = track < 0 ? [] : Set(files.indices.filter { $0 != track })
         isLoadingWaveforms = !files.isEmpty
         trackNames = files.map { file in
             let name = file.deletingPathExtension().lastPathComponent
             return name == "microphone" ? "Microphone" : name == "system" ? "System Audio" : name
         }
-        errorMessage = nil; hasEnded = false; isSeeking = false
-        duration = 0; currentTime = max(0, position.isFinite ? position : 0); pendingPosition = currentTime
+        errorMessage = nil
+        hasEnded = false
+        isSeeking = false
+        duration = 0
+        currentTime = max(0, position.isFinite ? position : 0)
+        pendingPosition = currentTime
         wantsPlayback = autoplay && !isPlaybackBlocked
-        guard !files.isEmpty else { errorMessage = "This meeting has no audio files to play."; isLoading = false; return }
+        guard !files.isEmpty else {
+            errorMessage = "This meeting has no audio files to play."
+            isLoading = false
+            return
+        }
         isLoading = true
         // Read small cached envelopes independently, even while an Opus source is
         // still being prepared. Never wait for waveform work to begin playback.
@@ -267,18 +345,27 @@ final class MeetingPlayback: ObservableObject {
                 try Task.checkCancellation()
                 transport.onUpdate = { [weak self] snapshot in
                     Task { @MainActor in
-                        guard let self, self.generation == operation, self.seekGeneration == snapshot.revision, !self.isSeeking else { return }
+                        guard let self, self.generation == operation, self.seekGeneration == snapshot.revision,
+                            !self.isSeeking
+                        else { return }
                         self.currentTime = snapshot.time
                         self.isPlaying = snapshot.playing && self.wantsPlayback && !self.isPlaybackBlocked
-                        if snapshot.ended { self.hasEnded = true; self.wantsPlayback = false }
-                        if let error = snapshot.error { self.pause(); self.errorMessage = error }
+                        if snapshot.ended {
+                            self.hasEnded = true
+                            self.wantsPlayback = false
+                        }
+                        if let error = snapshot.error {
+                            self.pause()
+                            self.errorMessage = error
+                        }
                     }
                 }
                 let length = try await transport.prepare(files: readableFiles)
                 try Task.checkCancellation()
                 guard let self, self.generation == operation else { throw CancellationError() }
                 self.transport = transport
-                self.temporaryURLs = temporary; transferred = true
+                self.temporaryURLs = temporary
+                transferred = true
                 self.duration = length
                 self.applyMix()
                 self.isLoading = false
@@ -293,11 +380,14 @@ final class MeetingPlayback: ObservableObject {
                     guard let self, self.generation == operation else { return }
                     self.isLoadingWaveforms = false
                 }
-            } catch is CancellationError {
+            }
+            catch is CancellationError {
                 // Replacing/clearing selection owns the published state; stale work only cleans up.
-            } catch {
+            }
+            catch {
                 if let self, self.generation == operation, !Task.isCancelled {
-                    self.pause(); self.isLoading = false
+                    self.pause()
+                    self.isLoading = false
                     self.isLoadingWaveforms = false
                     self.errorMessage = "Unable to load meeting audio: " + error.localizedDescription
                 }
@@ -309,7 +399,8 @@ final class MeetingPlayback: ObservableObject {
     private func releaseCurrentItem() {
         pause()
         transport?.close(removing: temporaryURLs)
-        transport = nil; temporaryURLs = []
+        transport = nil
+        temporaryURLs = []
     }
 
 }

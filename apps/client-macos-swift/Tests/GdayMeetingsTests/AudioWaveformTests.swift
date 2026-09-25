@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Testing
+
 @testable import GdayMeetings
 
 struct AudioWaveformTests {
@@ -15,11 +16,26 @@ struct AudioWaveformTests {
         let bytes = frames * 2
         var header = Data()
         func text(_ value: String) { header.append(Data(value.utf8)) }
-        func u16(_ value: UInt16) { var v = value.littleEndian; withUnsafeBytes(of: &v) { header.append(contentsOf: $0) } }
-        func u32(_ value: UInt32) { var v = value.littleEndian; withUnsafeBytes(of: &v) { header.append(contentsOf: $0) } }
-        text("RIFF"); u32(bytes + 36); text("WAVEfmt "); u32(16)
-        u16(1); u16(1); u32(8000); u32(16000); u16(2); u16(16)
-        text("data"); u32(bytes)
+        func u16(_ value: UInt16) {
+            var v = value.littleEndian
+            withUnsafeBytes(of: &v) { header.append(contentsOf: $0) }
+        }
+        func u32(_ value: UInt32) {
+            var v = value.littleEndian
+            withUnsafeBytes(of: &v) { header.append(contentsOf: $0) }
+        }
+        text("RIFF")
+        u32(bytes + 36)
+        text("WAVEfmt ")
+        u32(16)
+        u16(1)
+        u16(1)
+        u32(8000)
+        u32(16000)
+        u16(2)
+        u16(16)
+        text("data")
+        u32(bytes)
         try header.write(to: source)
         let handle = try FileHandle(forWritingTo: source)
         try handle.truncate(atOffset: UInt64(bytes) + 44)
@@ -42,7 +58,8 @@ struct AudioWaveformTests {
         try Data("broken".utf8).write(to: cache.entryURL(for: source))
         #expect(await cache.cached(source) == nil)
         _ = try await cache.waveform(source: source, readable: source)
-        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 60)], ofItemAtPath: source.path)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: 60)], ofItemAtPath: source.path)
         #expect(await cache.cached(source) == nil)
     }
 

@@ -69,12 +69,17 @@ struct RecordingSetupView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text("Meeting title").font(.subheadline.weight(.medium))
                 TextField("Untitled Meeting", text: $title)
-                    .textFieldStyle(.roundedBorder).accessibilityLabel("Meeting title").disabled(store.isStartingRecording)
+                    .textFieldStyle(.roundedBorder).accessibilityLabel("Meeting title").disabled(
+                        store.isStartingRecording)
             }
             VStack(spacing: 0) {
-                sourceToggle("Microphone", subtitle: "Your voice and the room around you", symbol: "mic.fill", value: $microphone)
+                sourceToggle(
+                    "Microphone", subtitle: "Your voice and the room around you", symbol: "mic.fill", value: $microphone
+                )
                 Divider().padding(.leading, 44)
-                sourceToggle("System Audio", subtitle: "Meeting participants and other app audio", symbol: "speaker.wave.2.fill", value: $systemAudio)
+                sourceToggle(
+                    "System Audio", subtitle: "Meeting participants and other app audio", symbol: "speaker.wave.2.fill",
+                    value: $systemAudio)
             }
             .padding(.horizontal, 14).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
             if !microphone && !systemAudio {
@@ -84,8 +89,10 @@ struct RecordingSetupView: View {
             DisclosureGroup("Recording options", isExpanded: $showOptions) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Microphone voice processing", isOn: $voiceProcessing).disabled(!microphone)
-                    Text("Apple speech processing can reduce background noise and may change other apps’ volume. Headphones help prevent speaker audio entering your microphone.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "Apple speech processing can reduce background noise and may change other apps’ volume. Headphones help prevent speaker audio entering your microphone."
+                    )
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Picker("Save audio as", selection: $format) {
                         Text("Opus · smaller files").tag(RecordingFormat.opus)
                         Text("M4A · widely compatible").tag(RecordingFormat.m4a)
@@ -145,11 +152,15 @@ struct RecordingSetupView: View {
                     }
                     Task {
                         await store.startRecording(title: title)
-                        if let id = store.recordingID { onStarted(id); dismiss() }
+                        if let id = store.recordingID {
+                            onStarted(id)
+                            dismiss()
+                        }
                         else if let permission = store.recordingPermissionNeeded {
                             startupError = permission.explanation
                             store.recordingPermissionNeeded = nil
-                        } else if let error = store.errorMessage, error != previousError {
+                        }
+                        else if let error = store.errorMessage, error != previousError {
                             startupError = error
                             store.errorMessage = nil
                         }
@@ -162,7 +173,8 @@ struct RecordingSetupView: View {
     }
     private func sourceToggle(_ name: String, subtitle: String, symbol: String, value: Binding<Bool>) -> some View {
         HStack(spacing: 13) {
-            Image(systemName: symbol).font(.title3).foregroundStyle(value.wrappedValue ? Color.accentColor : .secondary).frame(width: 24)
+            Image(systemName: symbol).font(.title3).foregroundStyle(value.wrappedValue ? Color.accentColor : .secondary)
+                .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
                 Text(name).fontWeight(.medium)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
@@ -185,11 +197,16 @@ struct RecordingWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 7) {
                         Circle().fill(store.isFinalizingRecording ? Color.secondary : .red).frame(width: 7, height: 7)
-                        Text(store.isFinalizingRecording ? "Saving Recording" : "Recording").font(.subheadline.weight(.semibold))
+                        Text(store.isFinalizingRecording ? "Saving Recording" : "Recording").font(
+                            .subheadline.weight(.semibold))
                     }
                     TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                        let elapsed = store.isFinalizingRecording ? (store.meetings.first { $0.id == meetingID }?.duration ?? store.recordingDuration) : (store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
-                        Text(Self.elapsed(elapsed)).font(.system(size: 34, weight: .medium, design: .rounded)).monospacedDigit()
+                        let elapsed =
+                            store.isFinalizingRecording
+                            ? (store.meetings.first { $0.id == meetingID }?.duration ?? store.recordingDuration)
+                            : (store.recordingStartedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
+                        Text(Self.elapsed(elapsed)).font(.system(size: 34, weight: .medium, design: .rounded))
+                            .monospacedDigit()
                             .accessibilityLabel("Recording duration").accessibilityValue(Self.elapsed(elapsed))
                     }
                 }
@@ -199,15 +216,22 @@ struct RecordingWorkspaceView: View {
                     // https://developer.apple.com/design/human-interface-guidelines/progress-indicators
                     ProgressView().controlSize(.small)
                     Text("Saving audio…").foregroundStyle(.secondary)
-                } else {
-                    Button { Task { await store.stopRecording() } } label: {
+                }
+                else {
+                    Button {
+                        Task { await store.stopRecording() }
+                    } label: {
                         Label("Stop & Save", systemImage: "stop.fill")
                     }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
                 }
             }
             HStack(spacing: 26) {
-                RecordingSourceMeter(title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone, saving: store.isFinalizingRecording)
-                RecordingSourceMeter(title: "System Audio", symbol: "speaker.wave.2.fill", source: store.recordingLevels.system, saving: store.isFinalizingRecording)
+                RecordingSourceMeter(
+                    title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone,
+                    saving: store.isFinalizingRecording)
+                RecordingSourceMeter(
+                    title: "System Audio", symbol: "speaker.wave.2.fill", source: store.recordingLevels.system,
+                    saving: store.isFinalizingRecording)
             }
         }
         .padding(18)
@@ -216,7 +240,9 @@ struct RecordingWorkspaceView: View {
     }
     static func elapsed(_ seconds: TimeInterval) -> String {
         let value = max(0, Int(seconds.isFinite ? seconds : 0))
-        return value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60) : String(format: "%02d:%02d", value / 60, value % 60)
+        return value >= 3600
+            ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60)
+            : String(format: "%02d:%02d", value / 60, value % 60)
     }
 }
 
@@ -287,7 +313,9 @@ private struct RecordingSourceMeter: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .help(statusText)
-        .accessibilityValue(!saving && source.enabled && source.hasSamples && !source.stale ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
+        .accessibilityValue(
+            !saving && source.enabled && source.hasSamples && !source.stale
+                ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
     }
 
     private var sourceLabel: some View { Label(title, systemImage: symbol).font(.subheadline.weight(.medium)) }

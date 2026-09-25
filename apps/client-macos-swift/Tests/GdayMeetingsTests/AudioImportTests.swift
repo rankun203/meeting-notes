@@ -1,8 +1,9 @@
 import AVFoundation
-import Foundation
 import AppKit
-import UniformTypeIdentifiers
+import Foundation
 import Testing
+import UniformTypeIdentifiers
+
 @testable import GdayMeetings
 
 @MainActor struct AudioImportTests {
@@ -11,8 +12,12 @@ import Testing
         #expect(provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier))
         let received: URL = try await withCheckedThrowingContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, error in
-                if let url { continuation.resume(returning: url) }
-                else { continuation.resume(throwing: error ?? MeetingError.message("No dropped URL")) }
+                if let url {
+                    continuation.resume(returning: url)
+                }
+                else {
+                    continuation.resume(throwing: error ?? MeetingError.message("No dropped URL"))
+                }
             }
         }
         #expect(received == URL(fileURLWithPath: "/tmp/sample.wav"))
@@ -42,7 +47,8 @@ import Testing
         #expect(store.meetings.count == 2)
         #expect(store.meetings.allSatisfy { $0.audioFiles.count == 1 })
         var meeting = try #require(store.meetings.first)
-        meeting.notes = "Keep notes"; store.updateMeeting(meeting)
+        meeting.notes = "Keep notes"
+        store.updateMeeting(meeting)
         _ = try await store.importAudioFiles([first, second], into: meeting.id)
         let restored = MeetingStore(dataDirectory: store.dataDirectory)
         let added = try #require(restored.meetings.first(where: { $0.id == meeting.id }))
@@ -97,7 +103,8 @@ import Testing
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         store.recordingID = nil
         var meeting = try #require(store.meetings.first)
-        meeting.serverTranscription = ServerTranscriptionAttempt(origin: "https://example.com", idempotencyKey: "saved", title: "Existing")
+        meeting.serverTranscription = ServerTranscriptionAttempt(
+            origin: "https://example.com", idempotencyKey: "saved", title: "Existing")
         store.updateMeeting(meeting)
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         #expect(store.meetings.first == meeting)

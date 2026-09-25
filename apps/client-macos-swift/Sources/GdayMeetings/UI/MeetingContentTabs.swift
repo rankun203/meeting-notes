@@ -12,7 +12,10 @@ struct MeetingContentTabs: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach(titles.indices, id: \.self) { index in
-                Button { selection = index; focusedTab = index } label: {
+                Button {
+                    selection = index
+                    focusedTab = index
+                } label: {
                     Text(titles[index])
                         .font(.callout.weight(selection == index ? .semibold : .regular))
                         .lineLimit(1)
@@ -53,12 +56,14 @@ struct MeetingGlassSurface: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if reduceTransparency {
             content.background(Color(nsColor: .controlBackgroundColor), in: Capsule())
-        } else if #available(macOS 26.0, *) {
+        }
+        else if #available(macOS 26.0, *) {
             content.glassEffect(.regular, in: Capsule())
                 // Refresh only this native material when Preview changes appearance;
                 // otherwise AppKit can retain its old glass colors until activation.
                 .id(colorScheme)
-        } else {
+        }
+        else {
             content.background(.regularMaterial, in: Capsule())
         }
     }

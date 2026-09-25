@@ -12,7 +12,9 @@ struct MeetingDetailView: View {
 
     private var meeting: Meeting? { store.meetings.first { $0.id == meetingID } }
     private func change(_ edit: (inout Meeting) -> Void) {
-        guard var value = meeting else { return }; edit(&value); store.updateMeeting(value)
+        guard var value = meeting else { return }
+        edit(&value)
+        store.updateMeeting(value)
     }
     private func text(_ path: WritableKeyPath<Meeting, String>) -> Binding<String> {
         Binding(get: { meeting?[keyPath: path] ?? "" }, set: { value in change { $0[keyPath: path] = value } })
@@ -71,7 +73,8 @@ struct MeetingDetailView: View {
         HStack(spacing: 10) {
             Text(meeting.createdAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())
             if meeting.duration > 0 && store.recordingID != meetingID {
-                Text(formatTime(meeting.duration)).monospacedDigit().accessibilityLabel("Duration \(formatTime(meeting.duration))")
+                Text(formatTime(meeting.duration)).monospacedDigit().accessibilityLabel(
+                    "Duration \(formatTime(meeting.duration))")
             }
         }
     }
@@ -80,13 +83,39 @@ struct MeetingDetailView: View {
         Menu {
             Section("People") {
                 ForEach(store.people) { person in
-                    Toggle(person.name, isOn: Binding(get: { self.meeting?.personIDs.contains(person.id) ?? false }, set: { selected in change { if selected { $0.personIDs.append(person.id) } else { $0.personIDs.removeAll { $0 == person.id } } } }))
+                    Toggle(
+                        person.name,
+                        isOn: Binding(
+                            get: { self.meeting?.personIDs.contains(person.id) ?? false },
+                            set: { selected in
+                                change {
+                                    if selected {
+                                        $0.personIDs.append(person.id)
+                                    }
+                                    else {
+                                        $0.personIDs.removeAll { $0 == person.id }
+                                    }
+                                }
+                            }))
                 }
                 if store.people.isEmpty { Text("Add people in the sidebar") }
             }
             Section("Tags") {
                 ForEach(store.tags) { tag in
-                    Toggle(tag.name, isOn: Binding(get: { self.meeting?.tagIDs.contains(tag.id) ?? false }, set: { selected in change { if selected { $0.tagIDs.append(tag.id) } else { $0.tagIDs.removeAll { $0 == tag.id } } } }))
+                    Toggle(
+                        tag.name,
+                        isOn: Binding(
+                            get: { self.meeting?.tagIDs.contains(tag.id) ?? false },
+                            set: { selected in
+                                change {
+                                    if selected {
+                                        $0.tagIDs.append(tag.id)
+                                    }
+                                    else {
+                                        $0.tagIDs.removeAll { $0 == tag.id }
+                                    }
+                                }
+                            }))
                 }
                 if store.tags.isEmpty { Text("Add tags in the sidebar") }
             }
@@ -103,24 +132,35 @@ struct MeetingDetailView: View {
         .help("Manage people and tags")
     }
 
-
     private func playbackButton(_ meeting: Meeting) -> some View {
         // HIG Playing Audio: start playback only after an intentional action.
         // Library browsing does not replace or pause the current recording.
         // https://developer.apple.com/design/human-interface-guidelines/playing-audio
         Button {
-            if playback.meetingID == meetingID { playback.togglePlayPause() }
-            else { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
+            if playback.meetingID == meetingID {
+                playback.togglePlayPause()
+            }
+            else {
+                playback.play(meeting: meeting, files: store.audioURLs(for: meeting))
+            }
         } label: {
-            Label(playbackActionTitle, systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill")
-                .labelStyle(.iconOnly)
-                .font(.title3)
-                .frame(width: 44, height: 44)
+            Label(
+                playbackActionTitle,
+                systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill"
+            )
+            .labelStyle(.iconOnly)
+            .font(.title3)
+            .frame(width: 44, height: 44)
         }
         .buttonStyle(ActionButtonStyle(cornerRadius: 22))
         .modifier(MeetingGlassSurface())
-        .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
-        .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "\(playbackActionTitle) this meeting")
+        .disabled(
+            playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading)
+                || store.audioURLs(for: meeting).isEmpty
+        )
+        .help(
+            playback.isPlaybackBlocked
+                ? "Playback is unavailable while recording" : "\(playbackActionTitle) this meeting")
     }
 
     private var playbackActionTitle: String {
@@ -150,8 +190,9 @@ struct MeetingDetailView: View {
                 HStack {
                     Text("Summary").font(.headline)
                     Spacer()
-                    Button(meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary", systemImage: "sparkles") { Task { await store.summarize(id: meetingID) } }
-                        .disabled(store.isBusy || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
+                    Button(meeting.summary.isEmpty ? "Generate Summary" : "Regenerate Summary", systemImage: "sparkles")
+                    { Task { await store.summarize(id: meetingID) } }
+                    .disabled(store.isBusy || (meeting.transcript.isEmpty && meeting.notes.isEmpty))
                 }
                 editor("Summary", binding: text(\.summary))
             }
@@ -184,8 +225,13 @@ struct MeetingDetailView: View {
                     TextField("Rename speaker", text: $speakerTo)
                     Button("Apply") {
                         change { meeting in
-                            for index in meeting.transcript.indices where meeting.transcript[index].speaker == speakerFrom { meeting.transcript[index].speaker = speakerTo }
-                        }; speakerFrom = speakerTo; speakerTo = ""
+                            for index in meeting.transcript.indices
+                            where meeting.transcript[index].speaker == speakerFrom {
+                                meeting.transcript[index].speaker = speakerTo
+                            }
+                        }
+                        speakerFrom = speakerTo
+                        speakerTo = ""
                     }.disabled(speakerFrom.isEmpty || speakerTo.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -194,10 +240,42 @@ struct MeetingDetailView: View {
                     ForEach(meeting.transcript) { segment in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Button(formatTime(segment.start)) { playback.play(meeting: meeting, files: store.audioURLs(for: meeting), at: segment.start) }.buttonStyle(.link).monospacedDigit().help("Play from this point").disabled(playback.isPlaybackBlocked || store.audioURLs(for: meeting).isEmpty)
-                                TextField("Speaker", text: Binding(get: { self.meeting?.transcript.first(where: { $0.id == segment.id })?.speaker ?? "" }, set: { value in change { meeting in if let index = meeting.transcript.firstIndex(where: { $0.id == segment.id }) { meeting.transcript[index].speaker = value } } })).font(.headline).textFieldStyle(.plain)
+                                Button(formatTime(segment.start)) {
+                                    playback.play(
+                                        meeting: meeting, files: store.audioURLs(for: meeting), at: segment.start)
+                                }.buttonStyle(.link).monospacedDigit().help("Play from this point").disabled(
+                                    playback.isPlaybackBlocked || store.audioURLs(for: meeting).isEmpty)
+                                TextField(
+                                    "Speaker",
+                                    text: Binding(
+                                        get: {
+                                            self.meeting?.transcript.first(where: { $0.id == segment.id })?.speaker
+                                                ?? ""
+                                        },
+                                        set: { value in
+                                            change { meeting in
+                                                if let index = meeting.transcript.firstIndex(where: {
+                                                    $0.id == segment.id
+                                                }) {
+                                                    meeting.transcript[index].speaker = value
+                                                }
+                                            }
+                                        })
+                                ).font(.headline).textFieldStyle(.plain)
                             }
-                            TextField("Transcript", text: Binding(get: { self.meeting?.transcript.first(where: { $0.id == segment.id })?.text ?? "" }, set: { value in change { meeting in if let index = meeting.transcript.firstIndex(where: { $0.id == segment.id }) { meeting.transcript[index].text = value } } }), axis: .vertical).textFieldStyle(.plain)
+                            TextField(
+                                "Transcript",
+                                text: Binding(
+                                    get: { self.meeting?.transcript.first(where: { $0.id == segment.id })?.text ?? "" },
+                                    set: { value in
+                                        change { meeting in
+                                            if let index = meeting.transcript.firstIndex(where: { $0.id == segment.id })
+                                            {
+                                                meeting.transcript[index].text = value
+                                            }
+                                        }
+                                    }), axis: .vertical
+                            ).textFieldStyle(.plain)
                             Divider()
                         }
                     }
@@ -205,7 +283,11 @@ struct MeetingDetailView: View {
             }.overlay {
                 // Expanded playback can leave little vertical space. Keep the
                 // empty-state action reachable using standard scrolling.
-                if meeting.transcript.isEmpty { ScrollView { emptyTranscript(meeting).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity) } }
+                if meeting.transcript.isEmpty {
+                    ScrollView {
+                        emptyTranscript(meeting).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity)
+                    }
+                }
             }
         }
     }
@@ -213,10 +295,15 @@ struct MeetingDetailView: View {
         ContentUnavailableView {
             Label("Recording transcript", systemImage: "text.bubble")
         } description: {
-            Text(store.recordingID == meetingID ? "Take notes while recording. Transcription is available after the audio is saved." : "No transcript yet.")
+            Text(
+                store.recordingID == meetingID
+                    ? "Take notes while recording. Transcription is available after the audio is saved."
+                    : "No transcript yet.")
         } actions: {
             if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {
-                Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription") { Task { await store.transcribe(id: meetingID) } }.disabled(store.isBusy)
+                Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription") {
+                    Task { await store.transcribe(id: meetingID) }
+                }.disabled(store.isBusy)
             }
         }
     }
@@ -225,30 +312,60 @@ struct MeetingDetailView: View {
         VStack {
             HStack {
                 TextField("New to-do", text: $todoDraft).onSubmit(addTodo)
-                Button("Add", action: addTodo).disabled(todoDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Add", action: addTodo).disabled(
+                    todoDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             List {
                 ForEach(meeting.todos) { todo in
                     HStack {
-                        Toggle(isOn: Binding(get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.isCompleted ?? false }, set: { value in change { meeting in if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) { meeting.todos[index].isCompleted = value } } })) { Text("Completed").hidden() }.labelsHidden().accessibilityLabel("Mark \(todo.title) complete")
-                        TextField("To-do", text: Binding(get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.title ?? "" }, set: { value in change { meeting in if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) { meeting.todos[index].title = value } } })).strikethrough(todo.isCompleted)
+                        Toggle(
+                            isOn: Binding(
+                                get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.isCompleted ?? false },
+                                set: { value in
+                                    change { meeting in
+                                        if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) {
+                                            meeting.todos[index].isCompleted = value
+                                        }
+                                    }
+                                })
+                        ) { Text("Completed").hidden() }.labelsHidden().accessibilityLabel(
+                            "Mark \(todo.title) complete")
+                        TextField(
+                            "To-do",
+                            text: Binding(
+                                get: { self.meeting?.todos.first(where: { $0.id == todo.id })?.title ?? "" },
+                                set: { value in
+                                    change { meeting in
+                                        if let index = meeting.todos.firstIndex(where: { $0.id == todo.id }) {
+                                            meeting.todos[index].title = value
+                                        }
+                                    }
+                                })
+                        ).strikethrough(todo.isCompleted)
                         Spacer()
-                        Button("Delete To-Do", systemImage: "trash", role: .destructive) { change { $0.todos.removeAll { $0.id == todo.id } } }.labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover()).help("Delete to-do")
+                        Button("Delete To-Do", systemImage: "trash", role: .destructive) {
+                            change { $0.todos.removeAll { $0.id == todo.id } }
+                        }.labelStyle(.iconOnly).buttonStyle(.borderless).modifier(ActionHover()).help("Delete to-do")
                     }
                 }
             }
         }
     }
     private func addTodo() {
-        let title = todoDraft.trimmingCharacters(in: .whitespacesAndNewlines); guard !title.isEmpty else { return }
-        change { $0.todos.append(MeetingTodo(title: title)) }; todoDraft = ""
+        let title = todoDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        change { $0.todos.append(MeetingTodo(title: title)) }
+        todoDraft = ""
     }
     private func chat(_ meeting: Meeting) -> some View {
         VStack {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
-                        if meeting.chat.isEmpty { Text("Ask questions about this meeting. Your transcript and notes provide context.").foregroundStyle(.secondary) }
+                        if meeting.chat.isEmpty {
+                            Text("Ask questions about this meeting. Your transcript and notes provide context.")
+                                .foregroundStyle(.secondary)
+                        }
                         ForEach(meeting.chat) { message in
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(message.role == "user" ? "You" : "Gday").font(.headline)
@@ -256,21 +373,30 @@ struct MeetingDetailView: View {
                             }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
                         }
                     }.padding(6)
-                }.onChange(of: meeting.chat.count) { _, _ in if let id = meeting.chat.last?.id { proxy.scrollTo(id, anchor: .bottom) } }
+                }.onChange(of: meeting.chat.count) { _, _ in
+                    if let id = meeting.chat.last?.id { proxy.scrollTo(id, anchor: .bottom) }
+                }
             }
             HStack(alignment: .bottom) {
-                TextField("Ask about this meeting", text: $chatDraft, axis: .vertical).lineLimit(1...5).onSubmit(sendChat)
-                Button("Send", systemImage: "arrow.up", action: sendChat).disabled(store.isBusy || chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                TextField("Ask about this meeting", text: $chatDraft, axis: .vertical).lineLimit(1...5).onSubmit(
+                    sendChat)
+                Button("Send", systemImage: "arrow.up", action: sendChat).disabled(
+                    store.isBusy || chatDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
     private func sendChat() {
-        let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }
-        chatDraft = ""; Task { await store.sendChat(id: meetingID, message: text) }
+        let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        chatDraft = ""
+        Task { await store.sendChat(id: meetingID, message: text) }
     }
 }
 
-private func formatTime(_ seconds: Double) -> String { let value = seconds.isFinite ? max(0, Int(min(seconds, Double(Int.max / 2)))) : 0; return String(format: "%d:%02d", value / 60, value % 60) }
+private func formatTime(_ seconds: Double) -> String {
+    let value = seconds.isFinite ? max(0, Int(min(seconds, Double(Int.max / 2)))) : 0
+    return String(format: "%d:%02d", value / 60, value % 60)
+}
 
 // The library owns this menu so detail replacement cannot duplicate toolbar items.
 struct MeetingActionsMenu: View {
@@ -280,13 +406,22 @@ struct MeetingActionsMenu: View {
 
     var body: some View {
         Menu {
-            Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription", systemImage: "text.bubble") { Task { await store.transcribe(id: meeting.id) } }
-                .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meeting.id)
+            Button(
+                meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription",
+                systemImage: "text.bubble"
+            ) { Task { await store.transcribe(id: meeting.id) } }
+            .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meeting.id)
             Divider()
-            Button("Export Meeting Text…", systemImage: "square.and.arrow.up") { MeetingPanels.export(meeting, store: store) }
-            Button("Archive to Server", systemImage: "icloud.and.arrow.up") { Task { await store.archiveToServer(id: meeting.id) } }
-                .disabled(!server.connected || store.isBusy || store.recordingID == meeting.id)
-        } label: { Label("Meeting Actions", systemImage: "ellipsis.circle") }
+            Button("Export Meeting Text…", systemImage: "square.and.arrow.up") {
+                MeetingPanels.export(meeting, store: store)
+            }
+            Button("Archive to Server", systemImage: "icloud.and.arrow.up") {
+                Task { await store.archiveToServer(id: meeting.id) }
+            }
+            .disabled(!server.connected || store.isBusy || store.recordingID == meeting.id)
+        } label: {
+            Label("Meeting Actions", systemImage: "ellipsis.circle")
+        }
         .help("Transcribe, export, or archive this meeting")
     }
 }
