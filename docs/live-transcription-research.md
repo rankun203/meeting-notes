@@ -4,7 +4,7 @@ Research date: 2026-09-25. Scope: implementation research, primarily for the nat
 
 ## Recommendation
 
-Build the first live transcription implementation around **Apple SpeechAnalyzer + SpeechTranscriber on supported macOS 26+ devices**, behind a provider boundary. Preserve macOS 14.2 as the app minimum and retain recording and post-recording transcription everywhere. Evaluate DictationTranscriber for unsupported hardware/locales on macOS 26+, and WhisperKit as the next optional offline provider for older Apple-silicon systems. Keep cloud streaming explicitly selectable.
+**Good English and Chinese transcription is a minimum product requirement.** Start with an Apple SpeechAnalyzer + SpeechTranscriber spike on supported macOS 26+ devices, but make the default-provider decision conditional on English, Mandarin, and English–Mandarin mixed-speech evaluation. Compare a multilingual WhisperKit model in the same initial evaluation, rather than deferring it solely to older-OS compatibility. Preserve macOS 14.2 as the app minimum and retain recording and post-recording transcription everywhere. Evaluate DictationTranscriber for unsupported hardware/locales on macOS 26+. Keep cloud streaming explicitly selectable.
 
 Use live text as a durable draft; offer the existing server/WhisperX pipeline afterward for alignment and diarization. Do not silently replace an edited transcript. This gives the native client a useful first release without simultaneously building a streaming server, shipping a model stack, and solving live speaker identification.
 
@@ -23,6 +23,37 @@ Our proposed experience:
 - Continue recording if recognition, a model download, or a network connection fails.
 
 Meeting capture is harder than a single voice memo: local and remote speech can overlap, speakers can leak into the microphone, and system audio can contain several people. Source separation is useful evidence, not proof of speaker identity.
+
+## English and Chinese are release requirements
+
+The user explicitly requires good English and Chinese support. For planning, use Mandarin as the initial Chinese speech baseline; assess Cantonese separately rather than implying that a generic “Chinese” label guarantees it. This is a scope assumption, not a confirmed exclusion of Cantonese. Include Australian English and Chinese-accented English. Treat Simplified/Traditional as an output preference distinct from the spoken language or dialect.
+
+Proposed meeting modes are **English**, **Chinese (Mandarin)**, and **English + Chinese**. Mixed mode must preserve both languages, including English names and technical terms inside Chinese sentences; it must not translate speech into English. Keep transcription and optional translation as separate artifacts. Test utterance-to-utterance switches and switches within a sentence. “Automatic language detection” is not evidence that either case works reliably.
+
+| Candidate | Evidence and uncertainty | Decision consequence |
+| --- | --- | --- |
+| Apple SpeechTranscriber / DictationTranscriber | SpeechTranscriber initialization takes one locale; query actual runtime support. A locale list does not establish mixed-language quality. | Test English and Mandarin configurations on the same bilingual fixtures. Do not promise automatic bilingual recognition from API availability alone. |
+| WhisperKit / whisper.cpp | Whisper has distinct English-only and multilingual weights; quality varies by language. | Use multilingual weights, never an `.en` model for the shared default. Compare a smaller model against a large-v3-class candidate where supported; test mixed speech and thermal cost. |
+| OpenAI live transcription | The current API accepts multiple expected-language hints and documents Mandarin/Cantonese and regional Chinese codes. | Evaluate `languages: ["en", "zh-cn"]` for the Mandarin trial, then validate the selected account/model accepts it. Hints do not establish accuracy or output-script guarantees. |
+| Deepgram Nova-3 | Current documentation lists English, Mandarin Simplified/Traditional, and Cantonese separately; its documented `multi` language set does not include Chinese. | A candidate for explicit-language English/Chinese modes; do not qualify it for mixed English–Chinese solely because both languages appear in the overall language list. |
+
+Sources: [Apple transcriber](https://developer.apple.com/documentation/speech/speechtranscriber), [Whisper models and language variation](https://github.com/openai/whisper), [OpenAI language hints](https://developers.openai.com/api/docs/guides/realtime-transcription), [Deepgram language matrix](https://developers.deepgram.com/docs/models-languages-overview), [Deepgram code-switching](https://developers.deepgram.com/docs/multilingual-code-switching). These document capabilities, not comparative quality on our meetings.
+
+Do not route short audio fragments between English and Chinese engines based on a noisy language guess: switching can lose context and duplicate or omit boundary words. First evaluate a single multilingual engine per source. If an Apple language change requires a replacement session, finalize/restart at a deliberate boundary with a timestamped handoff. Running two language recognizers for each of two audio sources means four sessions and competing hypotheses; it is an experiment requiring a reconciliation policy and resource testing, not a free fallback.
+
+### Existing language behavior that must change
+
+The Swift client currently sends `language: "auto"` in server transcription and exposes no meeting-language/script preference. The worker accepts one job-level language, strips regional suffixes for WhisperX, and applies OpenCC conversion for exact `zh-cn`/`zh-tw` inputs. Its pipeline aligns each track using the transcription result's single language. These are useful batch building blocks, but neither script conversion nor that alignment path proves bilingual recognition/alignment. [Swift submission](../apps/client-macos-swift/Sources/GdayMeetings/Core/ServerTranscription.swift), [Worker language handling](../apps/worker-audio-extraction/src/audio_extraction/handler.py), [Worker alignment](../apps/worker-audio-extraction/src/audio_extraction/pipeline.py)
+
+Add separate persisted fields for expected spoken languages, optional dialect/locale, preferred script, and the provider's actual configuration. Map these through each adapter rather than passing one provider's language codes unchanged everywhere. Preserve raw recognized text alongside any display conversion. Conversion can alter character counts and phrases, so retain explicit mappings for timing/edit offsets; do not attach old character offsets blindly to converted text. For mixed-language batch alignment, evaluate per-span alignment or preserve coarser trustworthy timing when an aligner cannot represent a span. Missing alignment must not delete correctly recognized text.
+
+### What “good” must demonstrate
+
+Use independently reviewed reference transcripts from English-only, Mandarin-only, and mixed meetings, including names, dates, amounts, acronyms, Chinese punctuation, regional accents, remote-call compression, and overlaps. Keep a separate Cantonese set and report its status honestly. Suggested initial quality targets on clear meeting audio are English WER ≤ 10%, Mandarin CER ≤ 10%, and mixed error rate ≤ 15%, with ≥ 95% exact accuracy on annotated important names/numbers. These are proposed acceptance thresholds, not measured capabilities; review their suitability after the corpus baseline rather than weakening them implicitly to fit a provider.
+
+For mixed error rate, specify tokenization as individual Han characters plus English word tokens, and publish normalization rules. Report raw and script-normalized Chinese CER so character conversion does not conceal recognition errors. Score language slices separately, along with omitted spans, unintended translation, and latency around switch points. An overall average must not conceal poor Chinese results behind a larger English sample. Use the same recording and latency gates for all three primary modes.
+
+Select the default only after both language slices pass. If Apple passes monolingual modes but fails mixed speech, route mixed mode to a validated multilingual local engine or an explicitly selected cloud engine. If none passes, label the limitation and keep recording available; post-meeting repair does not satisfy the live bilingual requirement.
 
 ## Existing integration points
 
@@ -49,7 +80,7 @@ Relative effort includes packaging, lifecycle, and recovery, not just calling an
 
 | Approach | Compatibility and execution | Main benefit | Main cost or limitation | Decision |
 | --- | --- | --- | --- | --- |
-| SpeechAnalyzer + SpeechTranscriber | macOS 26+; runtime device/locale checks; on-device | Native streaming and system-managed assets | Newer OS; must test two simultaneous sources | First implementation |
+| SpeechAnalyzer + SpeechTranscriber | macOS 26+; runtime device/locale checks; on-device | Native streaming and system-managed assets | Newer OS; must test two simultaneous sources and bilingual quality | First spike; conditional default |
 | DictationTranscriber | macOS 26+; older dictation models on-device | Additional hardware/locale coverage within the new API | Different quality profile; does not backport to macOS 14/15 | Capability fallback to evaluate |
 | SFSpeechRecognizer | Available on our older OS baseline; local capability varies | Small native prototype | Short-session guidance, authorization, possible server dependence | Avoid as the primary meeting engine |
 | WhisperKit | Swift/Core ML; Apple-silicon focus | Offline model choice and older-OS coverage | Model acquisition, warmup, resource tuning, evolving package | Preferred optional local alternative |
@@ -152,7 +183,7 @@ The current batch completion code assigns `meeting.transcript` wholesale. Before
 
 | Stage | Deliverable | Exit evidence |
 | --- | --- | --- |
-| 1. Capability spike | Apple model readiness, one PCM source, provisional/final reducer, timestamp export | Real speech, offline after provisioning, final words preserved at stop |
+| 1. Capability and bilingual spike | Apple model readiness, one PCM source, provisional/final reducer, timestamp export; multilingual WhisperKit comparison | English, Mandarin, and mixed-speech quality/latency gates; offline after provisioning; final words preserved at stop |
 | 2. Capture integration | Existing microphone/system fan-out, two sessions, bounded queues | 60–120 minute capture without ASR-induced recording loss; synchronization and resource measurements |
 | 3. Product behavior | Live workspace, error states, checkpoints, recovery, transcript revision policy | Crash/stop/error scenarios, user edits preserved, synthetic UI Preview validated |
 | 4. Compatibility | macOS 14.2/15 feature gating, DictationTranscriber evaluation, optional WhisperKit spike | Actual oldest-OS launch and architecture matrix; no silently remote fallback |
@@ -160,11 +191,11 @@ The current batch completion code assigns `meeting.transcript` wholesale. Before
 
 Planning estimate for one maintainer: 2–4 days for the Apple spike, then roughly 1–2 weeks for capture/lifecycle/storage/UI hardening, with compatibility or a second provider adding further work. These are rough engineering estimates; re-estimate after the two-source and stop/finalization experiments. Do not commit to all providers in the initial release.
 
-Suggested routing: supported macOS 26+ device/locale → SpeechTranscriber; otherwise evaluate an available local DictationTranscriber on that OS; otherwise use an explicitly installed/selected local model or explicitly enabled cloud provider. With neither, recording and batch transcription remain available. Never interpret “automatic” as permission to upload audio.
+Suggested routing: filter providers by the selected language mode and validated quality first, then device/OS readiness. Prefer SpeechTranscriber where it passes those gates; otherwise evaluate local DictationTranscriber, an installed multilingual model, or an explicitly enabled cloud provider. With none qualified, recording and batch transcription remain available. Never interpret “automatic” as permission to upload audio.
 
 ## Evaluation and operating costs
 
-Create a consented, manually checked evaluation corpus containing Australian English, accents, names/numbers, quiet and noisy rooms, remote compressed audio, overlapping speakers, silence/music, and Chinese/mixed-language speech if those are intended product requirements. Run the same timestamped PCM through providers at wall-clock pace; faster-than-realtime file tests cannot establish live latency.
+Create a consented, manually checked evaluation corpus containing Australian English, Mandarin, English–Mandarin mixed speech, accents, names/numbers, quiet and noisy rooms, remote compressed audio, overlapping speakers, and silence/music. Chinese and mixed-language cases are mandatory evaluation slices. Run the same timestamped PCM through providers at wall-clock pace; faster-than-realtime file tests cannot establish live latency.
 
 Suggested initial targets, subject to the spike:
 
@@ -174,7 +205,7 @@ Suggested initial targets, subject to the spike:
 | Stable phrase latency | End of utterance to final result | p95 ≤ 5 seconds |
 | Capture integrity | Compare captured frame/gap counters with ASR off/on | No additional unexplained audio loss |
 | Sustained throughput | Queue age plus inference time / audio duration | Bounded queue over 60–120 minutes; no accumulating delay |
-| Text accuracy | WER for space-separated text; CER where appropriate; named-entity errors | Compare against existing batch output and human references; set numerical gate after baseline |
+| Text accuracy | Separate English WER, Mandarin CER, mixed error rate, and named-entity errors | Apply the proposed bilingual thresholds above to human references; compare existing batch output as a baseline |
 | Timeline | Known audible markers and transcript seek checks | Segment offsets within 250 ms on controlled fixtures; evaluate word times separately |
 | Resource use | App and speech-service CPU/memory, energy, thermal state | Bounded growth and usable concurrent meeting app |
 | Recovery | Provider death, network loss, disk failure, sleep/route change, app restart | Audio preserved where capture succeeds; gaps visible; no duplicated finals or lost edits |
