@@ -13,8 +13,10 @@ struct LibraryView: View {
     @ViewState private var selectedTag: UUID?
     @ViewState private var search = ""
     @ViewState private var deleting: Meeting?
-    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ViewState private var sidebarExpanded = true
     @ViewState private var sidebarRowsVisible = true
+    @ViewState private var sidebarTransition = UUID()
 
     private var recordingActive: Bool { store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording }
     private func showMeeting(_ id: UUID) { selectedMeeting = id; destination = .meetings }
@@ -38,28 +40,30 @@ struct LibraryView: View {
 
     var body: some View {
         // HIG: a sidebar expresses the hierarchy; an intermediate list selects content.
-        // Native split views preserve resizing, keyboard navigation and system appearance.
+        // Content columns are independent of the window toolbar.
         // https://developer.apple.com/design/human-interface-guidelines/sidebars
         VStack(spacing: 0) {
-        NavigationSplitView(columnVisibility: Binding(get: { columnVisibility }, set: { value in
-            guard value != columnVisibility else { return }
-            // Mask rows before AppKit begins revealing the column. Keep the list
-            // mounted so its selection and column sizing do not change.
-            sidebarRowsVisible = false
-            columnVisibility = value
-        })) {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
             List(selection: $destination) {
                 Label("Meetings", systemImage: "waveform").tag(LibraryDestination.meetings)
                 Label("People", systemImage: "person.2").tag(LibraryDestination.people)
                 Label("Tags", systemImage: "tag").tag(LibraryDestination.tags)
                 Label("Server Library", systemImage: "network").tag(LibraryDestination.server)
             }
+            .listStyle(.sidebar)
+            .contentMargins(.top, 10, for: .scrollContent)
             .opacity(sidebarRowsVisible ? 1 : 0)
+            .animation(nil, value: sidebarRowsVisible)
             .allowsHitTesting(sidebarRowsVisible)
             .accessibilityHidden(!sidebarRowsVisible)
-            .navigationTitle("Gday Meetings")
-            .navigationSplitViewColumnWidth(min: 150, ideal: 180)
-        } content: {
+            }
+            .frame(width: 180)
+            .background(.bar)
+            .frame(width: sidebarExpanded ? 180 : 0, alignment: .leading)
+            .clipped()
+            HSplitView {
+            Group {
             switch destination {
             case .server: Text("Search your connected Gday server library.").foregroundStyle(.secondary).padding().navigationTitle("Server Library")
             case .people: PeopleView(selection: $selectedPerson)
@@ -104,9 +108,9 @@ struct LibraryView: View {
                 .searchable(text: $search, prompt: "Search meetings and transcripts")
                 .navigationTitle("Meetings")
                 .overlay { if filteredMeetings.isEmpty { emptyMeetings } }
-                .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             }
-        } detail: {
+            }.frame(minWidth: 220, idealWidth: 280, maxWidth: 320)
+            Group {
             if destination == .meetings, let id = selectedMeeting, store.meetings.contains(where: { $0.id == id }) {
                 MeetingDetailView(meetingID: id).id(id)
             } else if destination == .server {
@@ -116,31 +120,27 @@ struct LibraryView: View {
             } else if destination == .tags, let id = selectedTag, let tag = store.tags.first(where: { $0.id == id }) {
                 ContextDetailView(title: tag.name, personID: nil, tagID: id).id(id)
             } else {
-                ContentUnavailableView {
-                    Label("No meeting selected", systemImage: "waveform")
-                } description: {
-                    Text("Select a meeting, start a recording, or import audio.")
-                } actions: {
-                    Button("New Recording", systemImage: "record.circle") { store.presentsRecordingSetup = true }
-                        .buttonStyle(.borderedProminent).disabled(store.isBusy || recordingActive)
-                    Button("Import Audio…") { MeetingPanels.importAudio(store) }.disabled(store.isBusy)
-                }
+                emptySelection
+            }
+            }.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: columnVisibility) {
-            guard columnVisibility == .all || columnVisibility == .automatic else { return }
-            if !sidebarRowsVisible {
-                // Native split-view animations have no SwiftUI completion callback.
-                // Leave a short settling interval before presenting the row content.
-                do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
-                sidebarRowsVisible = true
-            }
-        }
+        .navigationTitle("")
         .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         // HIG: toolbar actions apply to the current content and use familiar symbols.
         // https://developer.apple.com/design/human-interface-guidelines/toolbars
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: toggleSidebar) {
+                    Label(sidebarExpanded ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.left")
+                }
+                .help(sidebarExpanded ? "Hide Sidebar" : "Show Sidebar")
+                .keyboardShortcut("s", modifiers: [.command, .control])
+            }
+            ToolbarItem(placement: .navigation) {
+                Text(destinationTitle).font(.headline)
+            }
             ToolbarItemGroup {
                 Button {
                     if !NSWorkspace.shared.open(store.dataDirectory) {
@@ -202,6 +202,46 @@ struct LibraryView: View {
         .confirmationDialog("Delete \(deleting?.title ?? "meeting")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             Button("Delete Meeting", role: .destructive) { if let meeting = deleting { store.deleteMeeting(id: meeting.id); if selectedMeeting == meeting.id { selectedMeeting = nil } }; deleting = nil }
         } message: { Text("This deletes the meeting and its saved audio. This cannot be undone.") }
+    }
+
+    private var destinationTitle: String {
+        switch destination {
+        case .people: "People"
+        case .tags: "Tags"
+        case .server: "Server Library"
+        default: "Meetings"
+        }
+    }
+
+    private func toggleSidebar() {
+        let transition = UUID()
+        sidebarTransition = transition
+        sidebarRowsVisible = false
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25), completionCriteria: .removed) {
+            sidebarExpanded.toggle()
+        } completion: {
+            guard sidebarTransition == transition else { return }
+            sidebarRowsVisible = sidebarExpanded
+        }
+    }
+
+    private var emptySelection: some View {
+        VStack(spacing: 18) {
+            Button { store.presentsRecordingSetup = true } label: {
+                Image(systemName: "record.circle.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.red)
+                    .frame(width: 88, height: 88)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New Recording")
+            .help("New Recording")
+            .disabled(store.isBusy || recordingActive)
+            Text("Select a meeting or start a recording.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var recordingStrip: some View {
