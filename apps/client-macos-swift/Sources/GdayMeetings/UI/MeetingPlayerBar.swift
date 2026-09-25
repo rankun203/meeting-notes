@@ -120,13 +120,16 @@ struct MeetingPlayerBar: View {
                         }
                     }.padding(.horizontal, 20).padding(.bottom, 12)
                 }.frame(height: tracksHeight)
+                    .scrollClipDisabled()
                     .opacity(tracksVisible ? 1 : 0)
                     .offset(y: tracksVisible || reduceMotion ? 0 : 8)
                     .allowsHitTesting(tracksVisible)
                     .accessibilityHidden(!tracksVisible)
             }
             .frame(height: tracksSpaceExpanded ? tracksHeight : 0, alignment: .top)
-            .clipped()
+            // Focus rings extend beyond the row and scroll viewport. Reserve
+            // drawing overflow only, without changing layout or hit targets.
+            .clipShape(Rectangle().inset(by: tracksVisible ? -6 : 0))
             if let error = playback.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.secondary)
