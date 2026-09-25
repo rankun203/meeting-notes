@@ -54,10 +54,32 @@ struct GdayMeetingsApp: App {
         // HIG: app-specific preferences live in a separate standard Settings window.
         // https://developer.apple.com/design/human-interface-guidelines/settings
         Settings { SettingsView().environmentObject(store).environmentObject(playback) }
-        MenuBarExtra("Gday Meetings", systemImage: store.recordingID == nil ? "waveform" : "record.circle.fill") {
+        MenuBarExtra {
             RecordingMenuView().environmentObject(store).environmentObject(playback)
+        } label: {
+            if store.recordingID == nil {
+                Image(nsImage: MenuBarArtwork.waveform).accessibilityLabel("Gday Meetings")
+            } else {
+                Image(systemName: "record.circle.fill").accessibilityLabel("Gday Meetings — Recording")
+            }
         }
     }
+}
+
+private enum MenuBarArtwork {
+    // Match the Rust client's 18-point template, with vector drawing for Retina.
+    // Keep these bar dimensions in sync with desktop.rs waveform_icon().
+    static let waveform: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.setFill()
+            for (x, height) in [(2, 6), (5, 12), (8, 16), (11, 10), (14, 4)] {
+                NSBezierPath(rect: NSRect(x: x, y: (18 - height) / 2, width: 2, height: height)).fill()
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
 }
 
 @MainActor
