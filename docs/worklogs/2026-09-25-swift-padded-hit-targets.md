@@ -27,3 +27,9 @@ Existing narrow-window fit remains to be validated with the larger requested con
 ## Follow-up: menu spacing
 
 User requested more left/right padding and less gap. Increased speed/track label horizontal padding from 6 to 12 pt and reduced option-group spacing from 10 to 4 pt. Kept 44 pt height, symbol sizes and existing track-menu width limit. Installer and preview builds passed; rebuilt preview screenshot confirms centered controls and readable labels/chevrons. No new technical debt beyond the narrow-window validation already recorded. Existing linker-path warnings remain.
+
+## Follow-up: compact preview bar
+
+User prefers 20 pt sample height because 28 pt made the preview banner taller. Reduced only sample minimum height to 20 pt, retaining horizontal padding, drag hit shape and hover. Updated UI_DESIGN to record this explicit compact preview exception. Installer build passed with the existing linker-path warnings. No new technical debt; this intentionally supersedes the earlier 28 pt sample target policy.
+
+Preview packaging also passed; rebuilt screenshot confirms the banner returned from 44 to 36 pt overall height, with sample labels and Appearance picker aligned and readable. Sample hover/drag at the new height was not separately exercised.

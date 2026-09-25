@@ -66,7 +66,7 @@ struct PreviewContainer<Content: View>: View {
                         ForEach(Array(store.audioURLs(for: meeting).enumerated()), id: \.offset) { index, url in
                             Label("Sample \(index + 1)", systemImage: "doc")
                                 .padding(.horizontal, 6)
-                                .frame(minWidth: 28, minHeight: 28)
+                                .frame(minWidth: 28, minHeight: 20)
                                 .contentShape(Rectangle())
                                 .onDrag { NSItemProvider(object: url as NSURL) }
                                 .modifier(ActionHover())
