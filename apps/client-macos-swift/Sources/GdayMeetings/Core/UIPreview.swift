@@ -79,6 +79,13 @@ struct PreviewContainer<Content: View>: View {
             }
             content()
         }
-        .preferredColorScheme(UIPreview.enabled ? (appearance == 1 ? .light : appearance == 2 ? .dark : nil) : nil)
+        .onChange(of: appearance) { _, selection in
+            guard UIPreview.enabled else { return }
+            // Use one AppKit appearance source for native controls and SwiftUI.
+            // Removing preferredColorScheme left stale dark foregrounds until
+            // window activation; nil here restores live system inheritance.
+            NSApp.appearance = selection == 1 ? NSAppearance(named: .aqua)
+                : selection == 2 ? NSAppearance(named: .darkAqua) : nil
+        }
     }
 }
