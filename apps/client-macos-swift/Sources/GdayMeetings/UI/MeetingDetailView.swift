@@ -24,15 +24,8 @@ struct MeetingDetailView: View {
                 meetingHeader(meeting)
                 if store.recordingID == meetingID {
                     RecordingWorkspaceView(meetingID: meetingID)
-                } else if !meeting.audioFiles.isEmpty {
-                    playbackButton(meeting)
                 }
-                // HIG: standard segmented navigation maintains a predictable content
-                // hierarchy and keyboard accessibility without custom hit targets.
-                // https://developer.apple.com/design/human-interface-guidelines/segmented-controls
-                Picker("Meeting content", selection: $tab) {
-                    Text("Transcript").tag(0); Text("Notes").tag(1); Text("Summary").tag(2); Text("To-Dos").tag(3); Text("Chat").tag(4)
-                }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Meeting content")
+                MeetingContentTabs(selection: $tab)
                 meetingContent(meeting)
             }
             .padding(24)
@@ -57,9 +50,16 @@ struct MeetingDetailView: View {
 
     private func meetingHeader(_ meeting: Meeting) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Meeting title", text: text(\.title))
-                .font(.largeTitle.weight(.semibold)).textFieldStyle(.plain)
-                .accessibilityLabel("Meeting title")
+            HStack(spacing: 12) {
+                TextField("Meeting title", text: text(\.title))
+                    .font(.largeTitle.weight(.semibold)).textFieldStyle(.plain)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: 40)
+                    .accessibilityLabel("Meeting title")
+                if store.recordingID != meetingID && !meeting.audioFiles.isEmpty {
+                    playbackButton(meeting)
+                }
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     meetingDate(meeting).fixedSize()
@@ -75,6 +75,8 @@ struct MeetingDetailView: View {
                 Text(associationSummary(meeting)).font(.callout).foregroundStyle(.secondary)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
+        .layoutPriority(1)
     }
 
     private func meetingDate(_ meeting: Meeting) -> some View {
@@ -114,10 +116,14 @@ struct MeetingDetailView: View {
             else { playback.play(meeting: meeting, files: store.audioURLs(for: meeting)) }
         } label: {
             Label(playbackActionTitle, systemImage: playback.meetingID == meetingID && playback.isPlaying ? "pause.fill" : "play.fill")
+                .labelStyle(.iconOnly)
+                .font(.title3)
+                .frame(width: 32, height: 32)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
+        .modifier(MeetingGlassSurface())
         .disabled(playback.isPlaybackBlocked || (playback.meetingID == meetingID && playback.isLoading) || store.audioURLs(for: meeting).isEmpty)
-        .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "Listen to this meeting")
+        .help(playback.isPlaybackBlocked ? "Playback is unavailable while recording" : "\(playbackActionTitle) this meeting")
     }
 
     private var playbackActionTitle: String {

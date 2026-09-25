@@ -1,0 +1,65 @@
+import SwiftUI
+
+/// Capsule navigation for macOS versions whose native segmented picker uses a
+/// rectangular bezel. Keep actual Buttons for keyboard and accessibility actions.
+/// https://developer.apple.com/design/human-interface-guidelines/segmented-controls
+struct MeetingContentTabs: View {
+    @Binding var selection: Int
+    @FocusState private var focusedTab: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let titles = ["Transcript", "Notes", "Summary", "To-Dos", "Chat"]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(titles.indices, id: \.self) { index in
+                Button { selection = index; focusedTab = index } label: {
+                    Text(titles[index])
+                        .font(.callout.weight(selection == index ? .semibold : .regular))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 30)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .background {
+                    if selection == index { Capsule().fill(.quaternary) }
+                }
+                .focused($focusedTab, equals: index)
+                .accessibilityAddTraits(selection == index ? .isSelected : [])
+                .onKeyPress(.leftArrow) { move(from: index, by: -1) }
+                .onKeyPress(.rightArrow) { move(from: index, by: 1) }
+            }
+        }
+        .padding(4)
+        .modifier(MeetingGlassSurface())
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: selection)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Meeting content")
+    }
+
+    private func move(from index: Int, by step: Int) -> KeyPress.Result {
+        let next = min(max(index + step, 0), titles.count - 1)
+        selection = next
+        focusedTab = next
+        return .handled
+    }
+}
+
+/// One glass surface around a group, never a glass layer for every segment.
+/// https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass
+struct MeetingGlassSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: Capsule())
+                // Refresh only this native material when Preview changes appearance;
+                // otherwise AppKit can retain its old glass colors until activation.
+                .id(colorScheme)
+        } else {
+            content.background(.regularMaterial, in: Capsule())
+        }
+    }
+}

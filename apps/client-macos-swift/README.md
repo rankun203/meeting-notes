@@ -16,7 +16,7 @@ The same SwiftUI client supports two explicit modes. Commands below run from the
 | Online services | Configured transcription, AI, and server services available | Service network requests blocked |
 | Purpose | Normal use and coordinated hardware/service testing | Independent layout and interaction testing |
 
-UI Preview displays a visible banner and offers System/Light/Dark appearance controls. Use it for UI validation without passwords or real audio. It does not validate capture permissions, audible output, or server behavior. See [UI Preview details and signing](UI_PREVIEW.md).
+UI Preview displays a visible banner and offers System/Light/Dark appearance controls. Use it for UI validation without passwords or real audio. It does not validate capture permissions, audible output, or server behavior. See [UI Preview details and signing](docs/UI_PREVIEW.md).
 
 Build outputs:
 
@@ -80,7 +80,7 @@ The native client currently supports one active recording with the default micro
 
 Settings → Recording offers optional **Microphone voice processing** using Apple's echo cancellation, noise suppression, and automatic gain control. It is off by default because processing can affect other apps' playback volume. The implementation requests minimum ducking, never monitors the microphone through speakers, and saves system audio separately. Echo removal depends on the device route; headphones provide the most reliable acoustic separation. Voice processing cannot guarantee echo-free recordings from every third-party calling app.
 
-The audio pipeline aligns track timestamps to a shared host-clock timeline, preserves gaps with silence, and uses bounded asynchronous PCM file writes during capture. Settings → Recording selects Opus (default), M4A/AAC, or WAV. After stopping, each track is encoded separately; compressed-file metadata is saved before temporary WAV sources are removed. Conversion failure preserves the WAV recording. Opus uses native Apple codecs and standard Ogg wrapping without FFmpeg or third-party runtime dependencies. Playback prepares temporary decoded audio because AVKit does not directly read Ogg Opus on the tested macOS release. Device/format changes finalize the partial recording with a visible error. Effective processing, sample rates, and channel counts are retained in the meeting's recording profile. Transcription uses compatible copies when needed; it does not replace the saved recording. See [audio research, design decisions, and hardware validation matrix](AUDIO_DESIGN.md).
+The audio pipeline aligns track timestamps to a shared host-clock timeline, preserves gaps with silence, and uses bounded asynchronous PCM file writes during capture. Settings → Recording selects Opus (default), M4A/AAC, or WAV. After stopping, each track is encoded separately; compressed-file metadata is saved before temporary WAV sources are removed. Conversion failure preserves the WAV recording. Opus uses native Apple codecs and standard Ogg wrapping without FFmpeg or third-party runtime dependencies. Playback prepares temporary decoded audio because AVKit does not directly read Ogg Opus on the tested macOS release. Device/format changes finalize the partial recording with a visible error. Effective processing, sample rates, and channel counts are retained in the meeting's recording profile. Transcription uses compatible copies when needed; it does not replace the saved recording. See [audio research, design decisions, and hardware validation matrix](docs/AUDIO_DESIGN.md).
 
 ## Recording permissions and storage
 
@@ -92,7 +92,7 @@ For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR`
 
 ## Human Interface Guidelines
 
-**Liquid Glass is the default design direction for all future UI changes.** Follow [UI_DESIGN.md](UI_DESIGN.md) for appearance, interaction, accessibility, compatibility, and validation requirements. Apple Music's capsule tabs and soft sidebar selection are visual references; use supported native APIs and preserve older-macOS fallbacks. Existing views have not all been migrated yet.
+**Liquid Glass is the default design direction for all future UI changes.** Follow [UI_DESIGN.md](docs/UI_DESIGN.md) for appearance, interaction, accessibility, compatibility, and validation requirements. Apple Music's capsule tabs and soft sidebar selection are visual references; use supported native APIs and preserve older-macOS fallbacks. Existing views have not all been migrated yet.
 
 The source cites the relevant Apple HIG principles beside the controls implementing them:
 
