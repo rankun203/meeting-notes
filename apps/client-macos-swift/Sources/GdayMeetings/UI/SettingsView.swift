@@ -24,27 +24,33 @@ struct SettingsView: View {
         // https://developer.apple.com/design/human-interface-guidelines/settings
         TabView {
             Form {
+                Section {
+                    Text(
+                        "Choose the default audio sources and format for new recordings. You can change them in New Recording."
+                    )
+                    .foregroundStyle(.secondary)
+                }
                 Section("Audio Sources") {
-                    Toggle("Record microphone", isOn: setting(\.captureMicrophone)).disabled(audioSettingsLocked)
-                    Toggle("Record system audio", isOn: setting(\.captureSystemAudio)).disabled(audioSettingsLocked)
+                    Toggle("Microphone", isOn: setting(\.captureMicrophone)).disabled(audioSettingsLocked)
+                    Toggle("System Audio", isOn: setting(\.captureSystemAudio)).disabled(audioSettingsLocked)
                     // HIG Privacy: explain the requested resources in the context of their use.
                     // https://developer.apple.com/design/human-interface-guidelines/privacy
                     Text(
-                        "When needed, macOS requests access to the audio sources you enable when recording starts. System Audio records other apps’ audio without sharing or recording your screen."
+                        "Microphone and system audio each require your permission. macOS asks for access the first time you record each source."
                     ).font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Recording Format") {
-                    Picker("Save audio as", selection: setting(\.recordingFormat)) {
+                Section("Audio Format") {
+                    Picker("Audio Format", selection: setting(\.recordingFormat)) {
                         Text("Opus (Recommended)").tag(RecordingFormat.opus)
                         Text("M4A (AAC)").tag(RecordingFormat.m4a)
                         Text("WAV").tag(RecordingFormat.wav)
                     }.disabled(audioSettingsLocked)
                     Text(
-                        "Audio is captured as temporary uncompressed PCM, then saved in this format after recording stops. If conversion fails, the original PCM recording is kept."
+                        "Recordings are saved in this format when you stop. If conversion fails, the original audio is kept."
                     ).font(.caption).foregroundStyle(.secondary)
                 }
                 Section("After Recording") {
-                    Toggle("Automatically transcribe recordings", isOn: setting(\.autoTranscribe))
+                    Toggle("Automatically Transcribe Recordings", isOn: setting(\.autoTranscribe))
                 }
             }.tabItem { Label("Recording", systemImage: "mic") }
             Form {

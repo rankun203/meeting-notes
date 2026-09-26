@@ -41,7 +41,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         async throws -> [String]
     {
         guard microphoneEnabled || systemEnabled else {
-            throw MeetingError.message("Enable microphone or system audio in Settings before recording.")
+            throw MeetingError.message("Choose Microphone or System Audio in New Recording.")
         }
         expectedMicrophone = microphoneEnabled
         expectedSystem = systemEnabled

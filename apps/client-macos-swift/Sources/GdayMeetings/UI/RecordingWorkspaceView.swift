@@ -88,7 +88,7 @@ struct RecordingSetupView: View {
                 Label("Choose at least one audio source.", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            DisclosureGroup("Recording options", isExpanded: $showOptions) {
+            DisclosureGroup("Recording Options", isExpanded: $showOptions) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle(
                         "Microphone Voice Processing",
@@ -101,13 +101,13 @@ struct RecordingSetupView: View {
                         )
                     ).disabled(!microphone)
                     Text(
-                        "Enabled by default when speakers are detected. Reduces echo and background noise, and may lower other apps’ volume. Applies to this recording only."
+                        "Enabled by default when speakers are detected. Can reduce echo and background noise, and may lower other apps’ volume. Applies to this recording only."
                     )
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Picker("Save audio as", selection: $format) {
-                        Text("Opus · smaller files").tag(RecordingFormat.opus)
-                        Text("M4A · widely compatible").tag(RecordingFormat.m4a)
-                        Text("WAV · uncompressed").tag(RecordingFormat.wav)
+                    Picker("Audio Format", selection: $format) {
+                        Text("Opus (Recommended)").tag(RecordingFormat.opus)
+                        Text("M4A (AAC)").tag(RecordingFormat.m4a)
+                        Text("WAV").tag(RecordingFormat.wav)
                     }
                 }
                 .padding(.top, 12)
@@ -151,17 +151,10 @@ struct RecordingSetupView: View {
                 Button(startupError == nil ? "Start Recording" : "Try Again") {
                     startupError = nil
                     let previousError = store.errorMessage
-                    store.settings.captureMicrophone = microphone
-                    store.settings.captureSystemAudio = systemAudio
-                    store.settings.recordingFormat = format
-                    store.saveSettings()
-                    if let error = store.errorMessage, error != previousError {
-                        startupError = error
-                        store.errorMessage = nil
-                        return
-                    }
                     Task {
-                        await store.startRecording(title: title, voiceProcessingEnabled: voiceProcessingOverride)
+                        await store.startRecording(
+                            title: title, microphoneEnabled: microphone, systemEnabled: systemAudio,
+                            format: format, voiceProcessingEnabled: voiceProcessingOverride)
                         if let id = store.recordingID {
                             onStarted(id)
                             dismiss()

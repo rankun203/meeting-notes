@@ -219,21 +219,26 @@ final class MeetingStore: ObservableObject {
     }
     func audioURL(for meeting: Meeting) -> URL? { audioURLs(for: meeting).first }
 
-    func startRecording(title: String? = nil, voiceProcessingEnabled: Bool? = nil) async {
+    func startRecording(
+        title: String? = nil, microphoneEnabled: Bool? = nil, systemEnabled: Bool? = nil,
+        format: RecordingFormat? = nil, voiceProcessingEnabled: Bool? = nil
+    ) async {
         guard !UIPreview.enabled else {
             errorMessage = "Recording is disabled in UI Preview."
             return
         }
         guard recordingID == nil, !isBusy, canSave else { return }
+        let microphone = microphoneEnabled ?? settings.captureMicrophone
+        let systemAudio = systemEnabled ?? settings.captureSystemAudio
         isStartingRecording = true
         defer { isStartingRecording = false }
         recordingLevels = RecordingLevels(
-            microphone: RecordingSourceLevel(enabled: settings.captureMicrophone),
-            system: RecordingSourceLevel(enabled: settings.captureSystemAudio))
+            microphone: RecordingSourceLevel(enabled: microphone),
+            system: RecordingSourceLevel(enabled: systemAudio))
         recordingPermissionNeeded = nil
         isBusy = true
         captureTransition = true
-        activeRecordingFormat = settings.recordingFormat
+        activeRecordingFormat = format ?? settings.recordingFormat
         let suppliedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let meeting = Meeting(
             title: suppliedTitle.isEmpty ? Date().formatted(date: .abbreviated, time: .shortened) : suppliedTitle)
@@ -260,8 +265,8 @@ final class MeetingStore: ObservableObject {
                 }
             }
             let files = try await capture.start(
-                directory: directory(for: meeting.id), microphoneEnabled: settings.captureMicrophone,
-                systemEnabled: settings.captureSystemAudio, voiceProcessingEnabled: voiceProcessingEnabled)
+                directory: directory(for: meeting.id), microphoneEnabled: microphone,
+                systemEnabled: systemAudio, voiceProcessingEnabled: voiceProcessingEnabled)
             var recorded = meeting
             recorded.audioFiles = files
             recorded.recordingProfile = capture.profile
@@ -274,10 +279,10 @@ final class MeetingStore: ObservableObject {
             recordingID = meeting.id
             recordingStartedAt = Date()
             captureHealth = [
-                settings.captureMicrophone
+                microphone
                     ? (capture.profile.microphoneVoiceProcessing
                         ? "Microphone: Apple voice processing" : "Microphone: unprocessed") : nil,
-                settings.captureSystemAudio ? "System audio: separate track" : nil,
+                systemAudio ? "System audio: separate track" : nil,
             ].compactMap { $0 }.joined(separator: " · ")
             statusMessage = "Recording"
         }
