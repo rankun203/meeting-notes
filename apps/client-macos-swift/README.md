@@ -42,7 +42,7 @@ xcode-select --install
 make install-macos
 ```
 
-Finder opens `apps/client-macos-swift/.build/installer/`, containing **Gday Meetings Swift.app** and an **Applications** shortcut. Drag the app onto Applications and open it. Installation does not overwrite Applications automatically. No Rust, CMake, Homebrew, Node, Python, Docker, Apple Developer account, or full Xcode is needed. The app is locally ad-hoc signed; these scripts do not produce a notarized public release.
+Finder opens `apps/client-macos-swift/.build/installer/` in icon view, with the app on the left, an **Applications** shortcut on the right, and a background showing drag instructions. Drag **Gday Meetings Swift.app** onto Applications and open it. macOS may ask to allow Finder automation. If automation is unavailable, the folder opens normally; press Command-1 to show icons. Installation does not overwrite Applications automatically. No Rust, CMake, Homebrew, Node, Python, Docker, Apple Developer account, or full Xcode is needed. The app is locally ad-hoc signed; these scripts do not produce a notarized public release.
 
 Other commands:
 
