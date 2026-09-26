@@ -211,16 +211,24 @@ RunPod can build and deploy directly from your GitHub repo — no local Docker b
 ```bash
 cd apps/worker-audio-extraction
 
-# Build with all models pre-cached (pass HF_TOKEN to cache pyannote models)
-docker build --platform linux/amd64 \
-  --build-arg HF_TOKEN=hf_... \
-  -f Dockerfile.runpod -t YOUR_DOCKERHUB/worker-audio-extraction:v0.1.0 .
+# Sign in using a GitHub personal access token (classic) with write:packages.
+docker login ghcr.io -u rankun203
 
-# Push to Docker Hub
-docker push YOUR_DOCKERHUB/worker-audio-extraction:v0.1.0
+# Build and push. Choose an unused version tag for each release.
+docker buildx build --platform linux/amd64 \
+  -f Dockerfile.runpod \
+  -t ghcr.io/rankun203/audio-extraction:v0.1.15 \
+  -t ghcr.io/rankun203/audio-extraction:latest \
+  --push .
 
 # Then create a RunPod serverless endpoint using this image
 ```
+
+To cache gated pyannote models during a manual build, export `HF_TOKEN` in your
+shell and add `--secret id=HF_TOKEN,env=HF_TOKEN` to the build command. Otherwise,
+set `HF_TOKEN` in the worker runtime environment to download them on first use.
+The GPU Dockerfile selects uv's `cu128` PyTorch backend for both dependency
+resolution and installation, matching the CUDA wheels installed in the base image.
 
 ### Environment variables
 
@@ -374,7 +382,7 @@ Each processing step loads different models and consumes VRAM independently. The
 
 ### Troubleshooting
 
-- **"Pyannote model pre-cache skipped"** at build time: `HF_TOKEN` wasn't passed as a build arg. Models download at runtime instead (~14s on first request).
+- **"Pyannote model pre-cache skipped"** at build time: the build secret was absent or model caching failed. Set `HF_TOKEN` at runtime so models can download on the first diarization request.
 - **"Access denied to pyannote/..."**: Accept the model licenses on HuggingFace (see [gated models](#huggingface-gated-models) above).
 - **OOM / CUDA out of memory**: Lower `WHISPER_BATCH_SIZE` (e.g. `-e WHISPER_BATCH_SIZE=8`).
 - **"test_input.json not found, exiting"**: You started the RunPod transport outside RunPod. Set `WORKER_MODE=http` and `WORKER_API_TOKEN` for the local server.
