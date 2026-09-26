@@ -1,8 +1,15 @@
+---
+title: Server API
+date: 2026-09-26
+status: active
+scope: server-contracts
+---
+
 # Platform API v2
 
 `/api/platform` accepts user OAuth tokens for the exact platform audience with `meetings:read` on GET and `meetings:write` on task submission/upload. The worker output callback requires its own task-scoped token. Public task mutation through PATCH is not supported (405). Failed authentication returns 401. Invalid input returns 400. Missing records return 404. JSON requests are limited to 20 MiB. There is no automatic result retention limit.
 
-- `GET /api/platform/capabilities` → `{ "durableTasks": true, "meetingImports": true, "transcription": true, "version": 2 }` (`transcription` is false until a worker provider is configured).
+- `GET /api/platform/capabilities` → `{ "durableTasks": true, "meetingImports": true, "transcription": true, "version": 2, "protocolVersion": 1, "transcriptionLanguages": [{ "code": "en", "name": "English" }], "transcriptionLanguagesError": null }`. The language array comes from the configured worker; this example is not a fixed catalog. `transcription` is false until a worker is configured. Missing or failed metadata returns a null list and an explanatory error while preserving other capability fields. See [language discovery](../../../docs/protocols/transcription.md#discover-supported-languages) for validation, polling, and cache rules.
 - `POST /upload?filename=recording.wav`, raw bytes and authorized upload credentials → `{ "url": "/files/uuid.wav?token=..." }`, status 201. Supported suffixes: wav, flac, mp3, m4a, ogg, opus, mp4, webm, aac. Maximum file size is 500 MB (500,000,000 bytes); `MAX_UPLOAD_BYTES` may lower this limit but cannot raise it. Prefer compressed Opus, M4A or MP3; WAV remains supported. Uploads stream to a temporary file and publish only after complete. An audio-file CMS record retains original filename, size, and content type.
 - `GET /files/:storageKey?token=...` downloads audio. The capability URL works without a user session, supports HEAD and one HTTP byte range, and has no expiry. Treat it as a secret. Range requests outside the file return 416.
 - `POST /api/platform/tasks` accepts `{ "externalId": "client-session-id", "title": "Planning", "idempotencyKey": "stable-attempt-id", "inputs": [{ "url": "https://gdaymeetings.com/files/...", "trackName": "mic", "sourceType": "mic", "channels": 1 }] }`. The server validates inputs, persists the task, and owns execution. Returns `{ "id": "uuid", "status": "PENDING", "executionState": "QUEUED" }`. It does not return worker callback credentials.

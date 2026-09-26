@@ -164,39 +164,92 @@ struct HTTPTransportTests {
         let messages = try #require(json["messages"] as? [[String: String]])
         #expect(messages == [["role": "user", "content": "Meeting context"]])
     }
-    @Test func transcriptionSendsRealMultipartAudio() async throws {
-        let server = try HTTPFixture { _ in
-            .init(body: #"{"segments":[{"start":1.25,"end":2.5,"text":"Fixture transcript"}]}"#)
+    @Test func runpodSendsAudioReferences() async throws {
+        let server = try HTTPFixture { _ in .init(body: #"{"id":"fixture-job","status":"IN_QUEUE"}"#) }
+        try await server.start()
+        defer { server.stop() }
+        var provider = ServiceProvider(kind: .runpod)
+        provider.enabledCapabilities = [.transcription]
+        provider.endpoint = server.origin + "/v2/test"
+        provider.apiKey = "synthetic-key"
+        let job = try await RunPodProvider(provider: provider).submit(
+            tracks: [
+                ProviderAudioTrack(
+                    url: URL(string: "https://audio.example/input.wav?signature=fixture")!, trackName: "mic",
+                    sourceType: "mic")
+            ], language: "en")
+        #expect(job == "fixture-job")
+        let request = try #require(server.requests.first)
+        #expect(request.method == "POST")
+        #expect(request.target == "/v2/test/run")
+        #expect(request.headers["authorization"] == "Bearer synthetic-key")
+        let json = try #require(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+        let input = try #require(json["input"] as? [String: Any])
+        let tracks = try #require(input["tracks"] as? [[String: String]])
+        #expect(tracks.first?["audio_url"] == "https://audio.example/input.wav?signature=fixture")
+        #expect(tracks.first?["audio_base64"] == nil)
+    }
+    @Test func filedropChecksWithoutUploadingAndStreamsAudio() async throws {
+        let server = try HTTPFixture { request in
+            if request.target == "/health" { return .init(body: #"{"status":"available"}"#) }
+            if request.target == "/info" {
+                return .init(
+                    body: #"{"allowed_extensions":["opus"],"max_file_size_bytes":104857600,"expiry_secs":600}"#)
+            }
+            if request.target == "/upload" {
+                return .init(
+                    status: 400,
+                    body: #"{"error":"filename required (?filename=name.opus or Content-Disposition header)"}"#)
+            }
+            return .init(body: #"{"url":"/d/fixture.opus","size":13,"expires_in_secs":600}"#)
         }
         try await server.start()
         defer { server.stop() }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
-        let audio = Data([0x52, 0x49, 0x46, 0x46, 0, 1, 2, 255])
+        var provider = ServiceProvider(kind: .filedrop)
+        provider.endpoint = server.origin
+        provider.apiKey = "synthetic-filedrop-key"
+        provider.enabledCapabilities = [.fileTransfer]
+        let adapter = FiledropProvider(provider: provider)
+        _ = try await adapter.checkConnection()
+        #expect(server.requests.count == 3)
+        #expect(server.requests.allSatisfy { $0.body.isEmpty })
+        let probe = try #require(server.requests.last)
+        #expect(probe.method == "POST")
+        #expect(probe.target == "/upload")
+        #expect(probe.headers["authorization"] == "Bearer synthetic-filedrop-key")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
+        let audio = Data("fixture audio".utf8)
         try audio.write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
-        var settings = AppSettings()
-        settings.transcriptionBaseURL = server.origin + "/v1"
-        settings.transcriptionModel = "fixture-whisper"
-        settings.transcriptionAPIKey = "synthetic-transcription-key"
-        let segments = try await DirectTranscription.transcribe(file: file, settings: settings)
-        #expect(segments.count == 1)
-        #expect(segments.first?.start == 1.25)
-        #expect(segments.first?.text == "Fixture transcript")
-        let request = try #require(server.requests.first)
-        #expect(request.method == "POST")
-        #expect(request.target == "/v1/audio/transcriptions")
-        #expect(request.headers["authorization"] == "Bearer synthetic-transcription-key")
-        let contentType = try #require(request.headers["content-type"])
-        #expect(contentType.hasPrefix("multipart/form-data; boundary="))
-        let boundary = String(contentType.dropFirst("multipart/form-data; boundary=".count))
-        #expect(request.body.starts(with: Data("--\(boundary)\r\n".utf8)))
-        #expect(request.body.suffix(boundary.utf8.count + 8) == Data("\r\n--\(boundary)--\r\n".utf8))
-        #expect(request.body.range(of: Data("name=\"model\"\r\n\r\nfixture-whisper".utf8)) != nil)
-        #expect(request.body.range(of: Data("name=\"response_format\"\r\n\r\nverbose_json".utf8)) != nil)
-        #expect(
-            request.body.range(of: Data("filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".utf8) + audio)
-                != nil)
+        let receipt = try await adapter.upload(file: file)
+        #expect(receipt.url.absoluteString == server.origin + "/d/fixture.opus")
+        #expect(receipt.expiresAt.timeIntervalSinceNow > 590)
+        let request = try #require(server.requests.last)
+        #expect(request.body == audio)
+        #expect(request.headers["content-type"] == "application/octet-stream")
+        #expect(request.headers["authorization"] == "Bearer synthetic-filedrop-key")
     }
+
+    @Test func filedropRejectsForeignDownloadURL() async throws {
+        let server = try HTTPFixture { request in
+            if request.target == "/info" {
+                return .init(
+                    body: #"{"allowed_extensions":["opus"],"max_file_size_bytes":104857600,"expiry_secs":600}"#)
+            }
+            return .init(body: #"{"url":"https://other.example/stolen.opus","size":13,"expires_in_secs":600}"#)
+        }
+        try await server.start()
+        defer { server.stop() }
+        var provider = ServiceProvider(kind: .filedrop)
+        provider.endpoint = server.origin
+        provider.apiKey = "synthetic-filedrop-key"
+        provider.enabledCapabilities = [.fileTransfer]
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
+        try Data("fixture audio".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        await #expect(throws: (any Error).self) { try await FiledropProvider(provider: provider).upload(file: file) }
+    }
+
     @Test(arguments: [401, 307]) func failuresAndRedirectsAreSurfaced(status: Int) async throws {
         // A redirect target is a second independent loopback listener, proving no
         // follow-up request receives the synthetic bearer credential or audio.
@@ -219,14 +272,16 @@ struct HTTPTransportTests {
             Issue.record("Chat must surface HTTP \(status)")
         }
         catch { #expect(error.localizedDescription.contains(String(status))) }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
-        try Data("synthetic audio".utf8).write(to: file)
-        defer { try? FileManager.default.removeItem(at: file) }
-        var settings = AppSettings()
-        settings.transcriptionBaseURL = server.origin + "/v1"
-        settings.transcriptionAPIKey = "synthetic-secret"
+        var provider = ServiceProvider(kind: .runpod)
+        provider.enabledCapabilities = [.transcription]
+        provider.endpoint = server.origin + "/v2/test"
+        provider.apiKey = "synthetic-secret"
         do {
-            _ = try await DirectTranscription.transcribe(file: file, settings: settings)
+            _ = try await RunPodProvider(provider: provider).submit(
+                tracks: [
+                    ProviderAudioTrack(
+                        url: URL(string: "https://audio.example/input.wav")!, trackName: "mic", sourceType: "mic")
+                ], language: "en")
             Issue.record("Transcription must surface HTTP \(status)")
         }
         catch { #expect(error.localizedDescription.contains(String(status))) }

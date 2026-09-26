@@ -1,0 +1,76 @@
+import Foundation
+import Testing
+
+@testable import GdayMeetings
+
+@MainActor struct ProviderRoutingTests {
+    private func store() throws -> MeetingStore {
+        MeetingStore(dataDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    }
+
+    @Test func noProviderDoesNotStartTranscription() async throws {
+        let store = try store()
+        let id = store.createMeeting(title: "Offline recording")
+        await store.transcribe(id: id)
+        #expect(store.errorMessage?.contains("Choose a transcription provider") == true)
+        #expect(store.meetings.first?.transcriptionAttempt == nil)
+        #expect(!store.isBusy)
+    }
+
+    @Test func runpodRequiresExplicitEnabledUploadProvider() throws {
+        let store = try store()
+        var runpod = ServiceProvider(kind: .runpod)
+        runpod.enabledCapabilities = [.transcription]
+        var upload = ServiceProvider(kind: .filedrop)
+        upload.enabledCapabilities = [.fileTransfer]
+        store.settings.serviceProviders = [runpod, upload]
+        store.settings.transcriptionProviderID = runpod.id
+        #expect(throws: (any Error).self) { try store.transcriptionProvider(for: Meeting()) }
+        runpod.uploadProviderID = upload.id
+        store.settings.serviceProviders = [runpod, upload]
+        #expect(try store.transcriptionProvider(for: Meeting()).id == runpod.id)
+        upload.isEnabled = false
+        store.settings.serviceProviders = [runpod, upload]
+        #expect(throws: (any Error).self) { try store.transcriptionProvider(for: Meeting()) }
+    }
+
+    @Test func pendingJobRetainsProviderAndEndpoint() throws {
+        let store = try store()
+        var old = ServiceProvider(kind: .runpod)
+        old.endpoint = "https://old.example/v2/endpoint"
+        old.enabledCapabilities = [.transcription]
+        var newer = ServiceProvider(kind: .runpod)
+        newer.enabledCapabilities = [.transcription]
+        store.settings.serviceProviders = [old, newer]
+        store.settings.transcriptionProviderID = newer.id
+        var meeting = Meeting()
+        meeting.transcriptionAttempt = ProviderTranscriptionAttempt(
+            providerID: old.id, endpoint: old.endpoint, kind: old.kind, title: meeting.title, taskID: "saved-job")
+        #expect(try store.transcriptionProvider(for: meeting).id == old.id)
+        old.endpoint = "https://changed.example/v2/endpoint"
+        store.settings.serviceProviders = [old, newer]
+        #expect(throws: (any Error).self) { try store.transcriptionProvider(for: meeting) }
+    }
+
+    @Test func editedTranscriptRetainsCompletedResultForExplicitReplacement() throws {
+        let store = try store()
+        let id = store.createMeeting(title: "Edited transcript")
+        let meeting = try #require(store.meetings.first { $0.id == id })
+        let generated = [TranscriptSegment(text: "Generated text")]
+        let attempt = ProviderTranscriptionAttempt(
+            providerID: UUID(), endpoint: "https://example.test", kind: .runpod, title: meeting.title,
+            originalTranscript: [], result: generated)
+        try store.saveTranscriptionAttempt(attempt, meetingID: meeting.id)
+        var edited = try #require(store.meetings.first)
+        edited.transcript = [TranscriptSegment(text: "An edit made during processing")]
+        store.updateMeeting(edited)
+        #expect(throws: (any Error).self) {
+            try store.saveTranscriptionResult(generated, attempt: attempt, meetingID: meeting.id)
+        }
+        #expect(store.meetings.first?.transcript == edited.transcript)
+        #expect(store.meetings.first?.transcriptionAttempt?.result == generated)
+        store.applySavedTranscriptionResult(meetingID: meeting.id)
+        #expect(store.meetings.first?.transcript == generated)
+        #expect(store.meetings.first?.transcriptionAttempt == nil)
+    }
+}

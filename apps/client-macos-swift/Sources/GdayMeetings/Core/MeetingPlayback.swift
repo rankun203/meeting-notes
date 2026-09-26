@@ -13,7 +13,9 @@ final class MeetingPlayback: ObservableObject {
     @Published private(set) var title = ""
     @Published private(set) var trackNames: [String] = []
     @Published private(set) var selectedTrack = -1
-    @Published private(set) var isPlaying = false
+    @Published private(set) var isPlaying = false {
+        didSet { progress.isPlaying = isPlaying }
+    }
     @Published private(set) var isLoading = false
     @Published private(set) var hasEnded = false
     // Only timeline views observe the clock; a tick must not invalidate menus,
@@ -24,7 +26,9 @@ final class MeetingPlayback: ObservableObject {
         set { progress.update(newValue) }
     }
     @Published private(set) var duration: Double = 0
-    @Published private(set) var playbackRate: Double = 1
+    @Published private(set) var playbackRate: Double = 1 {
+        didSet { progress.rate = playbackRate }
+    }
     @Published private(set) var isPlaybackBlocked = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var waveforms: [AudioWaveform?] = []
@@ -349,7 +353,8 @@ final class MeetingPlayback: ObservableObject {
                             !self.isSeeking
                         else { return }
                         self.currentTime = snapshot.time
-                        self.isPlaying = snapshot.playing && self.wantsPlayback && !self.isPlaybackBlocked
+                        let playing = snapshot.playing && self.wantsPlayback && !self.isPlaybackBlocked
+                        if self.isPlaying != playing { self.isPlaying = playing }
                         if snapshot.ended {
                             self.hasEnded = true
                             self.wantsPlayback = false
@@ -409,13 +414,23 @@ final class MeetingPlayback: ObservableObject {
 final class PlaybackProgress: ObservableObject {
     @Published private(set) var time: Double = 0
     @Published private(set) var scrubTime: Double?
+    @Published var isPlaying = false
+    var rate: Double = 1
+    private var sampledAt = ProcessInfo.processInfo.systemUptime
+
+    /// Briefly interpolate between audio samples, but never run away on stalls.
+    func animatedTime(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Double {
+        guard scrubTime == nil, isPlaying else { return displayedTime }
+        return time + min(0.05, max(0, uptime - sampledAt)) * rate
+    }
     var displayedTime: Double { scrubTime ?? time }
     func scrub(to value: Double?) {
         guard value == nil || value!.isFinite, scrubTime != value else { return }
         scrubTime = value
     }
-    func update(_ value: Double) {
+    func update(_ value: Double, at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard value.isFinite, value != time else { return }
+        sampledAt = uptime
         time = value
     }
 }

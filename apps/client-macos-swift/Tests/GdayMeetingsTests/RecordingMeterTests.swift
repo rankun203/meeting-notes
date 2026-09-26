@@ -5,6 +5,57 @@ import Testing
 @testable import GdayMeetings
 
 struct RecordingMeterTests {
+    @Test func activityHistoryKeepsTenSecondsAndSeparatesSources() {
+        var history = RecordingActivityHistory()
+        let levels = RecordingLevels(
+            microphone: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -30),
+            system: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: -15))
+        history.append(levels, at: 0)
+        history.append(RecordingLevels(), at: 0.2)
+        #expect(history.bars(microphone: true).last == 0.5)
+        #expect(history.bars(microphone: false).last == 0.75)
+        history.append(RecordingLevels(), at: 9)
+        #expect(history.bars(microphone: true).max() == 0.5)
+        history.append(RecordingLevels(), at: 10.2)
+        #expect(history.bars(microphone: true).allSatisfy { $0 == 0 })
+        for tick in 0..<200 { history.append(levels, at: 20 + Double(tick) / 100) }
+        #expect(history.samples.count <= 50)
+        history.append(levels, at: .nan)
+        #expect(history.samples.count <= 50)
+        history.append(RecordingLevels(), at: 1)
+        #expect(history.samples.isEmpty)
+    }
+
+    @Test func scrollOffsetIsContinuousAcrossBucketRolloverAndBoundsStalls() {
+        let before = 50 - RecordingActivityHistory.scrollFraction(since: 100, at: 100.199)
+        let after = 49 - RecordingActivityHistory.scrollFraction(since: 100.2, at: 100.201)
+        #expect(abs((before - after) - 0.01) < 0.000001)
+        #expect(RecordingActivityHistory.scrollFraction(since: 100, at: 99) == 0)
+        #expect(RecordingActivityHistory.scrollFraction(since: 100, at: 110) == 2)
+    }
+
+    @Test func completedActivityBarsOnlyShiftAndNeverChangeHeight() {
+        var history = RecordingActivityHistory()
+        func levels(_ value: Double) -> RecordingLevels {
+            RecordingLevels(microphone: RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: value))
+        }
+        history.append(levels(-42), at: 0.01)
+        history.append(levels(-12), at: 0.11)
+        history.append(levels(-36), at: 0.21)
+        let first = history.bars(microphone: true)
+        #expect(first.last == 0.8)
+        history.append(levels(-3), at: 0.31)
+        #expect(history.bars(microphone: true) == first)
+        history.append(levels(-24), at: 0.43)
+        let second = history.bars(microphone: true)
+        #expect(Array(second.dropLast()) == Array(first.dropFirst()))
+        #expect(second.last == 0.95)
+        history.append(levels(-18), at: 0.89)  // Missing bucket stays silent, never regroups old samples.
+        #expect(history.bars(microphone: true)[46] == 0.8)
+        #expect(history.bars(microphone: true)[47] == 0.95)
+        #expect(history.bars(microphone: true).last == 0)
+    }
+
     @Test(arguments: [false, true])
     func measuresPlanarAndInterleavedStereo(interleaved: Bool) throws {
         let format = try #require(

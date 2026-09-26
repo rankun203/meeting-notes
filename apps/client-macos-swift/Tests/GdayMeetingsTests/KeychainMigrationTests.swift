@@ -24,7 +24,7 @@ struct KeychainMigrationTests {
     @Test func migratesAllCredentialAccountsAndDeletesLegacyCopies() throws {
         let storage = MemoryCredentialStorage()
         let migration = CredentialIdentityMigration(storage: storage)
-        for account in ["gday-oauth", "llm-api-key", "transcription-api-key"] {
+        for account in ["gday-oauth", "provider-test-credential"] {
             storage.values[legacy + ":" + account] = "saved-" + account
             #expect(try migration.get(account) == "saved-" + account)
             #expect(storage.values[current + ":" + account] == "saved-" + account)

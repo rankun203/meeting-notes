@@ -54,10 +54,20 @@ struct MeetingDetailView: View {
                 HStack(spacing: 12) {
                     meetingDate(meeting).fixedSize()
                     Spacer(minLength: 8)
+                    MeetingLanguagePicker(
+                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID
+                    )
+                    .frame(minWidth: 160, idealWidth: 220, maxWidth: 260, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     associationsMenu
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     meetingDate(meeting)
+                    MeetingLanguagePicker(
+                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID
+                    )
+                    .frame(maxWidth: 260, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     associationsMenu
                 }
             }.font(.callout).foregroundStyle(.secondary)
@@ -301,9 +311,7 @@ struct MeetingDetailView: View {
                     : "No transcript yet.")
         } actions: {
             if !meeting.audioFiles.isEmpty && store.recordingID != meetingID {
-                Button(meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription") {
-                    Task { await store.transcribe(id: meetingID) }
-                }.disabled(store.isBusy)
+                TranscriptionActionButton(meeting: meeting)
             }
         }
     }
@@ -406,11 +414,10 @@ struct MeetingActionsMenu: View {
 
     var body: some View {
         Menu {
-            Button(
-                meeting.serverTranscription == nil ? "Transcribe Recording" : "Resume Transcription",
-                systemImage: "text.bubble"
-            ) { Task { await store.transcribe(id: meeting.id) } }
-            .disabled(store.isBusy || meeting.audioFiles.isEmpty || store.recordingID == meeting.id)
+            TranscriptionActionButton(meeting: meeting)
+            if meeting.transcriptionAttempt != nil {
+                PendingTranscriptionActions(meeting: meeting)
+            }
             Divider()
             Button("Export Meeting Text…", systemImage: "square.and.arrow.up") {
                 MeetingPanels.export(meeting, store: store)

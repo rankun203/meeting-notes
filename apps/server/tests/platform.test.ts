@@ -98,6 +98,9 @@ test('durable tasks preserve worker output, isolate capabilities, support retrie
       durableTasks: true,
       meetingImports: true,
       transcription: false,
+      protocolVersion: 1,
+      transcriptionLanguages: null,
+      transcriptionLanguagesError: 'Transcription is not configured.',
       version: 2,
     },
   )

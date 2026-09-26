@@ -1,3 +1,10 @@
+---
+title: Gday Meetings
+date: 2026-09-26
+status: active
+scope: repository-overview
+---
+
 # Gday Meetings
 
 <img src="docs/branding/gday-meetings-koala.png" alt="Gday Meetings koala holding chat bubbles" width="128" />
@@ -83,6 +90,7 @@ The GitHub repository URL still uses `meeting-notes`. Our domain is `gdaymeeting
 ## Deployment and development
 
 - [Architecture and integration contracts](docs/architecture.md)
+- [Service provider capability protocols](docs/protocols/README.md)
 - [Local CPU, local GPU and cloud deployment](docs/deployment.md)
 - [Client usage and macOS permissions](apps/client-macos-rust/README.md)
 - [Server setup and API documentation](apps/server/README.md)

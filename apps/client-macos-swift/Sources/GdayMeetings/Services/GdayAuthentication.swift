@@ -108,6 +108,7 @@ private struct OAuthSession: Codable {
             revocationEndpoint: revocation, accessToken: access, refreshToken: token["refresh_token"] as? String,
             expiry: Date().addingTimeInterval((token["expires_in"] as? Double) ?? 300),
             email: claims["email"] as? String)
+        try Task.checkCancellation()
         try save(session)
     }
     func signOut() async throws {
@@ -121,7 +122,6 @@ private struct OAuthSession: Codable {
         origin = nil
         if let old, let revoke = old.revocationEndpoint {
             for token in [old.accessToken, old.refreshToken].compactMap({ $0 }) {
-                try UIPreview.requireLiveServices()
                 _ = try? await ServiceHTTP.session.data(
                     for: ServiceHTTP.form(revoke, ["token": token, "client_id": old.clientID]))
             }

@@ -1,3 +1,10 @@
+---
+title: Gday Meetings server
+date: 2026-09-26
+status: active
+scope: server-guide
+---
+
 # Gday Meetings Server
 
 The server component of the Gday Meetings monorepo, built with Payload CMS and Next.js. Audio, processing tasks, and typed outputs live together. RunPod workers persist results to the server before completing provider jobs. Local workers also retain completed output for recovery through polling if callback delivery fails.
@@ -48,7 +55,7 @@ To retry publication of an existing tag without changing it, run
 
 ## Client and worker contract
 
-See [API reference](docs/api.md). Configure the gday-meetings client with this platform origin and sign in through Gday Meetings Server. User OAuth tokens authorize uploads and task submissions. Every task requires a stable `idempotencyKey`; the server queues and executes it using the configured local worker or RunPod. Callback capabilities stay between the server and the worker. Clients poll durable task outputs and download the transcript when ready.
+See [API reference](docs/api.md) and the app-facing [service provider capability protocols](../../docs/protocols/README.md). The protocols distinguish existing website operations from proposed indexing and playback behavior. Configure the gday-meetings client with this platform origin and sign in through Gday Meetings Server. User OAuth tokens authorize uploads and task submissions. Every task requires a stable `idempotencyKey`; the server queues and executes it using the configured local worker or RunPod. Callback capabilities stay between the server and the worker. Clients poll durable task outputs and download the transcript when ready.
 
 ## MCP
 

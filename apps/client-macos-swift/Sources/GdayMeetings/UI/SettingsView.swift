@@ -2,10 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var store: MeetingStore
-    @ObservedObject private var server = GdayServerService.shared
-    @AppStorage("gdayServerURL") private var serverURL = ""
-    @ViewState private var signingIn = false
-    @ViewState private var error: String?
+    @AppStorage("settingsTab") private var settingsTab = "recording"
     private var audioSettingsLocked: Bool {
         store.recordingID != nil || store.isStartingRecording || store.isFinalizingRecording
     }
@@ -22,7 +19,7 @@ struct SettingsView: View {
         // HIG: a persistent tab selection groups settings by task in the standard
         // Settings scene; labeled native form controls support keyboard/VoiceOver.
         // https://developer.apple.com/design/human-interface-guidelines/settings
-        TabView {
+        TabView(selection: $settingsTab) {
             Form {
                 Section {
                     Text(
@@ -49,67 +46,59 @@ struct SettingsView: View {
                         "Recordings are saved in this format when you stop. If conversion fails, the original audio is kept."
                     ).font(.caption).foregroundStyle(.secondary)
                 }
-                Section("After Recording") {
+                Section("Transcription") {
+                    MeetingLanguagePicker(title: "Default Language", selection: setting(\.defaultLanguage))
                     Toggle("Automatically Transcribe Recordings", isOn: setting(\.autoTranscribe))
                 }
-            }.tabItem { Label("Recording", systemImage: "mic") }
+            }.tabItem { Label("Recording", systemImage: "mic") }.tag("recording")
+            ServiceProvidersView()
+                .tabItem { Label("Service Providers", systemImage: "server.rack") }
+                .tag("providers")
             Form {
-                Section("Gday Server") {
-                    Text("Keychain securely stores your API keys and server sign-in tokens.").font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextField("Server URL", text: $serverURL).textContentType(.URL)
-                    if server.connected {
-                        LabeledContent("Signed in", value: server.email ?? "Connected")
-                        Button("Sign Out") {
-                            Task {
-                                do { try await server.signOut() }
-                                catch { self.error = error.localizedDescription }
-                            }
-                        }
-                    }
-                    else {
-                        Button(signingIn ? "Signing In…" : "Sign In with Browser") {
-                            signingIn = true
-                            Task {
-                                defer { signingIn = false }
-                                do { try await server.signIn(origin: serverURL) }
-                                catch {
-                                    self.error = error.localizedDescription
-                                }
-                            }
-                        }.disabled(signingIn || serverURL.isEmpty)
-                    }
-                    Text(
-                        server.connected
-                            ? "Transcription uses your signed-in Gday server. Sign out to use the compatible service below."
-                            : "Connect to your Gday server to transcribe audio using your account."
-                    ).font(.caption).foregroundStyle(.secondary)
+                Section("Transcription") {
+                    providerPicker(
+                        "Provider", capability: .transcription, selection: setting(\.transcriptionProviderID))
+                    Text("Transcription sends recording audio to the selected provider.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Compatible Transcription Service") {
-                    TextField("API Base URL", text: setting(\.transcriptionBaseURL))
-                    TextField("Model", text: setting(\.transcriptionModel))
-                    SecureField("API Key", text: setting(\.transcriptionAPIKey))
-                }
-            }.tabItem { Label("Transcription", systemImage: "text.bubble") }
+            }.tabItem { Label("Transcription", systemImage: "text.bubble") }.tag("transcription")
             Form {
-                Section("Language Model") {
-                    Text("Your API key is stored securely in Keychain.").font(.caption).foregroundStyle(.secondary)
-                    TextField("API Base URL", text: setting(\.llmBaseURL))
-                    TextField("Model", text: setting(\.llmModel))
-                    SecureField("API Key", text: setting(\.llmAPIKey))
-                    TextField("Summary Instructions", text: setting(\.summarizationPrompt), axis: .vertical).lineLimit(
-                        3...6)
-                    Text(
-                        "Summaries and chat send the selected meeting’s transcript and notes to this OpenAI-compatible service. You can use a local service."
-                    ).font(.caption).foregroundStyle(.secondary)
+                Section("Summaries") {
+                    providerPicker("Provider", capability: .summarization, selection: setting(\.summaryProviderID))
+                    TextField("Summary Instructions", text: setting(\.summarizationPrompt), axis: .vertical)
+                        .lineLimit(3...6)
+                    Text("Summaries and chat send the selected transcript and notes to this provider.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-            }.tabItem { Label("Intelligence", systemImage: "sparkles") }
+            }.tabItem { Label("Summaries", systemImage: "sparkles") }.tag("summaries")
         }
-        .formStyle(.grouped).padding(16).frame(width: 590, height: 600)
-        .alert("Connection Failed", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK") { error = nil }
-        } message: {
-            Text(error ?? "")
+        .formStyle(.grouped).padding(16).frame(width: 780, height: 650)
+    }
+
+    private func providerPicker(
+        _ title: String, capability: ProviderCapability, selection: Binding<UUID?>
+    ) -> some View {
+        Picker(title, selection: selection) {
+            Text("None").tag(nil as UUID?)
+            ForEach(
+                store.settings.serviceProviders.filter {
+                    availableForDefault($0, capability: capability)
+                }
+            ) { provider in
+                Text(provider.name).tag(Optional(provider.id))
+            }
+            if let selected = selection.wrappedValue,
+                !store.settings.serviceProviders.contains(where: {
+                    $0.id == selected && availableForDefault($0, capability: capability)
+                })
+            {
+                Text("Provider Unavailable").tag(Optional(selected))
+            }
         }
+    }
+
+    private func availableForDefault(_ provider: ServiceProvider, capability: ProviderCapability) -> Bool {
+        ProviderConfigurationEligibility.canSelect(
+            provider, for: capability, providers: store.settings.serviceProviders)
     }
 }

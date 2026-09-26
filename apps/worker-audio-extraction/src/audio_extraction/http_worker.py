@@ -178,6 +178,12 @@ def create_server(host, port, token, jobs):
                 return
             if self.path == "/health":
                 self.respond(200, {"status": "ok", "transport": "http"})
+            elif self.path == "/capabilities":
+                try:
+                    from audio_extraction.capabilities import capabilities
+                    self.respond(200, capabilities())
+                except Exception:
+                    self.respond(503, {"error": "Transcription language metadata is unavailable"})
             elif self.path.startswith("/status/"):
                 value = jobs.status(self.path.removeprefix("/status/"))
                 self.respond(200 if value else 404, value or {"error": "Unknown job"})

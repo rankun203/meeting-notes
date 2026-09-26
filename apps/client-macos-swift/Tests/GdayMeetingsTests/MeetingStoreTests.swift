@@ -47,10 +47,11 @@ import Testing
     @Test func defaultsAndCredentialsDoNotPersist() throws {
         let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         #expect(settings.captureMicrophone)
-        #expect(settings.llmModel == "gpt-4o-mini")
+        #expect(settings.serviceProviders.isEmpty)
         var secret = settings
-        secret.llmAPIKey = "private-llm"
-        secret.transcriptionAPIKey = "private-audio"
+        var provider = ServiceProvider(kind: .runpod)
+        provider.apiKey = "private-audio"
+        secret.serviceProviders = [provider]
         let encoded = String(decoding: try JSONEncoder().encode(secret), as: UTF8.self)
         #expect(!encoded.contains("private-"))
         #expect(!encoded.contains("APIKey"))
@@ -122,25 +123,14 @@ import Testing
         let store = MeetingStore(dataDirectory: root)
         let id = store.createMeeting(title: "Private task")
         var meeting = try #require(store.meetings.first)
-        meeting.serverTranscription = ServerTranscriptionAttempt(
-            origin: "https://example.com", idempotencyKey: "secret", title: "Private")
+        meeting.transcriptionAttempt = ProviderTranscriptionAttempt(
+            providerID: UUID(), endpoint: "https://example.com", kind: .gdayWebsite, title: "Private")
         store.updateMeeting(meeting)
         let file = root.appendingPathComponent("export.json")
         try store.exportMeeting(id: id, to: file)
         let output = try String(contentsOf: file)
         #expect(!output.contains("secret"))
         try store.importArchive(url: file)
-        #expect(store.meetings.first?.serverTranscription == nil)
-    }
-}
-
-@MainActor struct TranscriptionRangeTests {
-    @Test func longAudioHasContiguousBoundedChunks() {
-        let ranges = MeetingStore.transcriptionRanges(duration: 1501)
-        #expect(ranges.count == 3)
-        #expect(ranges.map(\.start) == [0, 600, 1200])
-        #expect(ranges.map(\.duration) == [600, 600, 301])
-        #expect(MeetingStore.transcriptionRanges(duration: 600).count == 1)
-        #expect(MeetingStore.transcriptionRanges(duration: .nan).isEmpty)
+        #expect(store.meetings.first?.transcriptionAttempt == nil)
     }
 }

@@ -7,6 +7,8 @@ struct WaveformTimeline: View {
     let waveforms: [AudioWaveform]
     let duration: Double
     let time: Double
+    let progress: PlaybackProgress
+    let animate: Bool
     var label = "Playback position"
     var dimmed = false
     var isLoading = false
@@ -17,39 +19,29 @@ struct WaveformTimeline: View {
 
     var body: some View {
         GeometryReader { geometry in
-            Canvas { context, size in
-                let position = time
-                let columns = max(1, Int(size.width / 3))
-                let normalizer = max(0.01, waveforms.flatMap(\.peaks).max() ?? 1)
-                for column in 0..<columns {
-                    let start = Double(column) / Double(columns) * duration
-                    let end = Double(column + 1) / Double(columns) * duration
-                    let peak = waveforms.map { $0.peak(from: start, to: end) }.max() ?? 0
-                    let height = max(1, CGFloat(sqrt(peak / normalizer)) * (size.height - 6))
-                    let rect = CGRect(
-                        x: CGFloat(column) * size.width / CGFloat(columns), y: (size.height - height) / 2, width: 2,
-                        height: height)
-                    context.fill(
-                        Path(roundedRect: rect, cornerRadius: 1),
-                        with: .color(start < position ? .accentColor : .secondary.opacity(0.55)))
-                }
-                let x = CGFloat(min(1, max(0, position / max(0.01, duration)))) * max(0, size.width - 1)
-                context.fill(Path(CGRect(x: x, y: 0, width: 1.5, height: size.height)), with: .color(.primary))
+            ZStack {
+                PlaybackWaveformSurface(
+                    waveforms: waveforms, duration: duration, progress: progress, time: time, animate: animate
+                )
+                .opacity(dimmed ? 0.55 : 1)
+                .allowsHitTesting(false)
+                // A SwiftUI sibling owns pointer input. Gestures attached directly
+                // to NSViewRepresentable can be bypassed by native hit testing.
+                Rectangle().fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                focused = true
+                                isScrubbing = true
+                                scrub(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
+                            }
+                            .onEnded { value in
+                                seek(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
+                                scrub(nil)
+                                isScrubbing = false
+                            })
             }
-            .opacity(dimmed ? 0.55 : 1)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        focused = true
-                        isScrubbing = true
-                        scrub(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
-                    }
-                    .onEnded { value in
-                        seek(min(duration, max(0, value.location.x / max(1, geometry.size.width) * duration)))
-                        scrub(nil)
-                        isScrubbing = false
-                    })
         }
         .frame(height: 24)
         .background {
@@ -94,6 +86,8 @@ struct WaveformTimeline: View {
 /// The only observer of frequent progress updates. Controls outside this view
 /// retain their identity while its playhead and timestamps advance.
 struct PlaybackPosition: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var progress: PlaybackProgress
     let waveforms: [AudioWaveform]
     let duration: Double
@@ -104,8 +98,10 @@ struct PlaybackPosition: View {
     let seek: (Double) -> Void
 
     var body: some View {
+        let animate = progress.isPlaying && progress.scrubTime == nil && !reduceMotion && scenePhase == .active
         WaveformTimeline(
-            waveforms: waveforms, duration: duration, time: progress.displayedTime,
+            waveforms: waveforms, duration: duration, time: progress.displayedTime, progress: progress,
+            animate: animate,
             label: label, dimmed: dimmed, isLoading: isLoading, seek: seek, scrub: progress.scrub
         )
         .overlay(alignment: .bottom) {

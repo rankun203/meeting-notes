@@ -35,6 +35,26 @@ private actor PlaybackAttemptCounter {
 
 @MainActor
 struct MeetingPlaybackTests {
+    @Test func animationUsesRateAndStopsOnPauseScrubAndStalledSamples() {
+        let progress = PlaybackProgress()
+        progress.update(10, at: 100)
+        progress.isPlaying = true
+        progress.rate = 2
+        #expect(abs(progress.animatedTime(at: 100.02) - 10.04) < 0.0001)
+        #expect(abs(progress.animatedTime(at: 110) - 10.1) < 0.0001)
+        progress.update(10, at: 110)  // A stalled source must not restart interpolation.
+        #expect(abs(progress.animatedTime(at: 110) - 10.1) < 0.0001)
+        progress.scrub(to: 30)
+        #expect(progress.animatedTime(at: 111) == 30)
+        progress.scrub(to: nil)
+        progress.isPlaying = false
+        #expect(progress.animatedTime(at: 112) == 10)
+        progress.update(4, at: 113)
+        #expect(progress.animatedTime(at: 114) == 4)
+        progress.isPlaying = true
+        #expect(progress.animatedTime(at: 112) == 4)
+    }
+
     @Test func sharedScrubPositionOverridesTicksAndClearsWithSelection() {
         let playback = MeetingPlayback()
         var controlUpdates = 0

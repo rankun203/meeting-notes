@@ -97,10 +97,10 @@ private struct SecurityCredentialStorage: CredentialStorage {
 enum KeychainPrompt {
     static func label(_ account: String) -> String {
         switch account {
-        case "llm-api-key": return "Gday Meetings — AI API key"
-        case "transcription-api-key": return "Gday Meetings — transcription API key"
         case "gday-oauth": return "Gday Meetings — server sign-in tokens"
-        default: return "Gday Meetings — saved online credentials"
+        default:
+            return account.hasPrefix("provider-")
+                ? "Gday Meetings — provider API key" : "Gday Meetings — saved online credentials"
         }
     }
 }
@@ -123,7 +123,6 @@ enum ServiceHTTP {
     }
     static func sameOrigin(_ a: URL, _ b: URL) -> Bool { a.scheme == b.scheme && a.host == b.host && a.port == b.port }
     static func json(_ request: URLRequest) async throws -> [String: Any] {
-        try UIPreview.requireLiveServices()
         let (data, response) = try await session.data(for: request)
         return try decode(data, response)
     }

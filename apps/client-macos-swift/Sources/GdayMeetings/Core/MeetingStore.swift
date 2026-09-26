@@ -9,6 +9,12 @@ final class MeetingStore: ObservableObject {
     @Published var people: [Person] = []
     @Published var tags: [MeetingTag] = []
     @Published var settings = AppSettings()
+    @Published var providerLanguageStates: [ProviderLanguageIdentity: ProviderLanguageState] = [:]
+    var providerLanguageFetchedAt: [ProviderLanguageIdentity: Date] = [:]
+    var providerLanguageTasks: [ProviderLanguageIdentity: Task<ProviderLanguageCatalog, Error>] = [:]
+    var providerLanguageLoader: @MainActor (ServiceProvider) async throws -> ProviderLanguageCatalog = {
+        try await ProviderLanguageService.catalog(for: $0)
+    }
     @Published var recordingID: UUID?
     @Published var presentsRecordingSetup = false
     @Published var isBusy = false
@@ -20,6 +26,7 @@ final class MeetingStore: ObservableObject {
     @Published var isFinalizingRecording = false
     @Published private(set) var isStartingRecording = false
     @Published var recordingLevels = RecordingLevels()
+    private(set) var recordingActivity = RecordingActivityHistory()
     let dataDirectory: URL
     private var recorder: AudioCapture?
     private var captureTransition = false
@@ -28,8 +35,8 @@ final class MeetingStore: ObservableObject {
     private var lastSavedLibrary = MeetingLibrary()
     var libraryWritable: Bool { canSave }
     private let usesKeychain: Bool
-    private var savedLLMKey = ""
-    private var savedTranscriptionKey = ""
+    private var savedProviderKeys: [String: String] = [:]
+    private var unreadableProviderKeys = Set<String>()
     var recordingDuration: TimeInterval { recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0 }
 
     init(dataDirectory: URL? = nil) {
@@ -62,13 +69,18 @@ final class MeetingStore: ObservableObject {
             lastSavedLibrary = MeetingLibrary(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
             if usesKeychain {
-                do {
-                    settings.llmAPIKey = try KeychainStore.get("llm-api-key") ?? ""
-                    savedLLMKey = settings.llmAPIKey
-                    settings.transcriptionAPIKey = try KeychainStore.get("transcription-api-key") ?? ""
-                    savedTranscriptionKey = settings.transcriptionAPIKey
+                for index in settings.serviceProviders.indices {
+                    let account = ProviderCredentialPersistence.account(for: settings.serviceProviders[index])
+                    do {
+                        let key = try KeychainStore.get(account) ?? ""
+                        settings.serviceProviders[index].apiKey = key
+                        savedProviderKeys[account] = key
+                    }
+                    catch {
+                        unreadableProviderKeys.insert(account)
+                        errorMessage = error.localizedDescription
+                    }
                 }
-                catch { errorMessage = error.localizedDescription }
             }
         }
         catch {
@@ -106,34 +118,63 @@ final class MeetingStore: ObservableObject {
         contextualChats[key] = messages
         save()
     }
-    func saveSettings() {
-        guard canSave else { return }
+    @discardableResult func saveSettings() -> Bool {
+        guard canSave else {
+            errorMessage = "Restore the local library before changing settings."
+            return false
+        }
         do {
+            let settingsData = try JSONEncoder().encode(settings)
+            let persist = {
+                try ProviderCredentialPersistence.writeSettings(
+                    settingsData, to: self.dataDirectory.appendingPathComponent("settings.json"))
+            }
             if usesKeychain {
-                if settings.llmAPIKey != savedLLMKey {
-                    try KeychainStore.set(settings.llmAPIKey, for: "llm-api-key")
-                    savedLLMKey = settings.llmAPIKey
+                // Read failed credentials before changing any item, including keys
+                // belonging to providers removed from the draft settings.
+                var previous = savedProviderKeys
+                for account in unreadableProviderKeys {
+                    previous[account] = try KeychainStore.get(account) ?? ""
                 }
-                if settings.transcriptionAPIKey != savedTranscriptionKey {
-                    try KeychainStore.set(settings.transcriptionAPIKey, for: "transcription-api-key")
-                    savedTranscriptionKey = settings.transcriptionAPIKey
+                var next: [String: String] = [:]
+                for provider in settings.serviceProviders {
+                    let account = ProviderCredentialPersistence.account(for: provider)
+                    if unreadableProviderKeys.contains(account), provider.apiKey.isEmpty {
+                        next[account] = previous[account]
+                    }
+                    else {
+                        next[account] = provider.apiKey
+                    }
+                }
+                try ProviderCredentialPersistence.save(
+                    previous: previous, next: next,
+                    write: { try KeychainStore.set($1, for: $0) },
+                    remove: { try KeychainStore.delete($0) }, persistSettings: persist)
+                savedProviderKeys = next
+                unreadableProviderKeys.removeAll()
+                for index in settings.serviceProviders.indices {
+                    let account = ProviderCredentialPersistence.account(for: settings.serviceProviders[index])
+                    settings.serviceProviders[index].apiKey = next[account] ?? ""
                 }
             }
-            try JSONEncoder().encode(settings).write(
-                to: dataDirectory.appendingPathComponent("settings.json"), options: .atomic)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: dataDirectory.appendingPathComponent("settings.json").path)
+            else {
+                try persist()
+            }
         }
-        catch { errorMessage = error.localizedDescription }
+        catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+        return true
     }
     func insertImportedMeeting(_ meeting: Meeting) throws {
         guard canSave else { throw MeetingError.message("The library is read-only because loading failed.") }
         meetings.insert(meeting, at: 0)
         guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported meeting.") }
     }
-    @discardableResult func createMeeting(title: String = "Untitled Meeting") -> UUID {
+    @discardableResult func createMeeting(title: String = "Untitled Meeting", language: String? = nil) -> UUID {
         guard canSave else { return UUID() }
-        let meeting = Meeting(title: title)
+        let meeting = Meeting(title: title, language: language ?? settings.defaultLanguage)
         meetings.insert(meeting, at: 0)
         save()
         return meeting.id
@@ -220,7 +261,7 @@ final class MeetingStore: ObservableObject {
     func audioURL(for meeting: Meeting) -> URL? { audioURLs(for: meeting).first }
 
     func startRecording(
-        title: String? = nil, microphoneEnabled: Bool? = nil, systemEnabled: Bool? = nil,
+        title: String? = nil, language: String? = nil, microphoneEnabled: Bool? = nil, systemEnabled: Bool? = nil,
         format: RecordingFormat? = nil, voiceProcessingEnabled: Bool? = nil
     ) async {
         guard !UIPreview.enabled else {
@@ -232,6 +273,7 @@ final class MeetingStore: ObservableObject {
         let systemAudio = systemEnabled ?? settings.captureSystemAudio
         isStartingRecording = true
         defer { isStartingRecording = false }
+        recordingActivity = RecordingActivityHistory()
         recordingLevels = RecordingLevels(
             microphone: RecordingSourceLevel(enabled: microphone),
             system: RecordingSourceLevel(enabled: systemAudio))
@@ -241,7 +283,8 @@ final class MeetingStore: ObservableObject {
         activeRecordingFormat = format ?? settings.recordingFormat
         let suppliedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let meeting = Meeting(
-            title: suppliedTitle.isEmpty ? Date().formatted(date: .abbreviated, time: .shortened) : suppliedTitle)
+            title: suppliedTitle.isEmpty ? Date().formatted(date: .abbreviated, time: .shortened) : suppliedTitle,
+            language: language ?? settings.defaultLanguage)
         do {
             try FileManager.default.createDirectory(at: directory(for: meeting.id), withIntermediateDirectories: true)
             let capture = AudioCapture()
@@ -249,6 +292,7 @@ final class MeetingStore: ObservableObject {
                 Task { @MainActor in
                     defer { delivered() }
                     if self?.recordingID == meeting.id && self?.isFinalizingRecording == false {
+                        self?.recordingActivity.append(levels)
                         self?.recordingLevels = levels
                     }
                 }
@@ -332,6 +376,7 @@ final class MeetingStore: ObservableObject {
         }
         recordingID = nil
         recordingStartedAt = nil
+        recordingActivity = RecordingActivityHistory()
         recordingLevels = RecordingLevels()
         statusMessage = stopFailed ? "Recording interrupted; partial audio retained" : "Recording saved"
         captureTransition = false
@@ -396,7 +441,7 @@ final class MeetingStore: ObservableObject {
             guard let meeting = meetings.first(where: { $0.id == target }) else {
                 throw MeetingError.message("This meeting no longer exists.")
             }
-            guard meeting.serverTranscription == nil else {
+            guard meeting.transcriptionAttempt == nil else {
                 throw MeetingError.message(
                     "Resume and finish this meeting’s pending transcription before adding tracks.")
             }
@@ -466,7 +511,9 @@ final class MeetingStore: ObservableObject {
             }
             else {
                 let imported = additions.map {
-                    Meeting(id: $0.id, title: $0.title, duration: $0.duration, audioFiles: [$0.file])
+                    Meeting(
+                        id: $0.id, title: $0.title, language: settings.defaultLanguage, duration: $0.duration,
+                        audioFiles: [$0.file])
                 }
                 meetings.insert(contentsOf: imported, at: 0)
             }
@@ -493,7 +540,7 @@ final class MeetingStore: ObservableObject {
         meeting.audioFiles = []
         meeting.personIDs = []
         meeting.tagIDs = []
-        meeting.serverTranscription = nil
+        meeting.transcriptionAttempt = nil
         meetings.insert(meeting, at: 0)
         guard save() else { throw MeetingError.message(errorMessage ?? "Could not save imported meeting.") }
     }
@@ -501,7 +548,7 @@ final class MeetingStore: ObservableObject {
         guard var meeting = meetings.first(where: { $0.id == id }) else {
             throw MeetingError.message("Meeting no longer exists.")
         }
-        meeting.serverTranscription = nil
+        meeting.transcriptionAttempt = nil
         if url.pathExtension.lowercased() == "json" {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

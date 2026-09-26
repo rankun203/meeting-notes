@@ -4,20 +4,16 @@ Accepts multiple audio tracks, runs WhisperX transcription + alignment + diariza
 on each, extracts speaker embeddings, and returns per-track results.
 """
 
-import json
+from __future__ import annotations
+
 import logging
 import os
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
-import whisperx
-
-from opencc import OpenCC
-
-from audio_extraction.pipeline import TranscriptionPipeline
 from audio_extraction.config import pipeline_options
+from audio_extraction.capabilities import capabilities
 from audio_extraction.transfer import download_audio, persist_output
 
 logger = logging.getLogger(__name__)
@@ -28,6 +24,8 @@ _zh_converters: dict[str, OpenCC] = {}
 def _get_zh_converter(language: str) -> OpenCC | None:
     """Return an OpenCC converter for zh-cn / zh-tw, or None."""
     # tw2sp = Traditional (TW phrases) → Simplified, s2twp = Simplified → Traditional (TW phrases)
+    from opencc import OpenCC
+
     config = {"zh-cn": "tw2sp", "zh-tw": "s2twp"}.get(language)
     if config is None:
         return None
@@ -54,6 +52,7 @@ def get_pipeline() -> TranscriptionPipeline:
     if _pipeline is None:
         logger.info("Initializing pipeline (first request on this worker)")
         t0 = time.time()
+        from audio_extraction.pipeline import TranscriptionPipeline
         _pipeline = TranscriptionPipeline(**pipeline_options())
         logger.info("Pipeline initialized in %.1fs", time.time() - t0)
     return _pipeline
@@ -61,6 +60,8 @@ def get_pipeline() -> TranscriptionPipeline:
 
 def right_trim_silence(audio: np.ndarray, sr: int = 16000, threshold: float = 0.001, tail: float = 0.5) -> np.ndarray:
     """Remove trailing silence from audio array. Keep `tail` seconds after last non-silent sample."""
+    import numpy as np
+
     indices = np.nonzero(np.abs(audio) > threshold)[0]
     if len(indices) == 0:
         return audio
@@ -83,6 +84,8 @@ def _download_and_decode(track: dict, directory: str) -> tuple[str, str, str, an
     # Pre-decode audio (CPU-bound ffmpeg work) so it's ready for GPU
     logger.info("Decoding %s", track_name)
     t0 = time.time()
+    import whisperx
+
     audio = whisperx.load_audio(audio_path)
     raw_duration = len(audio) / 16000
     audio = right_trim_silence(audio)
@@ -95,25 +98,15 @@ def _download_and_decode(track: dict, directory: str) -> tuple[str, str, str, an
     return track_name, source_type, audio_path, audio, duration
 
 
-def _truncate_for_log(obj, max_str_len=128, max_list_len=2):
-    """Recursively truncate long strings and lists for logging."""
-    if isinstance(obj, str):
-        return obj[:max_str_len] + "..." if len(obj) > max_str_len else obj
-    elif isinstance(obj, dict):
-        return {k: _truncate_for_log(v, max_str_len, max_list_len) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        truncated = [_truncate_for_log(v, max_str_len, max_list_len) for v in obj[:max_list_len]]
-        if len(obj) > max_list_len:
-            truncated.append(f"... +{len(obj) - max_list_len} more")
-        return truncated
-    return obj
-
-
 def handler(event: dict) -> dict:
     """RunPod serverless handler."""
     logger.info("Received extraction request")
 
     inp = event["input"]
+    if inp.get("operation") == "capabilities":
+        return capabilities()
+    if inp.get("operation") not in (None, "transcribe"):
+        raise ValueError("Unsupported worker operation")
     tracks = inp["tracks"]
     language = inp.get("language", "en")
     # WhisperX only understands base language codes (e.g. "zh"), not
@@ -208,8 +201,6 @@ def handler(event: dict) -> dict:
         "language": language,
         "model": pipeline.model_size,
     }
-
-    logger.info("Response body:\n%s", json.dumps(_truncate_for_log(response), ensure_ascii=False))
 
     if inp.get("result_sink"):
         persist_output(inp["result_sink"], response)

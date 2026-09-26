@@ -316,10 +316,9 @@ async fn handle_upload(
             created: Instant::now(),
         });
         info!(
-            "Parked: {} ({}) -> {} (expires in {}s)",
+            "Parked: {} ({}) (expires in {}s)",
             filename,
             format_size(total_bytes),
-            download_url,
             state.config.expiry.as_secs()
         );
         print_storage_info(&state.config, &files);
@@ -482,6 +481,36 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn credential_probe_validates_key_without_creating_files() {
+        let directory = std::env::temp_dir().join(format!("file-drop-probe-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).await.unwrap();
+        let state = AppState {
+            config: AppConfig {
+                api_key: "test".into(), storage_dir: directory.clone(), max_size: 100,
+                allowed_ext: vec!["opus".into()], expiry: Duration::from_secs(60),
+            },
+            files: Arc::new(RwLock::new(HashMap::new())),
+        };
+        for (key, expected) in [("wrong", StatusCode::UNAUTHORIZED), ("test", StatusCode::BAD_REQUEST)] {
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", format!("Bearer {key}").parse().unwrap());
+            let request = Request::builder().method("POST").uri("/upload").body(Body::empty()).unwrap();
+            let result = handle_upload(
+                State(state.clone()), Query(UploadQuery { api_key: None, filename: None }),
+                headers, request,
+            ).await;
+            let (status, Json(body)) = result.unwrap_err();
+            assert_eq!(status, expected);
+            if key == "test" {
+                assert_eq!(body["error"], "filename required (?filename=name.opus or Content-Disposition header)");
+            }
+            assert!(state.files.read().await.is_empty());
+            assert!(fs::read_dir(&directory).await.unwrap().next_entry().await.unwrap().is_none());
+        }
+        fs::remove_dir_all(directory).await.unwrap();
+    }
 
     #[tokio::test]
     async fn downloads_can_retry_until_expiry() {

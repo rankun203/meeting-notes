@@ -305,7 +305,7 @@ struct LibraryView: View {
                 else if playback.hasSelection && !recordingActive {
                     MeetingPlayerBar(showMeeting: showMeeting)
                 }
-                else if !recordingActive && (store.isBusy || !store.statusMessage.isEmpty) {
+                if !recordingActive && (store.isBusy || !store.statusMessage.isEmpty) {
                     HStack(spacing: 8) {
                         if store.isBusy { ProgressView().controlSize(.small) }
                         Text(store.statusMessage).font(.caption).foregroundStyle(.secondary).lineLimit(2)

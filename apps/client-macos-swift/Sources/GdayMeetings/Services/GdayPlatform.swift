@@ -46,7 +46,6 @@ extension GdayServerService {
         r.httpMethod = "POST"
         r.timeoutInterval = 900
         r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        try UIPreview.requireLiveServices()
         let (data, response) = try await ServiceHTTP.session.upload(for: r, fromFile: file)
         let json = try ServiceHTTP.decode(data, response)
         guard let value = json["url"] as? String, let url = URL(string: value, relativeTo: r.url)?.absoluteURL,
@@ -58,6 +57,7 @@ extension GdayServerService {
         externalID: String, title: String, inputs: [ServerTrackInput], language: String, diarize: Bool,
         idempotencyKey: String
     ) async throws -> String {
+        try TranscriptionLanguage.validate(language)
         guard !idempotencyKey.isEmpty else {
             throw ServiceError("A durable transcription attempt requires an idempotency key.")
         }
@@ -143,7 +143,6 @@ extension GdayServerService {
         r.timeoutInterval = 900
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
-        try UIPreview.requireLiveServices()
         let (data, response) = try await ServiceHTTP.session.data(for: r)
         if (response as? HTTPURLResponse)?.statusCode == 409 {
             throw ServiceError(

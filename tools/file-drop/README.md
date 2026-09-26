@@ -1,3 +1,10 @@
+---
+title: Filedrop
+date: 2026-09-26
+status: active
+scope: file-transfer-guide
+---
+
 # file-drop (optional direct-transfer helper)
 
 The standard deployment uses [apps/server](../../apps/server) for durable CMS-managed files. This tool is retained for the separately configured direct RunPod client workflow; it is not a fourth core component.
@@ -5,6 +12,8 @@ The standard deployment uses [apps/server](../../apps/server) for durable CMS-ma
 Temporary file parking server. Upload once, download until expiry, auto-expire.
 
 Designed for ephemeral file transfer between services — e.g., parking audio files for a GPU worker to download.
+
+The app-facing [file-transfer protocol](../../docs/protocols/file-transfer.md) describes explicit provider selection, task consent, connection checks, and download-link access. This service supports temporary transfer; it does not implement the meeting Playback or Search capabilities.
 
 ## Quick start
 
@@ -74,8 +83,10 @@ Response:
 
 ```bash
 curl http://localhost:8199/health
-# {"status":"ok"}
+# {"status":"available"}
 ```
+
+Health and information routes do not verify the API key. The desktop adapter also sends `POST /upload` with the key but no filename or body: authentication runs first, then a correct key returns the documented missing-filename HTTP 400 before any file is created. The adapter matches that exact error. This credential check does not upload content. Download links allow anyone with the link to retrieve the audio until expiry; the service has no explicit delete endpoint.
 
 ## Error responses
 

@@ -26,7 +26,12 @@ extension MeetingStore {
         defer { isBusy = false }
         do {
             let server = GdayServerService.shared
-            guard let origin = server.origin else { throw ServiceError("Sign in to Gday Meetings Server in Settings.") }
+            guard let origin = server.origin,
+                settings.serviceProviders.contains(where: {
+                    $0.kind == .gdayWebsite && $0.isEnabled
+                        && (try? ServiceHTTP.origin($0.endpoint).absoluteString) == origin
+                })
+            else { throw ServiceError("Add and sign in to a Gday Meetings website in Service Providers.") }
             try await server.ensureArchiveAvailable()
             let folder = directory(for: id)
             try FileManager.default.createDirectory(
@@ -42,7 +47,7 @@ extension MeetingStore {
             else {
                 statusMessage = "Preparing the meeting archive…"
                 var archivedMeeting = meeting
-                archivedMeeting.serverTranscription = nil
+                archivedMeeting.transcriptionAttempt = nil
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]
                 encoder.dateEncodingStrategy = .iso8601

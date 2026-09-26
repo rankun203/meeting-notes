@@ -1,3 +1,10 @@
+---
+title: Audio extraction worker
+date: 2026-09-26
+status: active
+scope: worker-guide
+---
+
 # worker-audio-extraction
 
 Audio transcription + speaker diarization worker. Runs locally on CPU or NVIDIA GPU, or on RunPod serverless.
@@ -58,6 +65,7 @@ All endpoints require `Authorization: Bearer <WORKER_API_TOKEN>`:
   input with that key is rejected with HTTP 400. The server uses its task UUID.
 - `GET /status/<id>` returns `IN_QUEUE`, `IN_PROGRESS`, `COMPLETED` with `output`, or
   `FAILED` with a redacted `error`. Unknown jobs return 404.
+- `GET /capabilities` returns version 1 transcription language metadata without loading models or processing audio; unavailable metadata returns 503.
 - `GET /health` returns HTTP 200 when the transport is running. It does not preload
   or certify model availability.
 
@@ -113,6 +121,16 @@ and an explicit language after starting the CPU image; inspect completed word ti
 - **Forced alignment** — word-level timestamps via wav2vec2
 - **Speaker diarization** — speaker labels via pyannote.audio
 - **Speaker embeddings** — per-speaker voice fingerprints for cross-session identification
+
+## Capability contracts
+
+The app-facing [transcription](../../docs/protocols/transcription.md) and [diarization](../../docs/protocols/diarization.md) protocols describe provider behavior. This worker implements their audio-processing results through the transports documented here. Its input uses downloadable audio URLs; a direct desktop client needs a configured transfer destination. A connection check does not submit audio or load models.
+
+## Language metadata
+
+RunPod accepts `{"input":{"operation":"capabilities"}}` through `/runsync`. The handler returns `{"protocolVersion":1,"transcription":{"languages":[{"code":"en","name":"English"}]}}`, with the actual list derived from the installed WhisperX recognition and alignment metadata. Local HTTP exposes the same object through authenticated `GET /capabilities`. English-only `.en` models restrict the list to English; supported Chinese adds simplified and traditional script variants. `auto` is not advertised.
+
+Discovery runs before track validation and pipeline initialization. It downloads no weights and processes no recording. Metadata imports still require the installed runtime libraries, and RunPod may charge for worker startup/execution. Older deployed workers need an update; clients must show unavailable metadata rather than assume language support. See the [language discovery contract](../../docs/protocols/transcription.md#discover-supported-languages).
 
 ## Input
 

@@ -2,15 +2,11 @@ import AVFoundation
 import Foundation
 import SwiftUI
 
-/// Explicit opt-in: never load the normal library, credentials, or remote services.
+/// Uses a temporary library, silent playback, and no Keychain access.
 enum UIPreview {
     static let enabled =
         ProcessInfo.processInfo.arguments.contains("--ui-preview")
         || Bundle.main.object(forInfoDictionaryKey: "GdayUIPreview") as? Bool == true
-
-    static func requireLiveServices() throws {
-        if enabled { throw ServiceError("Online services are disabled in UI Preview.") }
-    }
 
     @MainActor static func makeStore() -> MeetingStore {
         guard enabled else { return MeetingStore() }
@@ -30,9 +26,55 @@ enum UIPreview {
             }
             _ = store.addPerson(name: "Preview Person")
             _ = store.addTag(name: "Preview")
+            if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
+                let arguments = ProcessInfo.processInfo.arguments
+                guard arguments.indices.contains(flag + 1), !arguments[flag + 1].hasPrefix("--") else {
+                    throw ServiceError("Add the configuration file path after --provider-test-env.")
+                }
+                let contents: String
+                do { contents = try String(contentsOfFile: arguments[flag + 1], encoding: .utf8) }
+                catch { throw ServiceError("Couldn’t read the provider test configuration file.") }
+                let providers = try testProviders(configuration: contents)
+                store.settings.serviceProviders = providers
+                store.settings.transcriptionProviderID = providers.first { $0.kind == .runpod }?.id
+            }
         }
         catch { store.errorMessage = "Could not prepare UI Preview: \(error.localizedDescription)" }
         return store
+    }
+
+    /// Parses only the explicitly supplied test file. Values are never logged or
+    /// passed through a shell, and provider API keys stay in memory in Preview.
+    static func testProviders(configuration: String) throws -> [ServiceProvider] {
+        var values: [String: String] = [:]
+        for line in configuration.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.hasPrefix("#"), let separator = trimmed.firstIndex(of: "=") else { continue }
+            let key = String(trimmed[..<separator]).trimmingCharacters(in: .whitespaces)
+            var value = String(trimmed[trimmed.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
+            if value.count >= 2, let first = value.first,
+                first == "\"" || first == "'", value.last == first
+            {
+                value = String(value.dropFirst().dropLast())
+            }
+            values[key] = value
+        }
+        func required(_ key: String) throws -> String {
+            guard let value = values[key], !value.isEmpty else {
+                throw ServiceError("Add \(key) to the provider test configuration file.")
+            }
+            return value
+        }
+        var filedrop = ServiceProvider(kind: .filedrop)
+        filedrop.endpoint = try required("FILE_DROP_URL")
+        filedrop.apiKey = try required("FILE_DROP_API_KEY")
+        filedrop.enabledCapabilities = [.fileTransfer]
+        var runpod = ServiceProvider(kind: .runpod)
+        runpod.endpoint = try required("RUNPOD_ENDPOINT_URL")
+        runpod.apiKey = try required("RUNPOD_API_KEY")
+        runpod.enabledCapabilities = [.transcription, .diarization]
+        runpod.uploadProviderID = filedrop.id
+        return [runpod, filedrop]
     }
 
     static func writeFixture(to url: URL, source: Int) throws {
@@ -57,6 +99,23 @@ enum UIPreview {
 struct PreviewContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewState private var appearance = 0
+    private static func recordingLevel(at time: Double, offset: Double) -> RecordingSourceLevel {
+        let phase = (time + offset).truncatingRemainder(dividingBy: 7)
+        let value = phase < 4 ? abs(sin(time * 5 + offset)) * 0.65 + 0.12 : 0
+        return RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: value * 60 - 60)
+    }
+    private static func recordingHistory(at time: Double) -> RecordingActivityHistory {
+        var history = RecordingActivityHistory()
+        let tick = floor(time * 10)
+        for index in 0..<102 {
+            let sampleTime = (tick - Double(101 - index)) / 10
+            history.append(
+                RecordingLevels(
+                    microphone: recordingLevel(at: sampleTime, offset: 0),
+                    system: recordingLevel(at: sampleTime, offset: 3)), at: sampleTime)
+        }
+        return history
+    }
     var body: some View {
         VStack(spacing: 0) {
             if UIPreview.enabled {
@@ -69,6 +128,28 @@ struct PreviewContainer<Content: View>: View {
                         Text("Dark").tag(2)
                     }.fixedSize()
                 }.font(.caption).padding(8).background(.quaternary)
+            }
+            if UIPreview.enabled {
+                DisclosureGroup("Recording visualization preview · synthetic levels") {
+                    TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+                        let now = ProcessInfo.processInfo.systemUptime
+                        let history = Self.recordingHistory(at: now)
+                        HStack(spacing: 26) {
+                            RecordingSourceMeter(
+                                title: "Microphone", symbol: "mic.fill",
+                                source: Self.recordingLevel(
+                                    at: now, offset: 0),
+                                saving: false, activity: history.bars(microphone: true),
+                                activityTime: history.bucketStart, tint: .accentColor)
+                            RecordingSourceMeter(
+                                title: "System Audio", symbol: "speaker.wave.2.fill",
+                                source: Self.recordingLevel(
+                                    at: now, offset: 3),
+                                saving: false, activity: history.bars(microphone: false),
+                                activityTime: history.bucketStart, tint: .teal)
+                        }.padding(18).frame(maxWidth: 500)
+                    }
+                }.padding(.horizontal, 12).padding(.vertical, 6)
             }
             content()
         }

@@ -1,3 +1,10 @@
+---
+title: Live transcription research
+date: 2026-09-26
+status: active
+scope: research
+---
+
 # Live transcription for Gday Meetings
 
 Research date: 2026-09-25. Scope: implementation research, primarily for the native Swift client; no feature implementation or recognition benchmark was performed. Repository baseline inspected: `9b988ca`. Recommendations and numerical acceptance targets below are engineering proposals, not measured results.
@@ -43,7 +50,7 @@ Do not route short audio fragments between English and Chinese engines based on 
 
 ### Existing language behavior that must change
 
-The Swift client currently sends `language: "auto"` in server transcription and exposes no meeting-language/script preference. The worker accepts one job-level language, strips regional suffixes for WhisperX, and applies OpenCC conversion for exact `zh-cn`/`zh-tw` inputs. Its pipeline aligns each track using the transcription result's single language. These are useful batch building blocks, but neither script conversion nor that alignment path proves bilingual recognition/alignment. [Swift submission](../apps/client-macos-swift/Sources/GdayMeetings/Core/ServerTranscription.swift), [Worker language handling](../apps/worker-audio-extraction/src/audio_extraction/handler.py), [Worker alignment](../apps/worker-audio-extraction/src/audio_extraction/pipeline.py)
+The Swift client stores a language in each meeting's recording configuration, initialized from **Settings → Recording → Default Language** (initially English, `en`), and snapshots it for each transcription attempt. It does not yet separate expected spoken languages from preferred script. The worker accepts one job-level language, strips regional suffixes for WhisperX, and applies OpenCC conversion for exact `zh-cn`/`zh-tw` inputs. Its pipeline aligns each track using the transcription result's single language. These are useful batch building blocks, but neither script conversion nor that alignment path proves bilingual recognition/alignment. [Swift submission](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift), [Worker language handling](../apps/worker-audio-extraction/src/audio_extraction/handler.py), [Worker alignment](../apps/worker-audio-extraction/src/audio_extraction/pipeline.py)
 
 Add separate persisted fields for expected spoken languages, optional dialect/locale, preferred script, and the provider's actual configuration. Map these through each adapter rather than passing one provider's language codes unchanged everywhere. Preserve raw recognized text alongside any display conversion. Conversion can alter character counts and phrases, so retain explicit mappings for timing/edit offsets; do not attach old character offsets blindly to converted text. For mixed-language batch alignment, evaluate per-span alignment or preserve coarser trustworthy timing when an aligner cannot represent a span. Missing alignment must not delete correctly recognized text.
 
@@ -66,8 +73,8 @@ Paths below are relative to the repository root. Findings are from source inspec
 | [SystemAudioCapture.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/SystemAudioCapture.swift) | Core Audio process tap, C ring buffer, consumer queue; reusable stereo PCM buffer | Keep inference and allocations out of the IOProc; copy before the consumer reuses its buffer |
 | [TimedAudioWriter.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/TimedAudioWriter.swift) | Maps host time to frames; fills gaps and trims overlaps | Recognition must use the same mapping to remain aligned with saved audio |
 | [MeetingStore.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingStore.swift) | Owns recording lifecycle; auto-transcription runs after stop | Add a separate live-session lifecycle and finalization state |
-| [MeetingIntelligence.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingIntelligence.swift) | Direct file transcription, ten-minute excerpts, whole transcript replacement | This is a batch path; shortening excerpts alone will not create reliable streaming |
-| [ServerTranscription.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/ServerTranscription.swift) | Durable upload/job checkpoints; replaces transcript on completion | Retain retry semantics; add revision-aware acceptance before combining with live drafts |
+| [MeetingIntelligence.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingIntelligence.swift) | Explicit provider selection for batch transcription and summaries | Add a separate streaming contract; the removed direct endpoint path is not a streaming foundation |
+| [ProviderTranscription.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift) | Durable provider/upload/job checkpoints; preserves transcript edits and retains conflicting results | Retain retry semantics; extend revision handling before combining with live drafts |
 | [Models.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/Models.swift) | Segment ID, start/end, speaker, text; no word timing, revisions, or finality | Extend storage deliberately rather than treating each partial as a new segment |
 | [RecordingWorkspaceView.swift](../apps/client-macos-swift/Sources/GdayMeetings/UI/RecordingWorkspaceView.swift) | Recording configuration/workspace | Add live text with synthetic preview events |
 | [Worker](../apps/worker-audio-extraction/README.md) | File jobs; WhisperX/faster-whisper, alignment, pyannote diarization | Suitable for post-processing; no current continuous-audio transport |

@@ -3,6 +3,14 @@ import SwiftUI
 struct ServerLibraryView: View {
     @EnvironmentObject private var store: MeetingStore
     @ObservedObject private var server = GdayServerService.shared
+    @Environment(\.openSettings) private var openSettings
+    @AppStorage("settingsTab") private var settingsTab = "recording"
+    private var provider: ServiceProvider? {
+        store.settings.serviceProviders.first {
+            $0.kind == .gdayWebsite && $0.supports(.search)
+                && (try? ServiceHTTP.origin($0.endpoint).absoluteString) == server.origin
+        }
+    }
     @ViewState private var query = ""
     @ViewState private var results: [ServerMeeting] = []
     @ViewState private var searching = false
@@ -11,13 +19,16 @@ struct ServerLibraryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Server Library").font(.largeTitle)
-            if !server.connected {
+            if !server.connected || provider == nil {
                 ContentUnavailableView {
-                    Label("Connect Your Server", systemImage: "network")
+                    Label("Set Up Website Search", systemImage: "network")
                 } description: {
-                    Text("Sign in to your Gday server in Settings to search its meeting library.")
+                    Text("Add a Gday Meetings website, sign in, and enable Search in Service Providers.")
                 } actions: {
-                    SettingsLink()
+                    Button("Open Service Providers") {
+                        settingsTab = "providers"
+                        openSettings()
+                    }
                 }
             }
             else {
@@ -50,14 +61,20 @@ struct ServerLibraryView: View {
         }.padding(20)
     }
     private func search() {
-        guard !searching else { return }
+        guard !searching, let provider else { return }
         searching = true
         Task {
             defer {
                 searching = false
                 searched = true
             }
-            do { results = try await server.search(query: query) }
+            do {
+                let found = try await GdaySearchProvider(provider: provider).search(query: query)
+                guard self.provider?.id == provider.id else { return }
+                results = found.map {
+                    ServerMeeting(id: $0.meetingID, externalID: $0.externalID, title: $0.title, transcript: $0.excerpt)
+                }
+            }
             catch {
                 store.errorMessage = error.localizedDescription
             }

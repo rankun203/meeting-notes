@@ -27,6 +27,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 struct Meeting: Codable, Identifiable, Equatable {
     var id = UUID()
     var title = "Untitled Meeting"
+    var language = "en"
     var createdAt = Date()
     var duration: TimeInterval = 0
     var notes = ""
@@ -38,10 +39,11 @@ struct Meeting: Codable, Identifiable, Equatable {
     var chat: [ChatMessage] = []
     var todos: [MeetingTodo] = []
     var recordingProfile: RecordingProfile?
-    var serverTranscription: ServerTranscriptionAttempt?
+    var transcriptionAttempt: ProviderTranscriptionAttempt?
     enum CodingKeys: String, CodingKey {
-        case id, title, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat, todos,
-            recordingProfile, serverTranscription
+        case id, title, language, createdAt, duration, notes, summary, transcript, personIDs, tagIDs, audioFiles, chat,
+            todos,
+            recordingProfile, transcriptionAttempt
     }
 
 }
@@ -65,12 +67,10 @@ enum RecordingFormat: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable, Equatable {
-    var llmBaseURL = "https://api.openai.com/v1"
-    var llmModel = "gpt-4o-mini"
-    var llmAPIKey = ""
-    var transcriptionBaseURL = "https://api.openai.com/v1"
-    var transcriptionModel = "whisper-1"
-    var transcriptionAPIKey = ""
+    var serviceProviders: [ServiceProvider] = []
+    var transcriptionProviderID: UUID?
+    var summaryProviderID: UUID?
+    var defaultLanguage = "en"
     var autoTranscribe = false
     var captureSystemAudio = true
     var captureMicrophone = true
@@ -78,7 +78,8 @@ struct AppSettings: Codable, Equatable {
     var summarizationPrompt =
         "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     enum CodingKeys: String, CodingKey {
-        case llmBaseURL, llmModel, transcriptionBaseURL, transcriptionModel, autoTranscribe, captureSystemAudio,
+        case serviceProviders, transcriptionProviderID, summaryProviderID, defaultLanguage, autoTranscribe,
+            captureSystemAudio,
             captureMicrophone, recordingFormat, summarizationPrompt
     }
 
@@ -140,6 +141,7 @@ extension Meeting {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Untitled Meeting"
+        language = try values.decodeIfPresent(String.self, forKey: .language) ?? "en"
         createdAt = try values.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         duration = try values.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
         notes = try values.decodeIfPresent(String.self, forKey: .notes) ?? ""
@@ -151,7 +153,8 @@ extension Meeting {
         chat = try values.decodeIfPresent([ChatMessage].self, forKey: .chat) ?? []
         todos = try values.decodeIfPresent([MeetingTodo].self, forKey: .todos) ?? []
         recordingProfile = try values.decodeIfPresent(RecordingProfile.self, forKey: .recordingProfile)
-        serverTranscription = try values.decodeIfPresent(ServerTranscriptionAttempt.self, forKey: .serverTranscription)
+        transcriptionAttempt = try values.decodeIfPresent(
+            ProviderTranscriptionAttempt.self, forKey: .transcriptionAttempt)
     }
 }
 
@@ -180,11 +183,10 @@ extension AppSettings {
     init(from decoder: Decoder) throws {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        llmBaseURL = try values.decodeIfPresent(String.self, forKey: .llmBaseURL) ?? "https://api.openai.com/v1"
-        llmModel = try values.decodeIfPresent(String.self, forKey: .llmModel) ?? "gpt-4o-mini"
-        transcriptionBaseURL =
-            try values.decodeIfPresent(String.self, forKey: .transcriptionBaseURL) ?? "https://api.openai.com/v1"
-        transcriptionModel = try values.decodeIfPresent(String.self, forKey: .transcriptionModel) ?? "whisper-1"
+        serviceProviders = try values.decodeIfPresent([ServiceProvider].self, forKey: .serviceProviders) ?? []
+        transcriptionProviderID = try values.decodeIfPresent(UUID.self, forKey: .transcriptionProviderID)
+        summaryProviderID = try values.decodeIfPresent(UUID.self, forKey: .summaryProviderID)
+        defaultLanguage = try values.decodeIfPresent(String.self, forKey: .defaultLanguage) ?? "en"
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true

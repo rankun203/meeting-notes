@@ -1,3 +1,10 @@
+---
+title: Swift macOS client instructions
+date: 2026-09-26
+status: active
+scope: swift-app
+---
+
 # Swift macOS client
 
 Repository-root instructions still apply.
@@ -10,6 +17,9 @@ Read the relevant documents before changing the app:
 - [Audio design](docs/AUDIO_DESIGN.md): capture architecture, permissions, encoding, and audio lifecycle.
 - [UI design](docs/UI_DESIGN.md): Liquid Glass defaults, accessibility, interaction, and layout rules.
 - [UI Preview](docs/UI_PREVIEW.md): isolated UI validation, synthetic fixtures, and preview versus full-app behavior.
+- [File transfer](../../docs/protocols/file-transfer.md): temporary audio uploads for URL-based workers.
+- [Service provider protocols](../../docs/protocols/README.md): connection checks and shared capability rules.
+- [Transcription](../../docs/protocols/transcription.md), [Speaker Labels](../../docs/protocols/diarization.md), [Summaries](../../docs/protocols/summarization.md), [Search](../../docs/protocols/search.md), and [Playback](../../docs/protocols/playback.md): capability contracts and adapter limits.
 - [Audio dependencies](ThirdParty/README.md): pinned offline source builds, licenses, and dependency upgrades.
 - [Repository worklogs](../../docs/worklogs/): implementation decisions, validation results, technical debt, and outstanding issues; consult recent Swift entries for ongoing work.
 
@@ -24,4 +34,4 @@ Keep this index complete: whenever app documentation is added, moved, or renamed
 - **Liquid Glass is the default design direction for this app.** Read and follow [UI_DESIGN.md](docs/UI_DESIGN.md) before creating or changing UI, including UI Preview, Settings, sheets, navigation, and playback controls.
 - Prefer current public SwiftUI/AppKit controls and Apple's Human Interface Guidelines. Use Apple Music's capsule tabs and soft sidebar selection as visual references, not private APIs or a promise of identical system-app rendering.
 - Preserve the declared minimum macOS version with availability-checked native fallbacks. Do not raise the minimum OS version or introduce deprecated APIs just to obtain a visual effect.
-- Validate changed UI in isolated UI Preview, including appearance, keyboard access, and layout stability. Document any untested behavior or compatibility compromise; building successfully does not establish visual correctness.
+- Validate changed UI in isolated UI Preview, including appearance, keyboard access, and layout stability. Preview supports real online provider checks and deliberately started jobs; keep Keychain access, real capture, and hardware playback disabled so automated testing does not require system prompts. Use synthetic content by default, and never upload it merely by opening or saving settings. Document any untested behavior or compatibility compromise; building successfully does not establish visual correctness.

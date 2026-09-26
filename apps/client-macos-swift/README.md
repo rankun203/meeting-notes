@@ -1,3 +1,10 @@
+---
+title: Swift macOS client
+date: 2026-09-26
+status: active
+scope: swift-app
+---
+
 # Gday Meetings — SwiftUI client
 
 A native macOS meeting app built with SwiftUI, AppKit, AVFoundation, Core Audio, Security, and Foundation. Ogg Opus playback uses statically linked libopusfile, libopus, and libogg and does not launch the Rust client or a browser UI.
@@ -11,12 +18,12 @@ The same SwiftUI client supports two explicit modes. Commands below run from the
 | Build only | `make build-macos` | `make build-macos-preview` |
 | Build and launch | `make start-macos` | `make start-macos-preview` |
 | Library | Your persistent meetings library | Fresh temporary library with synthetic recordings |
-| Credentials | Reads saved API keys and sign-in tokens from Keychain; macOS may prompt | No Keychain access |
+| Credentials | Reads saved API keys and sign-in tokens from Keychain; macOS may prompt | No Keychain access; enter test credentials or load them explicitly into memory |
 | Audio | Real playback and recording | Silent playback; recording disabled |
-| Online services | Configured transcription, AI, and server services available | Service network requests blocked |
-| Purpose | Normal use and coordinated hardware/service testing | Independent layout and interaction testing |
+| Online services | Configured transcription, AI, and server services available | Real provider checks and jobs with configured test credentials |
+| Purpose | Normal use and coordinated hardware/service testing | UI and service-flow testing with an isolated library |
 
-UI Preview displays a visible banner and offers System/Light/Dark appearance controls. Use it for UI validation without passwords or real audio. It does not validate capture permissions, audible output, or server behavior. See [UI Preview details and signing](docs/UI_PREVIEW.md).
+UI Preview displays a visible banner and offers System/Light/Dark appearance controls. Use it for UI validation and provider testing without Keychain prompts or audio hardware. Provider actions can use the network and upload selected content. It does not validate capture permissions or audible output. See [UI Preview details and signing](docs/UI_PREVIEW.md).
 
 Build outputs:
 
@@ -82,16 +89,31 @@ Run `bash apps/client-macos-swift/scripts/build-audio-dependencies.sh` once from
 - Waveforms are cached locally and load independently of playback. Long-file overviews sample up to 1,024 frames per time bucket (1,200 buckets), so brief sounds between samples may be absent. Cached envelopes can appear while audio is still preparing. Playback does not wait for waveform generation. Ogg Opus decodes incrementally with libopusfile; native formats use incremental AVAudioFile reads. All tracks share one AVAudioEngine clock and a fixed-size buffer, with no whole-recording PCM conversion.
 - Edit transcripts, rename speakers, write notes, and generate/edit summaries and action items.
 - Organize meetings with people and tags, and chat using meeting, person or tag context.
-- Configure a Gday Meetings server with browser-based OAuth sign-in, or use an OpenAI-compatible transcription endpoint. Summaries and chat use a separately configured OpenAI-compatible language model.
+- Set the language when creating a meeting, and edit it in the meeting's recording settings. **Settings → Recording → Default Language** supplies the initial value for new meetings and starts as English. Changing it leaves existing meetings unchanged. Language choices come from the selected transcription provider. If its list is unavailable, the app keeps the saved language and reports the discovery problem instead of supplying a built-in list. Transcription keeps the language chosen when its attempt started; later language changes apply to future attempts.
+- Add connections in **Settings → Service Providers**. Each provider has its own address, authentication, capabilities, and connection status. Choose task defaults in **Transcription** and **Summaries**. Summaries and chat use an OpenAI-compatible language-model provider.
 - Export meeting text as JSON or Markdown, import text archives, or copy recordings from the Rust client's library using **File → Import Existing Gday Library**. JSON text exports do not embed audio.
 - Search server meetings and import their transcript text, or use **Meeting Actions → Archive to Server** to retain a verified server snapshot of a local meeting and its audio.
 - Use the menu bar's **Start Recording** to record immediately with saved settings. Hold **Option** to reveal **New Recording…** and configure the session first (on macOS 14, Option-click **Start Recording**). Use **Command-N** for a meeting, **Command-O** for audio import, **Command-Shift-R** for recording, and **Command-comma** for Settings.
 
-Server transcription checkpoints its upload inputs, stable attempt key, and task ID locally. If the app exits or a request fails, choose **Resume Transcription** to check the same durable job. The server and worker run separately; installing this client does not install them. A working server must have a worker configured before it can transcribe.
+Website transcription checkpoints its upload inputs, stable attempt key, and task ID locally. If the app exits or a request fails, choose **Resume Transcription** to check the same durable job. The server and worker run separately; installing this client does not install them. A working server must have a worker configured before it can transcribe.
 
-Direct transcription follows the compatible `/audio/transcriptions` API. Tracks are split into ten-minute AAC excerpts, with timestamps restored to the original timeline; each request is limited to 25 MB. Server uploads accept up to 500 MB, subject to the server's configured lower limit. The client converts unsupported native audio containers and large PCM tracks to M4A for server upload. AI requests send the selected context to the provider configured in Settings.
+The RunPod provider uses the audio worker's URL-based job API. Its endpoint and API key are entered in its provider panel; there is no default endpoint. Select a configured **Filedrop** provider as the RunPod audio upload destination. Transcription sends the selected recording to Filedrop, then passes its temporary download URL to RunPod. Anyone with that link can download the audio until it expires. The provider panels explain upload destinations, link expiry, and applicable RunPod charges. Once configured, **Transcribe** starts uploading and processing in one click, without another confirmation dialog. Website uploads accept up to 500 MB, subject to the website's configured lower limit. The client converts unsupported native audio containers and large PCM tracks to M4A for server upload. AI requests send the selected context to the provider configured in Settings.
 
 Server archives are immutable snapshots. Repeating an archive resumes or verifies the original snapshot; it does not synchronize later edits. Local audio is retained. Search imports contain transcript text because the search API does not return the original audio or editable segment structure.
+
+### Service provider contracts
+
+The [protocol index](../../docs/protocols/README.md) defines common connection checks and links to each capability. Saving a provider and opening its panel check its current connection without submitting meeting content. A successful check confirms access to the checked route; transcription still depends on worker configuration and reachable audio. Filedrop checks health, limits, and the API key. Its credential probe sends an empty request that is rejected before a file is created. See the [file-transfer contract](../../docs/protocols/file-transfer.md).
+
+### Optional live provider test
+
+`ProviderLiveTests` exercises the Filedrop upload and RunPod transcription flow with generated speech in an isolated temporary library. Ordinary test runs skip it. To run it deliberately, provide a local, untracked `.env` in this app directory containing `RUNPOD_ENDPOINT_URL`, `RUNPOD_API_KEY`, `FILE_DROP_URL`, and `FILE_DROP_API_KEY`, then run from the repository root:
+
+```sh
+GDAY_PROVIDER_LIVE_TEST=1 make test-macos
+```
+
+This test uploads synthetic speech and submits a billed RunPod job. It checks connection responses, local audio import, conversion, upload, transcription text, timestamps, and local file preservation. It does not test speaker-label accuracy or the Settings UI. The app does not load `.env` during normal use; credentials are entered in Service Providers. Do not commit the test credential file or include its values in logs.
 
 ### Differences from the Rust client
 

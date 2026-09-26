@@ -44,6 +44,7 @@ extension MeetingStore {
             guard let metadata = try JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as? [String: Any]
             else { continue }
             var meeting = Meeting(title: metadata["name"] as? String ?? folder.lastPathComponent)
+            meeting.language = metadata["language"] as? String ?? "en"
             meeting.notes = metadata["notes"] as? String ?? ""
             meeting.duration = metadata["duration_secs"] as? Double ?? 0
             for name in metadata["tags"] as? [String] ?? [] {

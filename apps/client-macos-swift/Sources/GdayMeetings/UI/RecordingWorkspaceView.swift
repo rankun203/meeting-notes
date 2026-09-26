@@ -8,6 +8,7 @@ struct RecordingSetupView: View {
     @Environment(\.dismiss) private var dismiss
     var onStarted: (UUID) -> Void = { _ in }
     @ViewState private var title = ""
+    @ViewState private var language = "en"
     @ViewState private var microphone = true
     @ViewState private var systemAudio = true
     @ViewState private var voiceProcessing = false
@@ -50,6 +51,7 @@ struct RecordingSetupView: View {
             voiceProcessing = RecordingAudioRoute.defaultVoiceProcessing()
             voiceProcessingOverride = nil
             format = store.settings.recordingFormat
+            language = store.settings.defaultLanguage
         }
     }
 
@@ -74,6 +76,8 @@ struct RecordingSetupView: View {
                     .textFieldStyle(.roundedBorder).accessibilityLabel("Meeting Title").disabled(
                         store.isStartingRecording)
             }
+            MeetingLanguagePicker(selection: $language)
+                .disabled(store.isStartingRecording)
             VStack(spacing: 0) {
                 sourceToggle(
                     "Microphone", subtitle: "Your voice and the room around you", symbol: "mic.fill", value: $microphone
@@ -153,7 +157,7 @@ struct RecordingSetupView: View {
                     let previousError = store.errorMessage
                     Task {
                         await store.startRecording(
-                            title: title, microphoneEnabled: microphone, systemEnabled: systemAudio,
+                            title: title, language: language, microphoneEnabled: microphone, systemEnabled: systemAudio,
                             format: format, voiceProcessingEnabled: voiceProcessingOverride)
                         if let id = store.recordingID {
                             onStarted(id)
@@ -231,10 +235,14 @@ struct RecordingWorkspaceView: View {
             HStack(spacing: 26) {
                 RecordingSourceMeter(
                     title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone,
-                    saving: store.isFinalizingRecording)
+                    saving: store.isFinalizingRecording,
+                    activity: store.recordingActivity.bars(microphone: true),
+                    activityTime: store.recordingActivity.bucketStart, tint: .accentColor)
                 RecordingSourceMeter(
                     title: "System Audio", symbol: "speaker.wave.2.fill", source: store.recordingLevels.system,
-                    saving: store.isFinalizingRecording)
+                    saving: store.isFinalizingRecording,
+                    activity: store.recordingActivity.bars(microphone: false),
+                    activityTime: store.recordingActivity.bucketStart, tint: .teal)
             }
         }
         .padding(18)
@@ -285,11 +293,16 @@ struct RecordingDisclosureStyle: DisclosureGroupStyle {
     }
 }
 
-private struct RecordingSourceMeter: View {
+struct RecordingSourceMeter: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     let title: String
     let symbol: String
     let source: RecordingSourceLevel
     let saving: Bool
+    let activity: [Double]
+    let activityTime: TimeInterval?
+    let tint: Color
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             // HIG Feedback / Accessibility: use a stable symbol slot for changing
@@ -299,16 +312,25 @@ private struct RecordingSourceMeter: View {
             HStack(spacing: 6) {
                 sourceLabel.lineLimit(1)
                 Spacer(minLength: 0)
-                Image(systemName: statusSymbol)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
-                    .help(statusText)
+                RecordingActivitySurface(
+                    bars: activity, bucketStart: activityTime, tint: tint,
+                    animate: source.enabled && source.hasSamples && !source.stale && !saving && !reduceMotion
+                        && scenePhase == .active
+                )
+                .frame(minWidth: 40, idealWidth: 110, maxWidth: 110)
+                .frame(height: 24)
+                .help("Last 10 seconds · " + statusText)
+                .overlay(alignment: .trailing) {
+                    if saving || !source.enabled || !source.hasSamples || source.stale {
+                        Image(systemName: statusSymbol).font(.caption2).foregroundStyle(.secondary)
+                            .padding(2).background(.background, in: Circle())
+                    }
+                }
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Capsule().fill(.quaternary)
-                    Capsule().fill(source.peakDB > -1 ? Color.orange : Color.accentColor)
+                    Capsule().fill(source.peakDB > -1 ? Color.orange : tint)
                         .frame(width: geometry.size.width * (saving ? 0 : source.level))
                 }
             }.frame(height: 7)

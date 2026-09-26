@@ -1,6 +1,21 @@
+---
+title: Repository instructions
+date: 2026-09-26
+status: active
+scope: repository-workflow
+---
+
 # Repository workflow
 
+## Writing (all apps and documents)
+
+- Before making any repository edit, read [docs/writing.md](docs/writing.md).
 - Every document must include front matter.
+- All UI text and documentation across every app must follow Apple's clarity guidance as summarized in that document. This includes labels, messages, accessibility text, examples, design documents, and worklogs.
+- Review all added or changed wording against the guide before finishing. When editing an existing document or UI flow, check its surrounding wording for consistency. Use concrete descriptions and actions; remove vague reassurance and promotional filler.
+
+## Branches and validation
+
 - This is a single-maintainer repository. Work directly on the default branch (`master`).
 - Do not create feature branches or pull requests unless the user explicitly asks for one.
 - Use Conventional Commits format for commit messages (for example, `feat: add export support` or `fix(audio): handle device loss`).

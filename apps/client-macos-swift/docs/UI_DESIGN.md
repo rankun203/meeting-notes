@@ -1,3 +1,10 @@
+---
+title: UI design
+date: 2026-09-26
+status: active
+scope: swift-app-ui
+---
+
 # UI design: Liquid Glass by default
 
 Liquid Glass is the design standard for all future UI work in the Swift macOS client. Apply it when adding or revising screens and controls. This is a design policy, not a claim that every existing view has already been migrated.
@@ -28,7 +35,7 @@ Liquid Glass is the design standard for all future UI work in the Swift macOS cl
 
 ## Validation for UI changes
 
-Use `make start-macos-preview` for independent UI checks without credentials, real capture, or uploads. Verify the changed interaction in Light, Dark, and System appearance; small and large windows; active and inactive window states; and keyboard navigation. For navigation or player changes, also check sidebar transitions, persistent playback, menus, and multi-track scrubbing as applicable. Include accessibility preference checks when introducing custom material or animation.
+Use `make start-macos-preview` for independent UI checks with an isolated library and synthetic fixtures. Preview avoids Keychain prompts, real capture, and hardware playback. It supports real provider checks and deliberately started service jobs with test credentials; opening or saving settings does not upload content. Verify the changed interaction in Light, Dark, and System appearance; small and large windows; active and inactive window states; and keyboard navigation. For navigation or player changes, also check sidebar transitions, persistent playback, menus, and multi-track scrubbing as applicable. Include accessibility preference checks when introducing custom material or animation.
 
 Report passed, failed, and untested checks accurately. Preserve existing recordings and coordinate separately before testing real audio. See [UI Preview](UI_PREVIEW.md) and [audio design](AUDIO_DESIGN.md).
 

@@ -1,0 +1,408 @@
+import AVFoundation
+import Foundation
+
+struct ProviderTranscriptionAttempt: Codable, Equatable {
+    let providerID: UUID
+    let endpoint: String
+    let kind: ServiceProviderKind
+    let title: String
+    var idempotencyKey = UUID().uuidString
+    var inputs: [ServerTrackInput] = []
+    var taskID: String?
+    var originalTranscript: [TranscriptSegment] = []
+    var result: [TranscriptSegment]?
+    var submissionUncertain = false
+    var diarize = false
+    var uploadProviderID: UUID?
+    var uploadEndpoint: String?
+    var uploadsExpireAt: Date?
+    var language = "en"
+    var failure: String?
+}
+
+extension ProviderTranscriptionAttempt {
+    init(provider: ServiceProvider, meeting: Meeting) {
+        self.init(
+            providerID: provider.id, endpoint: provider.endpoint, kind: provider.kind, title: meeting.title,
+            originalTranscript: meeting.transcript, diarize: provider.enabledCapabilities.contains(.diarization),
+            language: meeting.language)
+    }
+}
+
+extension MeetingStore {
+    func transcribeWithProvider(id: UUID, provider: ServiceProvider) async throws {
+        guard libraryWritable else {
+            throw ServiceError("Restore the local library before transcribing. Job progress must be saved first.")
+        }
+        guard let meeting = meetings.first(where: { $0.id == id }) else { return }
+        var attempt =
+            meeting.transcriptionAttempt
+            ?? ProviderTranscriptionAttempt(provider: provider, meeting: meeting)
+        if attempt.taskID == nil && attempt.result == nil {
+            try TranscriptionLanguage.validate(attempt.language)
+        }
+        if let failure = attempt.failure {
+            throw ServiceError(
+                failure + " Choose Discard Pending Request in Meeting Actions before starting another transcription.")
+        }
+        if let result = attempt.result {
+            try saveTranscriptionResult(result, attempt: attempt, meetingID: id)
+            return
+        }
+        if attempt.taskID == nil {
+            try await validateTranscriptionLanguage(attempt.language, for: provider)
+        }
+        switch provider.kind {
+        case .gdayWebsite:
+            let server = GdayServerService.shared
+            let origin = try ServiceHTTP.origin(provider.endpoint).absoluteString
+            guard server.connected, server.origin == origin else {
+                throw ServiceError("Sign in to \(provider.name) in Service Providers.")
+            }
+            try saveTranscriptionAttempt(attempt, meetingID: id)
+            if attempt.taskID == nil {
+                try await server.ensureTranscriptionAvailable()
+                let files = audioURLs(for: meeting)
+                guard !files.isEmpty else { throw ServiceError("This meeting has no audio to transcribe.") }
+                for (index, file) in files.enumerated() where index >= attempt.inputs.count {
+                    statusMessage = "Uploading audio \(index + 1) of \(files.count) to \(provider.name)…"
+                    let prepared = try await prepareServerAudio(file)
+                    defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
+                    let url = try await server.upload(file: prepared.url)
+                    let isMic = file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
+                    attempt.inputs.append(
+                        ServerTrackInput(
+                            url: url, trackName: "track\(index)",
+                            sourceType: isMic ? "mic" : "system", channels: prepared.channels))
+                    try saveTranscriptionAttempt(attempt, meetingID: id)
+                }
+                attempt.taskID = try await server.submit(
+                    externalID: id.uuidString, title: attempt.title, inputs: attempt.inputs, language: attempt.language,
+                    diarize: attempt.diarize, idempotencyKey: attempt.idempotencyKey)
+                try saveTranscriptionAttempt(attempt, meetingID: id)
+            }
+            guard let taskID = attempt.taskID else { throw ServiceError("The provider returned no job ID.") }
+            for _ in 0..<150 {
+                try Task.checkCancellation()
+                statusMessage = "Transcribing with \(provider.name)…"
+                switch try await server.task(id: taskID) {
+                case .pending: try await Task.sleep(for: .seconds(2))
+                case .failed(let message):
+                    attempt.failure = message
+                    try saveTranscriptionAttempt(attempt, meetingID: id)
+                    throw ServiceError(message + " Discard the pending request before starting another transcription.")
+                case .complete(let segments):
+                    let result = segments.map { segment in
+                        TranscriptSegment(
+                            start: segment.start, end: segment.end,
+                            speaker: segment.speaker
+                                ?? (attempt.inputs.first { $0.trackName == segment.track }?.sourceType == "mic"
+                                    ? "You" : "Speaker"),
+                            text: segment.text)
+                    }
+                    attempt.result = result
+                    try saveTranscriptionAttempt(attempt, meetingID: id)
+                    try saveTranscriptionResult(result, attempt: attempt, meetingID: id)
+                    return
+                }
+            }
+            statusMessage = "Transcription is still running. Resume Transcription checks the same job."
+        case .runpod:
+            try await transcribeOnRunPod(id: id, provider: provider, meeting: meeting, attempt: &attempt)
+        case .openAICompatible, .filedrop:
+            throw ServiceError("This provider supports summaries, not transcription.")
+        }
+    }
+
+    private func transcribeOnRunPod(
+        id: UUID, provider: ServiceProvider, meeting: Meeting,
+        attempt: inout ProviderTranscriptionAttempt
+    ) async throws {
+        let runpod = RunPodProvider(provider: provider)
+        if attempt.taskID == nil {
+            guard !attempt.submissionUncertain else {
+                throw ServiceError(
+                    "RunPod may have accepted the previous request. Check its job history before starting another transcription."
+                )
+            }
+            let upload = try uploadProvider(for: provider, attempt: attempt)
+            let filedrop = FiledropProvider(provider: upload)
+            _ = try await ProviderConnectionChecker.check(provider)
+            _ = try await filedrop.checkConnection()
+            let info = try await filedrop.info()
+            guard let expiry = attempt.uploadsExpireAt, expiry > Date() else {
+                attempt.inputs = []
+                attempt.uploadsExpireAt = nil
+                attempt.uploadProviderID = upload.id
+                attempt.uploadEndpoint = upload.endpoint
+                try saveTranscriptionAttempt(attempt, meetingID: id)
+                return try await uploadAndSubmitRunPod(
+                    id: id, provider: provider, upload: upload,
+                    filedrop: filedrop, info: info, meeting: meeting, attempt: &attempt)
+            }
+            return try await uploadAndSubmitRunPod(
+                id: id, provider: provider, upload: upload,
+                filedrop: filedrop, info: info, meeting: meeting, attempt: &attempt)
+        }
+        try await pollRunPod(id: id, runpod: runpod, attempt: &attempt)
+    }
+
+    func uploadProvider(for provider: ServiceProvider, attempt: ProviderTranscriptionAttempt? = nil) throws
+        -> ServiceProvider
+    {
+        let id = attempt?.uploadProviderID ?? provider.uploadProviderID
+        guard let upload = settings.serviceProviders.first(where: { $0.id == id }),
+            upload.kind == .filedrop, upload.supports(.fileTransfer)
+        else {
+            throw ServiceError("Add and enable a Filedrop provider, then select it under RunPod → Audio Uploads.")
+        }
+        if let endpoint = attempt?.uploadEndpoint, endpoint != upload.endpoint {
+            throw ServiceError("Restore the original Filedrop address to resume this transcription.")
+        }
+        return upload
+    }
+
+    private func uploadAndSubmitRunPod(
+        id: UUID, provider: ServiceProvider, upload: ServiceProvider,
+        filedrop: FiledropProvider, info: FiledropInfo, meeting: Meeting,
+        attempt: inout ProviderTranscriptionAttempt
+    ) async throws {
+        let files = audioURLs(for: meeting)
+        guard !files.isEmpty else { throw ServiceError("This meeting has no audio to transcribe.") }
+        attempt.uploadProviderID = upload.id
+        attempt.uploadEndpoint = upload.endpoint
+        try saveTranscriptionAttempt(attempt, meetingID: id)
+        for (index, file) in files.enumerated() where index >= attempt.inputs.count {
+            statusMessage = "Uploading audio \(index + 1) of \(files.count) to \(upload.name)…"
+            let prepared = try await prepareFiledropAudio(file, allowedExtensions: info.allowedExtensions)
+            defer { if prepared.temporary { try? FileManager.default.removeItem(at: prepared.url) } }
+            let receipt = try await filedrop.upload(file: prepared.url)
+            let isMic = file.deletingPathExtension().lastPathComponent.lowercased().contains("mic")
+            attempt.inputs.append(
+                ServerTrackInput(
+                    url: receipt.url, trackName: "track\(index)",
+                    sourceType: isMic ? "mic" : "system_mix", channels: prepared.channels))
+            attempt.uploadsExpireAt = min(attempt.uploadsExpireAt ?? receipt.expiresAt, receipt.expiresAt)
+            try saveTranscriptionAttempt(attempt, meetingID: id)
+        }
+        guard let expiry = attempt.uploadsExpireAt, expiry.timeIntervalSinceNow > 30 else {
+            throw ServiceError(
+                "The uploaded audio links expire too soon. Increase Filedrop's retention period, then retry.")
+        }
+        // RunPod offers no submit idempotency guarantee. Persist uncertainty before
+        // sending so a lost response never causes an automatic duplicate paid job.
+        let runpod = RunPodProvider(provider: provider)
+        let tracks = attempt.inputs.map {
+            ProviderAudioTrack(url: $0.url, trackName: $0.trackName, sourceType: $0.sourceType)
+        }
+        _ = try runpod.submissionRequest(tracks: tracks, language: attempt.language, diarize: attempt.diarize)
+        attempt.submissionUncertain = true
+        try saveTranscriptionAttempt(attempt, meetingID: id)
+        attempt.taskID = try await runpod.submit(tracks: tracks, language: attempt.language, diarize: attempt.diarize)
+        attempt.submissionUncertain = false
+        try saveTranscriptionAttempt(attempt, meetingID: id)
+        try await pollRunPod(id: id, runpod: runpod, attempt: &attempt)
+    }
+
+    private func pollRunPod(
+        id: UUID, runpod: RunPodProvider,
+        attempt: inout ProviderTranscriptionAttempt
+    ) async throws {
+        guard let jobID = attempt.taskID else { throw ServiceError("The transcription has no RunPod job ID.") }
+        for _ in 0..<150 {
+            try Task.checkCancellation()
+            statusMessage = "Transcribing with \(runpod.provider.name)…"
+            switch try await runpod.status(jobID: jobID, expectedTracks: Set(attempt.inputs.map(\.trackName))) {
+            case .pending: try await Task.sleep(for: .seconds(2))
+            case .failed(let message):
+                attempt.failure = message
+                try saveTranscriptionAttempt(attempt, meetingID: id)
+                throw ServiceError(message + " Discard the pending request before starting another transcription.")
+            case .complete(let segments):
+                let expected = Set(attempt.inputs.map(\.trackName))
+                guard segments.allSatisfy({ expected.contains($0.track) }) else {
+                    throw ServiceError("RunPod returned a transcript for an unexpected audio track.")
+                }
+                let result = segments.map { segment in
+                    let source = attempt.inputs.first { $0.trackName == segment.track }?.sourceType
+                    return TranscriptSegment(
+                        start: segment.start, end: segment.end,
+                        speaker: segment.speaker ?? (source == "mic" ? "You" : "Speaker"), text: segment.text)
+                }
+                attempt.result = result
+                try saveTranscriptionAttempt(attempt, meetingID: id)
+                try saveTranscriptionResult(result, attempt: attempt, meetingID: id)
+                return
+            }
+        }
+        statusMessage =
+            "Transcription is still running. Resume Transcription checks the same job. RunPod keeps completed results for 30 minutes."
+    }
+
+    func saveTranscriptionAttempt(_ attempt: ProviderTranscriptionAttempt, meetingID: UUID) throws {
+        guard var latest = meetings.first(where: { $0.id == meetingID }) else {
+            throw ServiceError("This meeting was deleted.")
+        }
+        latest.transcriptionAttempt = attempt
+        errorMessage = nil
+        updateMeeting(latest)
+        if let errorMessage { throw ServiceError("Couldn't save transcription progress: \(errorMessage)") }
+    }
+
+    func clearTranscriptionAttempt(meetingID: UUID) throws {
+        guard var latest = meetings.first(where: { $0.id == meetingID }) else { return }
+        latest.transcriptionAttempt = nil
+        errorMessage = nil
+        updateMeeting(latest)
+        if let errorMessage { throw ServiceError(errorMessage) }
+    }
+
+    func applySavedTranscriptionResult(meetingID: UUID) {
+        guard !isBusy, var latest = meetings.first(where: { $0.id == meetingID }),
+            let result = latest.transcriptionAttempt?.result
+        else { return }
+        latest.transcript = result
+        latest.transcriptionAttempt = nil
+        updateMeeting(latest)
+    }
+
+    func saveTranscriptionResult(_ result: [TranscriptSegment], attempt: ProviderTranscriptionAttempt, meetingID: UUID)
+        throws
+    {
+        guard var latest = meetings.first(where: { $0.id == meetingID }) else { return }
+        guard latest.transcript == attempt.originalTranscript else {
+            throw ServiceError(
+                "The transcript was edited during processing. The new result is saved. Choose Apply Saved Transcript to review the replacement."
+            )
+        }
+        latest.transcript = result
+        latest.transcriptionAttempt = nil
+        errorMessage = nil
+        updateMeeting(latest)
+        if let errorMessage { throw ServiceError(errorMessage) }
+        statusMessage = "Transcription complete"
+    }
+}
+
+func prepareServerAudio(_ file: URL, compressPCM: Bool = true) async throws -> (
+    url: URL, temporary: Bool, channels: Int
+) {
+    // Preserve the primary Ogg Opus recording; AVAsset cannot inspect Ogg.
+    if ["opus", "ogg"].contains(file.pathExtension.lowercased()) {
+        let channels = try AudioPlaybackPreparation.opusChannels(file)
+        return (file, false, channels)
+    }
+    let allowed = ["wav", "flac", "mp3", "m4a", "ogg", "opus", "mp4", "webm", "aac"]
+    var prepared = file
+    let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+    let suffix = file.pathExtension.lowercased()
+    let temporary =
+        !allowed.contains(suffix) || size > 450_000_000
+        || (compressPCM && ["wav", "aif", "aiff", "caf"].contains(suffix))
+    if temporary {
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
+        do {
+            if try !encodeBoundedAAC(file: file, destination: destination) {
+                // Apple's M4A preset is a format preset, not a fixed bitrate guarantee.
+                // https://developer.apple.com/documentation/avfoundation/avassetexportpresetapplem4a
+                guard
+                    let exporter = AVAssetExportSession(
+                        asset: AVURLAsset(url: file), presetName: AVAssetExportPresetAppleM4A),
+                    exporter.supportedFileTypes.contains(.m4a)
+                else { throw ServiceError("Could not convert this audio format for the server.") }
+                exporter.outputURL = destination
+                exporter.outputFileType = .m4a
+                await exporter.export()
+                guard exporter.status == .completed else {
+                    throw exporter.error ?? ServiceError("Audio conversion failed.")
+                }
+            }
+            try Task.checkCancellation()
+            let outputSize = try destination.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard outputSize > 0, outputSize <= 500_000_000 else {
+                throw ServiceError(
+                    "The converted audio exceeds the server's 500 MB limit. Split this recording before uploading.")
+            }
+        }
+        catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+        prepared = destination
+    }
+    do {
+        let audio = try AVAudioFile(forReading: prepared)
+        return (prepared, temporary, Int(audio.processingFormat.channelCount))
+    }
+    catch {
+        // AVAudioFile doesn't decode every server-supported container. AVAsset can inspect video audio tracks.
+        let tracks = try await AVURLAsset(url: prepared).loadTracks(withMediaType: .audio)
+        guard let track = tracks.first else {
+            if temporary { try? FileManager.default.removeItem(at: prepared) }
+            throw ServiceError("The selected file contains no audio track.")
+        }
+        let formats = try await track.load(.formatDescriptions)
+        let channels = formats.first.flatMap {
+            CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mChannelsPerFrame
+        }
+        return (prepared, temporary, Int(channels ?? 1))
+    }
+}
+
+/// Convert ordinary captured PCM in bounded buffers, retaining channel separation,
+/// sample rate, and every frame. 64kbps mono/128kbps stereo keeps a one-hour recording
+/// near 29/58 MB. The worker independently downmixes each source to 16kHz mono;
+/// mic/system must remain separate tracks, not channels of one combined file.
+/// Apple audio settings: https://developer.apple.com/documentation/avfoundation/audio-settings
+private func encodeBoundedAAC(file: URL, destination: URL) throws -> Bool {
+    guard let source = try? AVAudioFile(forReading: file, commonFormat: .pcmFormatFloat32, interleaved: false) else {
+        return false
+    }
+    let format = source.processingFormat
+    guard (1...2).contains(format.channelCount), [44100.0, 48000.0].contains(format.sampleRate) else { return false }
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatMPEG4AAC,
+        AVSampleRateKey: format.sampleRate, AVNumberOfChannelsKey: format.channelCount,
+        AVEncoderBitRateKey: Int(format.channelCount) * 64000,
+    ]
+    var output: AVAudioFile? = try AVAudioFile(
+        forWriting: destination, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+    guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192) else {
+        throw ServiceError("Could not allocate the audio conversion buffer.")
+    }
+    while source.framePosition < source.length {
+        try Task.checkCancellation()
+        try source.read(into: buffer)
+        guard buffer.frameLength > 0 else {
+            throw ServiceError("Audio conversion ended before the recording was complete.")
+        }
+        try output?.write(from: buffer)
+    }
+    // Releasing AVAudioFile finalizes its AAC packet table before inspection/upload.
+    output = nil
+    return true
+}
+
+func prepareFiledropAudio(_ file: URL, allowedExtensions: [String]) async throws -> (
+    url: URL, temporary: Bool, channels: Int
+) {
+    let suffix = file.pathExtension.lowercased()
+    if allowedExtensions.contains(suffix) {
+        if ["opus", "ogg"].contains(suffix) { return (file, false, try AudioPlaybackPreparation.opusChannels(file)) }
+        return (file, false, Int(try AVAudioFile(forReading: file).processingFormat.channelCount))
+    }
+    guard allowedExtensions.contains("opus") else {
+        throw ServiceError("Filedrop does not accept this audio format. Enable Opus uploads on the Filedrop service.")
+    }
+    let source = try await AudioPlaybackPreparation.prepare(file)
+    defer { if source.temporary { try? FileManager.default.removeItem(at: source.url) } }
+    let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".opus")
+    do {
+        try await RecordingEncoder.encode(source: source.url, destination: destination, format: .opus)
+        return (destination, true, try AudioPlaybackPreparation.opusChannels(destination))
+    }
+    catch {
+        try? FileManager.default.removeItem(at: destination)
+        throw error
+    }
+}

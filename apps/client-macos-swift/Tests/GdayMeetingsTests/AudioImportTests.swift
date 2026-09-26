@@ -103,8 +103,9 @@ import UniformTypeIdentifiers
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         store.recordingID = nil
         var meeting = try #require(store.meetings.first)
-        meeting.serverTranscription = ServerTranscriptionAttempt(
-            origin: "https://example.com", idempotencyKey: "saved", title: "Existing")
+        meeting.transcriptionAttempt = ProviderTranscriptionAttempt(
+            providerID: UUID(), endpoint: "https://example.com", kind: .gdayWebsite, title: "Existing",
+            idempotencyKey: "saved")
         store.updateMeeting(meeting)
         await #expect(throws: (any Error).self) { try await store.importAudioFiles([source], into: id) }
         #expect(store.meetings.first == meeting)

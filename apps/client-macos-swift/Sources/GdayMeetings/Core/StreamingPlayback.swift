@@ -146,8 +146,10 @@ final class StreamingPlayback: @unchecked Sendable {
             playing = true
             drainStarted = nil
             if !manualRendering {
+                // Buffer maintenance is independent of display refresh. Even at 2×,
+                // the ring holds 170 ms; a 50 ms refill leaves ample headroom.
                 let timer = DispatchSource.makeTimerSource(queue: queue)
-                timer.schedule(deadline: .now(), repeating: 1.0 / 60, leeway: .milliseconds(1))
+                timer.schedule(deadline: .now(), repeating: 0.05, leeway: .milliseconds(5))
                 timer.setEventHandler { [weak self] in
                     guard let self, !self.closed, self.playing else { return }
                     do {

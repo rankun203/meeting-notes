@@ -5,6 +5,7 @@ import {
 } from '../../../../../server/import-meeting'
 import { platformAccess } from '../../../../../server/platform-access'
 import { transcriptionConfiguration } from '../../../../../server/transcription'
+import { transcriptionLanguages } from '../../../../../server/transcription-capabilities'
 import { cms } from '../../../../../server/payload'
 import {
   createTask,
@@ -63,13 +64,20 @@ async function route(request: Request, { params }: Context) {
       return Response.json(await getMeetingImport(await cms(), parts[2], req), {
         headers: { 'Cache-Control': 'private, no-store' },
       })
-    if (request.method === 'GET' && parts.join('/') === 'capabilities')
-      return Response.json({
-        durableTasks: true,
-        meetingImports: true,
-        transcription: Boolean(transcriptionConfiguration()),
-        version: 2,
-      })
+    if (request.method === 'GET' && parts.join('/') === 'capabilities') {
+      const worker = transcriptionConfiguration()
+      return Response.json(
+        {
+          durableTasks: true,
+          meetingImports: true,
+          transcription: Boolean(worker),
+          protocolVersion: 1,
+          ...(await transcriptionLanguages(worker)),
+          version: 2,
+        },
+        { headers: { 'Cache-Control': 'private, no-store' } },
+      )
+    }
     if (request.method === 'POST' && parts.join('/') === 'tasks') {
       const parsed = taskInput.safeParse(await readJSON(request))
       if (!parsed.success) throw new HttpError(400, parsed.error.message)

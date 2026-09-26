@@ -84,20 +84,21 @@ struct ServiceTests {
         }
     }
     @Test func transcriptionCheckpointSurvivesRestart() throws {
-        let attempt = ServerTranscriptionAttempt(
-            origin: "https://server.example", idempotencyKey: "stable-attempt", title: "Original title",
+        let attempt = ProviderTranscriptionAttempt(
+            providerID: UUID(), endpoint: "https://server.example", kind: .gdayWebsite, title: "Original title",
+            idempotencyKey: "stable-attempt",
             inputs: [
                 ServerTrackInput(
                     url: URL(string: "https://server.example/files/audio?token=secret")!, trackName: "mic",
                     sourceType: "mic", channels: 1)
             ], taskID: "durable-task")
         var meeting = Meeting(title: "Editable title")
-        meeting.serverTranscription = attempt
+        meeting.transcriptionAttempt = attempt
         let restored = try JSONDecoder().decode(Meeting.self, from: JSONEncoder().encode(meeting))
-        #expect(restored.serverTranscription == attempt)
-        #expect(restored.serverTranscription?.title == "Original title")
+        #expect(restored.transcriptionAttempt == attempt)
+        #expect(restored.transcriptionAttempt?.title == "Original title")
         let oldMeeting = try JSONDecoder().decode(Meeting.self, from: Data(#"{"title":"Old meeting"}"#.utf8))
-        #expect(oldMeeting.serverTranscription == nil)
+        #expect(oldMeeting.transcriptionAttempt == nil)
     }
     @Test func formEncoding() {
         let r = ServiceHTTP.form(
