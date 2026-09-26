@@ -47,6 +47,79 @@ struct RecordingAudioRouteTests {
         #expect(!RecordingAudioRoute.defaultVoiceProcessing(read: { _, _, _ in [kAudioObjectUnknown] }))
     }
 
+    /// Headphones on a built-in jack: the default output keeps its ID while its
+    /// stream terminal type changes.
+    @Test func sameDeviceOutputChangeRedecidesAutomaticVoiceProcessing() {
+        var terminal = kAudioStreamTerminalTypeSpeaker
+        let read: RecordingAudioRoute.PropertyReader = { object, selector, _ in
+            switch selector {
+            case kAudioHardwarePropertyDefaultOutputDevice: return [100]
+            case kAudioDevicePropertyStreams: return [200]
+            case kAudioStreamPropertyTerminalType: return [terminal]
+            default: return nil
+            }
+        }
+        var route = OutputSpeakerRoute(speaker: true)
+        // A notification that keeps the speaker classification changes nothing.
+        #expect(route.refresh(policy: .automatic, voiceProcessing: true, read: read) == .unchanged)
+        terminal = 0x0301
+        #expect(route.refresh(policy: .automatic, voiceProcessing: true, read: read) == .unchanged)
+
+        // Speaker to headphones: a processed engine moves with the output.
+        terminal = kAudioStreamTerminalTypeHeadphones
+        #expect(
+            route.refresh(policy: .automatic, voiceProcessing: true, read: read) == .changed(rebuildMicrophone: true))
+        #expect(!route.speaker)
+        #expect(route.refresh(policy: .automatic, voiceProcessing: true, read: read) == .unchanged)
+
+        // Headphones to speaker: automatic mode now selects processing.
+        terminal = kAudioStreamTerminalTypeSpeaker
+        #expect(
+            route.refresh(policy: .automatic, voiceProcessing: false, read: read) == .changed(rebuildMicrophone: true))
+
+        // Speaker to headphones while unprocessed (processing was unavailable): keep running.
+        terminal = kAudioStreamTerminalTypeHeadphones
+        #expect(
+            route.refresh(policy: .automatic, voiceProcessing: false, read: read) == .changed(rebuildMicrophone: false))
+    }
+
+    @Test(arguments: [VoiceProcessingPolicy.on, .off])
+    func explicitVoiceProcessingHoldsThroughSameDeviceOutputChange(policy: VoiceProcessingPolicy) {
+        var terminal = kAudioStreamTerminalTypeHeadphones
+        let read: RecordingAudioRoute.PropertyReader = { _, selector, _ in
+            switch selector {
+            case kAudioHardwarePropertyDefaultOutputDevice: return [100]
+            case kAudioDevicePropertyStreams: return [200]
+            case kAudioStreamPropertyTerminalType: return [terminal]
+            default: return nil
+            }
+        }
+        // Explicit choices and the echo latch (which sets On) keep precedence.
+        var route = OutputSpeakerRoute(speaker: false)
+        terminal = kAudioStreamTerminalTypeSpeaker
+        #expect(
+            route.refresh(policy: policy, voiceProcessing: policy == .on, read: read)
+                == .changed(rebuildMicrophone: false))
+        #expect(route.speaker)
+        terminal = kAudioStreamTerminalTypeHeadphones
+        #expect(
+            route.refresh(policy: policy, voiceProcessing: policy == .on, read: read)
+                == .changed(rebuildMicrophone: false))
+        // An unreadable route counts as non-speaker, like at recording start.
+        var speaker = OutputSpeakerRoute(speaker: true)
+        #expect(
+            speaker.refresh(policy: .automatic, voiceProcessing: false, read: { _, _, _ in nil })
+                == .changed(rebuildMicrophone: false))
+    }
+
+    @Test func newDefaultOutputRebuildDecisionMatchesSameDeviceChange() {
+        #expect(OutputSpeakerRoute.rebuildsMicrophone(policy: .automatic, voiceProcessing: false, speaker: true))
+        #expect(!OutputSpeakerRoute.rebuildsMicrophone(policy: .automatic, voiceProcessing: false, speaker: false))
+        // Processing couples to the output device, so any processed engine moves.
+        #expect(OutputSpeakerRoute.rebuildsMicrophone(policy: .on, voiceProcessing: true, speaker: false))
+        #expect(!OutputSpeakerRoute.rebuildsMicrophone(policy: .off, voiceProcessing: false, speaker: true))
+    }
+
     @Test(arguments: [true, false])
     func legacyPreferenceIsIgnoredAndNoLongerSaved(enabled: Bool) throws {
         let data = Data("{\"microphoneVoiceProcessing\":\(enabled),\"captureMicrophone\":false}".utf8)

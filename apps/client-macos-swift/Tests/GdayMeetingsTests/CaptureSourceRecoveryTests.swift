@@ -404,4 +404,52 @@ struct CaptureSourceRecoveryTests {
         levels.system.reconnecting = false
         #expect(RecordingWorkspaceView.reconnectingStatus(levels) == nil)
     }
+
+    @Test func switchingStatusNamesTheNewDevice() {
+        var levels = RecordingLevels(
+            microphone: RecordingSourceLevel(enabled: true, reconnecting: true, switchingTo: "MacBook Pro Microphone"),
+            system: RecordingSourceLevel(enabled: true))
+        #expect(RecordingWorkspaceView.reconnectingStatus(levels) == "Switching microphone to MacBook Pro Microphone…")
+        #expect(levels.microphone.statusText == "Switching to MacBook Pro Microphone…")
+        levels.microphone.reconnecting = false
+        levels.system = RecordingSourceLevel(enabled: true, reconnecting: true, switchingTo: "AirPods Pro")
+        #expect(RecordingWorkspaceView.reconnectingStatus(levels) == "Switching system audio to AirPods Pro…")
+        // Both switching: one short line; the meters still name each device.
+        levels.microphone.reconnecting = true
+        #expect(RecordingWorkspaceView.reconnectingStatus(levels) == "Switching audio devices…")
+        // One source without a replacement device yet: both are reconnecting.
+        levels.microphone.switchingTo = nil
+        #expect(RecordingWorkspaceView.reconnectingStatus(levels) == "Reconnecting microphone and system audio…")
+        // A source that is not recorded never shows a device.
+        levels.microphone.enabled = false
+        levels.system.enabled = false
+        #expect(RecordingWorkspaceView.reconnectingStatus(levels) == nil)
+    }
+
+    @Test func switchingTargetRequiresADifferentDevice() {
+        let builtIn = AudioDeviceIdentity(id: 10, name: "MacBook Pro Microphone")
+        let airPods = AudioDeviceIdentity(id: 20, name: "AirPods Pro")
+        var delivery = AudioCapture.SourceDelivery()
+        delivery.device = airPods
+        delivery.deliveredDevice = airPods.id
+        delivery.everDelivered = true
+        // No replacement device yet.
+        #expect(delivery.switchingTo(state: .reconnecting) == nil)
+        delivery.target = builtIn
+        #expect(delivery.switchingTo(state: .reconnecting) == "MacBook Pro Microphone")
+        // A rebuild on the same device (watchdog or voice processing) is a reconnect.
+        delivery.target = airPods
+        #expect(delivery.switchingTo(state: .reconnecting) == nil)
+        // Installed on the new device but not delivering yet.
+        delivery.device = builtIn
+        delivery.awaitingResume = true
+        #expect(delivery.switchingTo(state: .running) == "MacBook Pro Microphone")
+        delivery.awaitingResume = false
+        #expect(delivery.switchingTo(state: .running) == nil)
+        // Before any audio arrives there is nothing to switch from.
+        delivery.deliveredDevice = nil
+        delivery.target = builtIn
+        #expect(delivery.switchingTo(state: .reconnecting) == nil)
+        #expect(delivery.switchingTo(state: .failed) == nil)
+    }
 }

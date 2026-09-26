@@ -72,7 +72,7 @@ Primary Swift integration points are `Core/AudioCapture.swift`, `Core/SystemAudi
 
 - **In-process native calls.** A Core Audio call that hangs during recovery or stop is abandoned after 3 seconds, not cancelled; its thread stays blocked until the call returns. Initial `start()` is still unbounded. Accepted because a helper process needs its own signing, permission, audio IPC, and teardown design. Consequence: a hung driver can leak a thread and its device session until the call returns. Remediation: move capture into a disposable helper process, as the Rust client does for the microphone.
 - **Paced silence writes.** `ExtAudioFileWriteAsync` overflows (-66570) and corrupts the file when a large silence burst is queued at once. The writer enlarges its buffer to 512 KiB and sleeps 1 ms per 4096-frame chunk beyond 1 second of padding, while holding the writer lock. Normal outages are padded once per second, so this only applies if the supervisor falls behind. Accepted as a timing-based safeguard; it has not been stress-tested under heavy disk load. Remediation: write padding from a dedicated writer thread with backpressure.
-- **Same-device output changes.** Only default device ID changes are observed. Switching the data source on the same output device, for example headphones on a built-in jack, does not re-decide automatic voice processing unless the engine posts a configuration change. Remediation: observe data source and terminal type on the current output, as `RecordingRouteObserver` does.
+- **Same-device output changes (resolved).** Previously only default device ID changes were observed, so headphones on a built-in jack did not re-decide automatic voice processing. Resolved by the follow-up below: capture observes the default output's data source, stream list, and stream terminal types.
 - **Voice-processing fallback metadata.** If automatic mode falls back to unprocessed capture after the microphone writer was created, the track keeps the mono processed format and the writer converts to it.
 
 ## Notes
@@ -82,3 +82,25 @@ Automated validation: `make format-macos`, `make lint-macos`, `make test-macos` 
 Not validated: UI Preview screenshots were skipped because the screen was in use during validation, and nothing was tested on hardware. The hardware rows in the Audio design validation table remain open. In particular, confirm that the system-audio tap keeps delivering during silence. If it stops, the 3-second watchdog would rebuild system audio repeatedly. An earlier silent system-only recording decoded to its full length, which suggests it keeps delivering.
 
 After review, a default output change no longer rebuilds an unprocessed microphone unless automatic mode now selects voice processing. This avoids a microphone gap when switching between headphones.
+
+## Follow-up: device names in status and same-device output changes
+
+**Problem.** The header said “Reconnecting microphone…” even when capture already knew the new device. Same-device output changes, such as headphones on a built-in jack, did not re-decide automatic voice processing (the technical debt above).
+
+**Implemented solution.**
+
+- `Core/AudioCapture.swift`: `SourceDelivery` records each installed session's device, the device of the last session that delivered audio, and the reconnect target. The supervisor refreshes the target each second while a source is reconnecting. The microphone uses the selected device when it is connected and has not failed, otherwise the default input. System audio uses the default output. `SourceDelivery.switchingTo(state:)` returns a name only when the target differs from the device that last delivered audio. A rebuild on the same device, or a source that has not delivered yet, still shows “Reconnecting…”. `RecordingSourceLevel.switchingTo` carries the name to the UI; the meter's help text and accessibility value read “Switching to *Name*…”.
+- `UI/RecordingWorkspaceView.swift`: `reconnectingStatus` shows “Switching microphone to *Name*…”, “Switching system audio to *Name*…”, or “Switching audio devices…” when both sources switch. It keeps “Reconnecting microphone…”, “Reconnecting system audio…”, and “Reconnecting microphone and system audio…” when no different device is known. `Core/UIPreview.swift` simulates two seconds of each state.
+- `Core/RecordingAudioRoute.swift`: `OutputSpeakerRoute` holds the speaker classification and decides, through the injectable `PropertyReader`, whether a notification changes it and whether the microphone must rebuild. `rebuildsMicrophone` is shared with the default-output path.
+- `Core/AudioCapture.swift`: while the microphone records, listeners on the default output's data source (output scope), output stream list, and each stream's terminal type call `outputRouteChanged`. They are replaced when the default output or its stream list changes and removed at stop. A lock guards the listener lists, so a late notification cannot register listeners after Stop & Save removed them. Unchanged classifications are logged at debug level and ignored; changes are logged at notice level with the policy and decision.
+
+**Reasoning.**
+
+- Both sources switching usually comes from one event, such as connecting AirPods. Two device names would not fit the one-line header, so it shows the short “Switching audio devices…” and the meters keep the names. When only one of two reconnecting sources has a known device, “Reconnecting microphone and system audio…” is accurate for both.
+- The name comes from the same device-name reads as the fallback notices, so “Switching microphone to *Name*…” and “… · Using *Name*” name the same device.
+- The same-device path applies only to the automatic policy. An explicit On or Off, including the echo latch, holds for the session. Rebuilding a processed engine for an explicit On is left to AVAudioEngine's configuration-change notification, as before.
+- Classification uses the existing terminal-type rules instead of data source codes, whose values are driver-specific.
+
+**Technical debt.** None added. The same-device output debt above is resolved.
+
+**Notes.** `make format-macos` and `make lint-macos` passed. In a copy of `HEAD` with only this change applied, `make test-macos` passed 169 tests in 35 suites (baseline 164; new tests cover classification changes, explicit-policy precedence, the shared rebuild rule, header wording, and switch-target selection). In the shared working tree, which also contains other tasks' changes, it passed 182 tests in 37 suites. `make build-macos-preview` passed in both. The only warnings were the existing Command Line Tools linker search-path warnings. Not validated on hardware: the listeners' firing on a built-in jack, whether AirPods expose a named default input before the tap rebuilds, and the header wording on screen. UI Preview was not opened.

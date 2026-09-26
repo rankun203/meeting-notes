@@ -112,6 +112,57 @@ enum RecordingAudioRoute {
     }
 }
 
+/// A device a capture source records from, identified for status text.
+struct AudioDeviceIdentity: Equatable {
+    var id: AudioObjectID
+    var name: String
+
+    /// The current default input or output, when it has a name.
+    static func current(output: Bool) -> AudioDeviceIdentity? {
+        guard let device = RecordingAudioRoute.defaultDevice(output: output),
+            let name = RecordingAudioRoute.deviceName(device)
+        else { return nil }
+        return AudioDeviceIdentity(id: device, name: name)
+    }
+}
+
+/// Whether the default output is a speaker, tracked during recording. The same
+/// device can change route without a new default device ID, for example
+/// headphones plugged into a built-in jack change its data source or stream
+/// terminal types. Such a change re-decides automatic voice processing like a
+/// new default output does.
+struct OutputSpeakerRoute: Equatable {
+    private(set) var speaker: Bool
+
+    enum Change: Equatable {
+        /// The route is still speaker or still non-speaker; nothing to decide.
+        case unchanged
+        case changed(rebuildMicrophone: Bool)
+    }
+
+    /// Re-reads the default output. Explicit On or Off, including the echo
+    /// latch (which sets On), holds for the session, so only the automatic
+    /// policy can rebuild the microphone here.
+    mutating func refresh(
+        policy: VoiceProcessingPolicy, voiceProcessing: Bool,
+        read: RecordingAudioRoute.PropertyReader = RecordingAudioRoute.readProperty
+    ) -> Change {
+        let now = RecordingAudioRoute.defaultVoiceProcessing(read: read)
+        guard now != speaker else { return .unchanged }
+        speaker = now
+        guard policy == .automatic else { return .changed(rebuildMicrophone: false) }
+        return .changed(
+            rebuildMicrophone: Self.rebuildsMicrophone(policy: policy, voiceProcessing: voiceProcessing, speaker: now))
+    }
+
+    /// Voice processing couples to the output device, so a processed engine
+    /// moves with it. An unprocessed engine rebuilds only when automatic mode
+    /// now selects processing; headphone-to-headphone changes keep it running.
+    static func rebuildsMicrophone(policy: VoiceProcessingPolicy, voiceProcessing: Bool, speaker: Bool) -> Bool {
+        voiceProcessing || (policy == .automatic && speaker)
+    }
+}
+
 extension VoiceProcessingPolicy {
     /// Automatic follows the current output on every microphone rebuild; an
     /// explicit choice holds for the rest of the session.

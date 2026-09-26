@@ -22,9 +22,17 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.gdaymeetings.macos.system-audio")
     private var microphoneRecovery: CaptureSourceRecovery<MicrophoneSession>?
     private var systemRecovery: CaptureSourceRecovery<SystemAudioCapture>?
-    private var routeListeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private typealias RouteListener = (AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)
+    /// Guards the listener lists so a notification that re-registers output
+    /// listeners cannot race Stop & Save's removal and leave one behind.
+    private let listenerLock = NSLock()
+    private var listening = false  // listenerLock
+    private var routeListeners: [RouteListener] = []  // listenerLock; system object
+    private var outputListeners: [RouteListener] = []  // listenerLock; default output and its streams
     private var knownInput: AudioObjectID?  // queue only after listeners register
     private var knownOutput: AudioObjectID?  // queue only after listeners register
+    /// Speaker classification of the default output; queue only, microphone recordings only.
+    private var outputRoute: OutputSpeakerRoute?
     private var epoch: TimeInterval = 0
     private var initialPolicy = VoiceProcessingPolicy.automatic
     /// The microphone chosen in New Recording; `nil` follows the macOS default input.
@@ -73,7 +81,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         var voiceProcessingUnavailable = false
     }
 
-    private struct SourceDelivery {
+    struct SourceDelivery {
         var everDelivered = false
         /// The installed session has delivered; reported once to its recovery controller.
         var sessionDelivered = false
@@ -81,6 +89,27 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         var awaitingResume = false
         var sessionStart: TimeInterval = 0
         var last: TimeInterval = 0
+        /// The installed session's device, when known.
+        var device: AudioDeviceIdentity?
+        /// The device of the last session that delivered audio.
+        var deliveredDevice: AudioObjectID?
+        /// While reconnecting: the device the next session will use, if one is available.
+        var target: AudioDeviceIdentity?
+
+        /// The device to name in "Switching … to *Name*…": the reconnect target,
+        /// or a rebuilt session that has not delivered yet. `nil` keeps
+        /// "Reconnecting…": no replacement is available yet, or capture is
+        /// rebuilding on the device it already recorded from.
+        func switchingTo(state: CaptureSourceState?) -> String? {
+            let next: AudioDeviceIdentity?
+            switch state {
+            case .reconnecting?: next = target
+            case .running? where awaitingResume: next = device
+            default: return nil
+            }
+            guard let next, let deliveredDevice, next.id != deliveredDevice else { return nil }
+            return next.name
+        }
     }
 
     var profile: RecordingProfile {
@@ -134,6 +163,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 let session = try makeSystemSession(generation: 0)
                 recovery.install(session)
                 initialSystemFormat = session.format
+                let output = AudioDeviceIdentity.current(output: true)
+                locked { systemDelivery.device = output }
                 CaptureLog.capture.notice(
                     "System audio tap started: \(CaptureLog.describe(session.format), privacy: .public), output \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public)"
                 )
@@ -154,6 +185,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                     return writer
                 }
                 recovery.install(session)
+                locked { microphoneDelivery.device = session.device }
                 initialMicrophone = session
                 initialVoiceProcessing = session.voiceProcessing
                 initialMicrophoneFormat = session.format
@@ -170,7 +202,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 systemDelivery.sessionStart = now
             }
             recordInitialRoutes()
-            try observeDefaultDevices()
+            // On queue: route notifications run there and must see the initial state.
+            try queue.sync { try observeDefaultDevices() }
             startTimers()
             if let startupFailure = currentFailure() { throw startupFailure }
             return files
@@ -253,6 +286,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 self.microphoneDelivery.sessionStart = ProcessInfo.processInfo.systemUptime
                 self.microphoneDelivery.sessionDelivered = false
                 self.microphoneDelivery.awaitingResume = self.microphoneDelivery.everDelivered
+                self.microphoneDelivery.device = session.device
+                self.microphoneDelivery.target = nil
                 return self.adoptMicrophone(session)
             }
             if let format = session.format {
@@ -287,10 +322,14 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         recovery.onStateChange = { [weak self] state in self?.sourceStateChanged(state, source: "system audio") }
         recovery.onInstalled = { [weak self] capture in
             guard let self else { return }
+            // The tap follows the default output; read it as the session's device.
+            let output = AudioDeviceIdentity.current(output: true)
             self.locked {
                 self.systemDelivery.sessionStart = ProcessInfo.processInfo.systemUptime
                 self.systemDelivery.sessionDelivered = false
                 self.systemDelivery.awaitingResume = self.systemDelivery.everDelivered
+                self.systemDelivery.device = output
+                self.systemDelivery.target = nil
             }
             CaptureLog.capture.notice(
                 "System audio tap rebuilt: \(CaptureLog.describe(capture.format), privacy: .public), output \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public)"
@@ -394,7 +433,14 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     ) throws -> MicrophoneSession {
         let session = MicrophoneSession()
         session.usesSelectedDevice = device != nil
-        session.deviceName = device?.name ?? Self.defaultDeviceName(output: false)
+        if let device {
+            session.deviceID = device.id
+            session.deviceName = device.name
+        }
+        else {
+            session.deviceID = RecordingAudioRoute.defaultDevice(output: false)
+            session.deviceName = session.deviceID.flatMap(RecordingAudioRoute.deviceName)
+        }
         do {
             try configure(
                 session, generation: generation, voiceProcessing: requested, device: device?.id, writer: makeWriter)
@@ -684,41 +730,111 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Follows the macOS default devices. Comparing device IDs ignores
-    /// notifications caused by capture's own aggregate and voice-processing
-    /// changes, which do not change the user's default devices.
+    /// Runs on queue. Follows the macOS default devices. Comparing device IDs
+    /// ignores notifications caused by capture's own aggregate and
+    /// voice-processing changes, which do not change the user's default devices.
     private func observeDefaultDevices() throws {
         knownInput = RecordingAudioRoute.defaultDevice(output: false)
         knownOutput = RecordingAudioRoute.defaultDevice(output: true)
+        listenerLock.withLock { listening = true }
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var listeners: [RouteListener] = []
+        // Register what exists so far even if a later listener fails; stop removes them.
+        defer { listenerLock.withLock { routeListeners += listeners } }
         if expectedMicrophone {
-            try observe(kAudioHardwarePropertyDefaultInputDevice) { [weak self] in
-                self?.defaultDeviceChanged(output: false)
-            }
+            listeners.append(
+                try listen(system, kAudioHardwarePropertyDefaultInputDevice) { [weak self] in
+                    self?.defaultDeviceChanged(output: false)
+                })
             if selectedMicrophone != nil {
-                try observe(kAudioHardwarePropertyDevices) { [weak self] in self?.inputDevicesChanged() }
+                listeners.append(
+                    try listen(system, kAudioHardwarePropertyDevices) { [weak self] in self?.inputDevicesChanged() })
             }
         }
-        try observe(kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in self?.defaultDeviceChanged(output: true)
+        listeners.append(
+            try listen(system, kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in
+                self?.defaultDeviceChanged(output: true)
+            })
+        if expectedMicrophone {
+            outputRoute = OutputSpeakerRoute(speaker: RecordingAudioRoute.defaultVoiceProcessing())
+            observeOutputRoute(knownOutput)
         }
     }
 
-    private func observe(_ selector: AudioObjectPropertySelector, _ handler: @escaping () -> Void) throws {
+    private func listen(
+        _ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal, _ handler: @escaping () -> Void
+    ) throws -> RouteListener {
         var address = AudioObjectPropertyAddress(
-            mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
         let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
-        let object = AudioObjectID(kAudioObjectSystemObject)
         let status = AudioObjectAddPropertyListenerBlock(object, &address, queue, block)
         guard status == noErr else {
             throw MeetingError.message("Could not observe audio device changes (Core Audio \(status)).")
         }
-        routeListeners.append((object, address, block))
+        return (object, address, block)
+    }
+
+    /// Runs on queue. Replaces the listeners on the default output: its data
+    /// source, its output stream list, and each stream's terminal type. These
+    /// change without a new default device ID, for example when headphones are
+    /// plugged into a built-in jack. Properties a device lacks are skipped.
+    private func observeOutputRoute(_ device: AudioObjectID?) {
+        var added: [RouteListener] = []
+        if let device {
+            let streams =
+                RecordingAudioRoute.readProperty(
+                    object: device, selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput) ?? []
+            let properties: [(AudioObjectID, AudioObjectPropertySelector, AudioObjectPropertyScope)] =
+                [
+                    (device, kAudioDevicePropertyDataSource, kAudioObjectPropertyScopeOutput),
+                    (device, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput),
+                ] + streams.map { ($0, kAudioStreamPropertyTerminalType, kAudioObjectPropertyScopeGlobal) }
+            for (object, selector, scope) in properties {
+                var address = AudioObjectPropertyAddress(
+                    mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+                guard AudioObjectHasProperty(object, &address) else { continue }
+                let streamsChanged = selector == kAudioDevicePropertyStreams
+                do {
+                    added.append(
+                        try listen(object, selector, scope: scope) { [weak self] in
+                            self?.outputRouteChanged(streamsChanged: streamsChanged)
+                        })
+                }
+                catch {
+                    CaptureLog.capture.error(
+                        "Output route listener on \(object) not added: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+        // After Stop & Save, remove what was just added instead of keeping it.
+        let stale: [RouteListener] = listenerLock.withLock {
+            guard listening else { return added }
+            defer { outputListeners = added }
+            return outputListeners
+        }
+        Self.remove(stale, queue: queue)
+        CaptureLog.capture.info(
+            "Observing output route on device \(device.map(String.init) ?? "none", privacy: .public): \(added.count) listeners"
+        )
     }
 
     private func removeRouteListeners() {
-        for (object, var address, block) in routeListeners {
+        let listeners: [RouteListener] = listenerLock.withLock {
+            listening = false
+            defer {
+                routeListeners.removeAll()
+                outputListeners.removeAll()
+            }
+            return routeListeners + outputListeners
+        }
+        Self.remove(listeners, queue: queue)
+    }
+
+    private static func remove(_ listeners: [RouteListener], queue: DispatchQueue) {
+        for (object, var address, block) in listeners {
             AudioObjectRemovePropertyListenerBlock(object, &address, queue, block)
         }
-        routeListeners.removeAll()
     }
 
     /// Runs on queue.
@@ -731,11 +847,14 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 "Default output changed to \(device.flatMap(RecordingAudioRoute.deviceName) ?? "none", privacy: .public) (\(device.map(String.init) ?? "none", privacy: .public))"
             )
             systemRecovery?.routeChanged()
-            // Voice processing couples to the output device, so a processed engine
-            // must move with it. An unprocessed engine only rebuilds when automatic
-            // mode now wants processing; headphone-to-headphone switches keep the mic running.
+            guard expectedMicrophone else { return }
+            let speaker = RecordingAudioRoute.defaultVoiceProcessing()
+            outputRoute = OutputSpeakerRoute(speaker: speaker)
+            observeOutputRoute(device)
             let (processed, policy) = locked { (microphoneVoiceProcessing, policy) }
-            if processed || (policy == .automatic && policy.enabled()) { microphoneRecovery?.routeChanged() }
+            if OutputSpeakerRoute.rebuildsMicrophone(policy: policy, voiceProcessing: processed, speaker: speaker) {
+                microphoneRecovery?.routeChanged()
+            }
         }
         else {
             guard device != knownInput else { return }
@@ -748,6 +867,26 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             if pinned { return }
             microphoneRecovery?.routeChanged()
         }
+    }
+
+    /// Runs on queue. The default output's data source, streams, or terminal
+    /// types changed on the same device. Only a change between speaker and
+    /// non-speaker matters; other notifications are ignored.
+    private func outputRouteChanged(streamsChanged: Bool) {
+        guard var route = outputRoute else { return }
+        // New streams need their own terminal-type listeners.
+        if streamsChanged { observeOutputRoute(knownOutput) }
+        let (processed, policy) = locked { (microphoneVoiceProcessing, policy) }
+        let change = route.refresh(policy: policy, voiceProcessing: processed)
+        outputRoute = route
+        guard case .changed(let rebuild) = change else {
+            CaptureLog.capture.debug("Output route notification ignored: speaker classification unchanged")
+            return
+        }
+        CaptureLog.capture.notice(
+            "Output route on \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public) is now \(route.speaker ? "a speaker" : "not a speaker", privacy: .public) (policy \(policy.rawValue, privacy: .public), voice processing \(processed ? "on" : "off", privacy: .public))\(rebuild ? "; rebuilding microphone" : "; microphone unchanged", privacy: .public)"
+        )
+        if rebuild { microphoneRecovery?.routeChanged() }
     }
 
     /// Runs on queue. Moves to the default input when the selected microphone
@@ -831,6 +970,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     private func superviseSources() {
         let host = hostNow()
         let now = ProcessInfo.processInfo.systemUptime
+        updateReconnectTargets()
         let sources: [(String, CaptureSourceState?, TimedAudioWriter?, SourceDelivery, (() -> Void)?)] = [
             (
                 "microphone", microphoneRecovery?.state, microphoneWriter, locked { microphoneDelivery },
@@ -864,6 +1004,24 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             }
         }
         evaluateEcho()
+    }
+
+    /// Runs on queue. Reads the device each reconnecting source will use next,
+    /// following the same choice as its rebuild, so the status can name it.
+    private func updateReconnectTargets() {
+        if microphoneRecovery?.state == .reconnecting {
+            var target = AudioDeviceIdentity.current(output: false)
+            if let selectedMicrophone, let connected = RecordingAudioRoute.inputDevice(uid: selectedMicrophone.uid),
+                locked({ selectedFallback.allowsSelected(connected: true) })
+            {
+                target = AudioDeviceIdentity(id: connected.id, name: connected.name)
+            }
+            locked { microphoneDelivery.target = target }
+        }
+        if systemRecovery?.state == .reconnecting {
+            let target = AudioDeviceIdentity.current(output: true)
+            locked { systemDelivery.target = target }
+        }
     }
 
     /// Runs on queue. A selected microphone that started but never delivered is
@@ -919,7 +1077,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 statuses.append("Microphone stopped · Allow microphone access in System Settings")
             case .reconnecting,
                 .running where microphone.awaitingResume:
-                statuses.append("Reconnecting microphone…")
+                statuses.append(
+                    microphone.switchingTo(state: recovery.state).map { "Switching microphone to \($0)…" }
+                        ?? "Reconnecting microphone…")
             default:
                 statuses.append(
                     (microphoneWriter?.capturedFrames ?? 0) > 0
@@ -930,7 +1090,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         }
         if expectedSystem, let recovery = systemRecovery {
             if recovery.state == .reconnecting || (recovery.state == .running && system.awaitingResume) {
-                statuses.append("Reconnecting system audio…")
+                statuses.append(
+                    system.switchingTo(state: recovery.state).map { "Switching system audio to \($0)…" }
+                        ?? "Reconnecting system audio…")
             }
             else {
                 statuses.append(
@@ -993,6 +1155,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 levels.microphone = measured
                 defer { microphoneDelivery.awaitingResume = false }
                 firstInSession = !microphoneDelivery.sessionDelivered
+                if firstInSession { microphoneDelivery.deliveredDevice = microphoneDelivery.device?.id }
                 microphoneDelivery.sessionDelivered = true
                 microphoneDelivery.everDelivered = true
                 microphoneDelivery.last = now
@@ -1001,6 +1164,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             levels.system = measured
             defer { systemDelivery.awaitingResume = false }
             firstInSession = !systemDelivery.sessionDelivered
+            if firstInSession { systemDelivery.deliveredDevice = systemDelivery.device?.id }
             systemDelivery.sessionDelivered = true
             systemDelivery.everDelivered = true
             systemDelivery.last = now
@@ -1031,6 +1195,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 microphoneState == .reconnecting || (microphoneState == .running && microphoneDelivery.awaitingResume)
             snapshot.system.reconnecting =
                 systemState == .reconnecting || (systemState == .running && systemDelivery.awaitingResume)
+            snapshot.microphone.switchingTo = microphoneDelivery.switchingTo(state: microphoneState)
+            snapshot.system.switchingTo = systemDelivery.switchingTo(state: systemState)
             snapshot.microphoneStatus = microphoneStatus(state: microphoneState, now: now)
             return snapshot
         }
@@ -1098,7 +1264,13 @@ final class MicrophoneSession {
     var voiceProcessingUnavailable = false
     /// Bound to the selected microphone rather than following the default input.
     var usesSelectedDevice = false
+    /// The input device when the engine was built: the selected device or the default input.
+    var deviceID: AudioObjectID?
     var deviceName: String?
+    var device: AudioDeviceIdentity? {
+        guard let deviceID, let deviceName else { return nil }
+        return AudioDeviceIdentity(id: deviceID, name: deviceName)
+    }
     var configurationObserver: NSObjectProtocol?
     var tapInstalled = false
 
@@ -1262,12 +1434,14 @@ struct RecordingSourceLevel: Equatable {
     var stale = false
     /// The source's device is being replaced; earlier levels no longer apply.
     var reconnecting = false
+    /// While reconnecting: the name of the different device the source is moving to, if known.
+    var switchingTo: String?
     var rmsDB: Double = -120
     var peakDB: Double = -120
     var level: Double { enabled && hasSamples && !stale && !reconnecting ? min(1, max(0, (rmsDB + 60) / 60)) : 0 }
     var statusText: String {
         if !enabled { return "Not recording" }
-        if reconnecting { return "Reconnecting…" }
+        if reconnecting { return switchingTo.map { "Switching to \($0)…" } ?? "Reconnecting…" }
         if !hasSamples { return "Waiting for audio" }
         if stale { return "No recent audio" }
         return rmsDB < -60 ? "Quiet" : "Receiving audio"

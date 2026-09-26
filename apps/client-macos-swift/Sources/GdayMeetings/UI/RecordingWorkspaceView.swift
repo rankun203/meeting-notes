@@ -329,13 +329,21 @@ struct RecordingWorkspaceView: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.quaternary))
     }
+    /// Names the new device when a source is switching to one. When both
+    /// sources switch (usually one event, such as connecting AirPods), a short
+    /// generic line fits the header; each meter's help and accessibility value
+    /// still names its device.
     static func reconnectingStatus(_ levels: RecordingLevels) -> String? {
         let microphone = levels.microphone.enabled && levels.microphone.reconnecting
         let system = levels.system.enabled && levels.system.reconnecting
         switch (microphone, system) {
-        case (true, true): return "Reconnecting microphone and system audio…"
-        case (true, false): return "Reconnecting microphone…"
-        case (false, true): return "Reconnecting system audio…"
+        case (true, true):
+            return levels.microphone.switchingTo != nil && levels.system.switchingTo != nil
+                ? "Switching audio devices…" : "Reconnecting microphone and system audio…"
+        case (true, false):
+            return levels.microphone.switchingTo.map { "Switching microphone to \($0)…" } ?? "Reconnecting microphone…"
+        case (false, true):
+            return levels.system.switchingTo.map { "Switching system audio to \($0)…" } ?? "Reconnecting system audio…"
         case (false, false): return nil
         }
     }
