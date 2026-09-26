@@ -3,7 +3,9 @@ FROM runpod/pytorch:1.0.3-cu1281-torch280-ubuntu2404
 LABEL org.opencontainers.image.source="https://github.com/rankun203/meeting-notes"
 
 WORKDIR /app
-RUN useradd --uid 10001 --create-home worker && mkdir -p /data /cache
+# Match the CPU image owner so Compose variants can reuse volumes.
+RUN useradd --uid 10001 --create-home worker && \
+    mkdir -p /data /cache && chown worker:worker /data /cache
 ENV HF_HOME=/cache/huggingface TORCH_HOME=/cache/torch WORKER_DATA_DIR=/data \
     ORT_DISABLE_TELEMETRY=1 PYANNOTE_METRICS_ENABLED=0 HF_HUB_DISABLE_TELEMETRY=1
 
@@ -17,7 +19,8 @@ RUN pip install --no-cache-dir uv
 
 # Ubuntu 24.04 marks system Python as externally managed (PEP 668).
 # The base image sets PIP_BREAK_SYSTEM_PACKAGES for pip; uv needs its own env var.
-ENV UV_BREAK_SYSTEM_PACKAGES=1
+# Keep uv's package cache out of image layers, including the editable install.
+ENV UV_BREAK_SYSTEM_PACKAGES=1 UV_NO_CACHE=1
 
 # Install dependencies first (layer cached unless pyproject.toml changes).
 # Pin torch* to base image versions so uv doesn't try to upgrade them.
@@ -29,17 +32,16 @@ RUN pip freeze | grep -iE '^(torch|torchaudio|torchvision)==' > /tmp/torch-const
     uv pip install --system --torch-backend=cu128 -r /tmp/requirements.txt
 
 # ---------------------------------------------------------------------------
-# Pre-download ALL models at build time so cold starts are near-instant.
+# Pre-download models to reduce startup downloads. Optional downloads may fail.
 # GPU is not available during docker build, so we load on CPU.
-# These layers are ~5 GB and rarely change — placed BEFORE COPY src/
+# These layers were about 6 GB in v0.1.15 — placed BEFORE COPY src/
 # so code changes don't trigger multi-GB re-downloads.
 # ---------------------------------------------------------------------------
 
 ARG WHISPER_MODEL_SIZE=large-v2
 
-# 1. Whisper model (~3 GB for large-v2) + upgrade Lightning checkpoint
-RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cpu', compute_type='int8')" && \
-    python -c "\
+# Upgrade the installed Lightning checkpoint while running as root.
+RUN python -c "\
 from lightning.pytorch.utilities.migration.utils import migrate_checkpoint; \
 import torch, pathlib; \
 p = next(pathlib.Path('/usr/local/lib').glob('python3.*/dist-packages/whisperx/assets/pytorch_model.bin')); \
@@ -48,7 +50,13 @@ migrated, _ = migrate_checkpoint(ckpt); \
 torch.save(migrated, p); \
 print('Lightning checkpoint upgraded in-place')" 2>/dev/null || true
 
-# 2. Alignment models for common languages (~400 MB each)
+# Download as the runtime user so later layers do not copy weights to change ownership.
+USER worker
+
+# 1. Whisper model (~3 GB for large-v2)
+RUN python -c "import whisperx; whisperx.load_model('${WHISPER_MODEL_SIZE}', 'cpu', compute_type='int8')" || true
+
+# 2. Alignment models for English (~383 MB) and Chinese (~2.55 GB in v0.1.15)
 RUN python -c "import whisperx; whisperx.load_align_model('en', 'cpu')"
 RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 
@@ -75,6 +83,7 @@ PYEOF
 # Copy source code last — code changes only rebuild this layer (~KB)
 # ---------------------------------------------------------------------------
 
+USER root
 COPY src/ src/
 RUN uv pip install --system --no-deps -e .
 
@@ -84,7 +93,5 @@ ENV WHISPER_DEVICE=cuda
 ENV WHISPER_COMPUTE_TYPE=float16
 ENV WHISPER_BATCH_SIZE=16
 
-# Match the CPU image owner so switching Compose variants can reuse volumes.
-RUN chown -R worker:worker /data /cache
 USER worker
 CMD ["python", "-m", "audio_extraction"]
