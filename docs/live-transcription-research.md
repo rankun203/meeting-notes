@@ -7,7 +7,7 @@ scope: research
 
 # Live transcription for Gday Meetings
 
-Research date: 2026-09-25. Scope: implementation research, primarily for the native Swift client; no feature implementation or recognition benchmark was performed. Repository baseline inspected: `9b988ca`. Recommendations and numerical acceptance targets below are engineering proposals, not measured results.
+Research date: 2026-09-25, against repository baseline `9b988ca`. Architecture audit: 2026-09-26, against `169ce49`; repository facts below reflect that commit, and external provider research was not repeated. Scope: implementation research, primarily for the native Swift client; no feature implementation or recognition benchmark was performed. Recommendations and numerical acceptance targets below are engineering proposals, not measured results.
 
 ## Recommendation
 
@@ -23,13 +23,18 @@ Voice Memos on Mac supports transcription on Apple silicon with macOS 15+, inclu
 
 Our proposed experience:
 
-- Start recording immediately; show whether live text is preparing, listening, unavailable, or interrupted.
+- Start recording immediately; show in the recording view whether live text is preparing, listening, unavailable, or interrupted.
 - Show stable phrases followed by visibly provisional text that can change without duplicating previous words.
 - Keep notes, recording controls, and source meters accessible. Follow the newest phrase until the user scrolls away; provide a “Follow live” action.
 - Preserve text and its timeline when recording stops. Enable transcript-to-audio navigation; add word highlighting when actual timing data exists.
 - Continue recording if recognition, a model download, or a network connection fails.
 
-Meeting capture is harder than a single voice memo: local and remote speech can overlap, speakers can leak into the microphone, and system audio can contain several people. Source separation is useful evidence, not proof of speaker identity.
+Meeting capture differs from a single voice memo. Microphone and system audio are separate, time-aligned tracks, so when a local and a remote person talk at once, each voice goes to its own recognizer rather than one mixed signal. Two problems remain:
+
+- Several remote participants share the single system-audio track and can overlap within it.
+- Speaker playback can leak into the microphone. Headphones avoid this path. With **Settings → Recording → Turn On Voice Processing Automatically** on (the default), Apple voice processing turns on for a speaker output, or when echo detection finds system audio in the microphone. Voice processing reduces leakage but does not guarantee its removal, and it can be switched off during recording.
+
+Source separation is useful evidence, not proof of speaker identity.
 
 ## English and Chinese are release requirements
 
@@ -50,9 +55,9 @@ Do not route short audio fragments between English and Chinese engines based on 
 
 ### Existing language behavior that must change
 
-The Swift client stores a language in each meeting's recording configuration, initialized from **Settings → Recording → Default Language** (initially English, `en`), and snapshots it for each transcription attempt. It does not yet separate expected spoken languages from preferred script. The worker accepts one job-level language, strips regional suffixes for WhisperX, and applies OpenCC conversion for exact `zh-cn`/`zh-tw` inputs. Its pipeline aligns each track using the transcription result's single language. These are useful batch building blocks, but neither script conversion nor that alignment path proves bilingual recognition/alignment. [Swift submission](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift), [Worker language handling](../apps/worker-audio-extraction/src/audio_extraction/handler.py), [Worker alignment](../apps/worker-audio-extraction/src/audio_extraction/pipeline.py)
+Each Swift meeting stores one language code, chosen in New Recording or meeting details and initialized from **Settings → Recording → Default Language** (initially English, `en`). The choices come from the selected transcription provider's reported catalog; the app has no fallback catalog and rejects empty or `auto` values before upload. Each transcription attempt snapshots the code. One code carries both spoken language and preferred script (`zh-cn` and `zh-tw` select output conversion), and there is no list of expected languages. The worker accepts one job-level language, strips regional suffixes for WhisperX, and applies OpenCC conversion for exact `zh-cn`/`zh-tw` inputs. Its pipeline aligns each track using the transcription result's single language. These are useful batch building blocks, but neither script conversion nor that alignment path proves bilingual recognition/alignment. [Swift submission](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift), [Language discovery](protocols/transcription.md#discover-supported-languages), [Worker language handling](../apps/worker-audio-extraction/src/audio_extraction/handler.py), [Worker alignment](../apps/worker-audio-extraction/src/audio_extraction/pipeline.py)
 
-Add separate persisted fields for expected spoken languages, optional dialect/locale, preferred script, and the provider's actual configuration. Map these through each adapter rather than passing one provider's language codes unchanged everywhere. Preserve raw recognized text alongside any display conversion. Conversion can alter character counts and phrases, so retain explicit mappings for timing/edit offsets; do not attach old character offsets blindly to converted text. For mixed-language batch alignment, evaluate per-span alignment or preserve coarser trustworthy timing when an aligner cannot represent a span. Missing alignment must not delete correctly recognized text.
+Add separate persisted fields for expected spoken languages, optional dialect/locale, preferred script, and the provider's actual configuration. Map these through each adapter rather than passing one provider's language codes unchanged everywhere; a live engine's supported locales are not the batch provider's catalog. Preserve raw recognized text alongside any display conversion. Conversion can alter character counts and phrases, so retain explicit mappings for timing/edit offsets; do not attach old character offsets blindly to converted text. For mixed-language batch alignment, evaluate per-span alignment or preserve coarser trustworthy timing when an aligner cannot represent a span. Missing alignment must not delete correctly recognized text.
 
 ### What “good” must demonstrate
 
@@ -64,19 +69,22 @@ Select the default only after both language slices pass. If Apple passes monolin
 
 ## Existing integration points
 
-Paths below are relative to the repository root. Findings are from source inspection, not assumptions about the running app.
+Findings are from source inspection at `169ce49`, not from running the app.
 
 | Area | Current behavior | Implication |
 | --- | --- | --- |
 | [Package.swift](../apps/client-macos-swift/Package.swift) | macOS 14.2 minimum; Swift tools 5.9 manifest; native audio bridges | Gate modern Speech types behind availability checks; update build-tool documentation when adopting a newer SDK |
-| [AudioCapture.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/AudioCapture.swift) | AVAudioEngine microphone tap; separate system callback; common host-clock epoch | Fan out owned PCM buffers and timestamps before compression |
-| [SystemAudioCapture.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/SystemAudioCapture.swift) | Core Audio process tap, C ring buffer, consumer queue; reusable stereo PCM buffer | Keep inference and allocations out of the IOProc; copy before the consumer reuses its buffer |
-| [TimedAudioWriter.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/TimedAudioWriter.swift) | Maps host time to frames; fills gaps and trims overlaps | Recognition must use the same mapping to remain aligned with saved audio |
-| [MeetingStore.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingStore.swift) | Owns recording lifecycle; auto-transcription runs after stop | Add a separate live-session lifecycle and finalization state |
-| [MeetingIntelligence.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingIntelligence.swift) | Explicit provider selection for batch transcription and summaries | Add a separate streaming contract; the removed direct endpoint path is not a streaming foundation |
-| [ProviderTranscription.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift) | Durable provider/upload/job checkpoints; preserves transcript edits and retains conflicting results | Retain retry semantics; extend revision handling before combining with live drafts |
-| [Models.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/Models.swift) | Segment ID, start/end, speaker, text; no word timing, revisions, or finality | Extend storage deliberately rather than treating each partial as a new segment |
-| [RecordingWorkspaceView.swift](../apps/client-macos-swift/Sources/GdayMeetings/UI/RecordingWorkspaceView.swift) | Recording configuration/workspace | Add live text with synthetic preview events |
+| [AudioCapture.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/AudioCapture.swift) | Owns both track writers, one host-clock epoch for the whole recording, and a recovery controller per source. Rebuilds the microphone engine or system tap after route, format, or device changes, a missing timestamp, or 3 seconds without buffers; the other source keeps recording. Each microphone build pins a selected microphone and applies the voice-processing policy (automatic, live switch, or echo-triggered). Records each route change. `onFailure` fires only for writer errors or when every selected source has failed. | Put the recognition fan-out here, in a per-source sink that outlives capture sessions: each session's tap closure is discarded on rebuild. Forward reconnect, format, and voice-processing changes as discontinuity events. ASR errors must not reach `onFailure`. |
+| [CaptureSourceRecovery.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/CaptureSourceRecovery.swift) | Running, reconnecting, failed, and stopped states per source; a generation per rebuild request; debounce and capped backoff; stop with a deadline that abandons a stuck native call | A capture generation identifies a device session, not a recognition session. A rebuild should add a discontinuity, not end live text. Do not make ASR finalization wait on an abandoned attempt. |
+| [SystemAudioCapture.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/SystemAudioCapture.swift) | Core Audio process tap, C ring buffer, consumer queue; one reusable stereo Float32 buffer. One instance per tap session: format, aggregate, or ring failures report an interruption and recovery replaces the instance. | Keep inference and allocations out of the IOProc; copy before the consumer reuses its buffer. The sample rate can differ after a rebuild. |
+| [TimedAudioWriter.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/TimedAudioWriter.swift) | Fixes each track's format at its first device; maps channels and resamples later formats into it. Maps host time to frames, pads missing intervals with silence, trims overlaps, and records gaps of 0.1 seconds or longer. | Its converted output has one format and the saved file's frame positions, which makes it the simplest recognition input. It is not exposed today. A hook would run under the writer lock on capture threads, so it must copy into a bounded queue without blocking. |
+| [EchoDetector.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/EchoDetector.swift) | Correlates 20 ms level envelopes of microphone and system audio over 6 seconds at 0–400 ms lags, once per second. Runs only while both sources record and the microphone is unprocessed. Under the automatic policy, a report turns voice processing on; only the live switch turns it off again. | Makes leakage less likely to reach the microphone recognizer, without guaranteeing it. It stops evaluating once processing is on, so it does not measure residual echo. |
+| [RecordingAudioRoute.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/RecordingAudioRoute.swift) | Classifies the default output's terminal type: speakers turn automatic voice processing on; headphones and unknown routes leave it off. Lists input devices for the Microphone menu. | Describes the Mac's default output, not a calling app's own output choice. Expected leakage in a given recording remains uncertain. |
+| [MeetingStore.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingStore.swift) | Owns the recording lifecycle and saves the recording profile, including gaps and route changes, at start and stop. After a successful stop, transcribes only when **Automatically Transcribe Recordings** is on (off by default). `isBusy` and `statusMessage` drive a progress bar that is hidden while recording; failures appear as alerts through `errorMessage`. | Add a separate live-session lifecycle and finalization state. Do not use `isBusy` or `statusMessage` for live text: `isBusy` disables other actions and the bar is hidden during recording. Use alerts only for failures that need action. |
+| [MeetingIntelligence.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingIntelligence.swift) | Resolves the meeting's transcription provider (RunPod with Filedrop, or the Gday Meetings website) and the summary provider. The OpenAI-compatible provider handles summaries only. | Add a separate streaming capability and contract; no current provider streams. |
+| [ProviderTranscription.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift) | Durable provider/upload/job checkpoints; language snapshot validated against the provider's catalog; per-track microphone/system source type; preserves transcript edits and retains conflicting results | Retain retry semantics; extend revision handling before combining with live drafts |
+| [Models.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/Models.swift) | Segment ID, start/end, speaker, text; one language code per meeting; no word timing, revisions, or finality | Extend storage deliberately rather than treating each partial as a new segment |
+| [RecordingWorkspaceView.swift](../apps/client-macos-swift/Sources/GdayMeetings/UI/RecordingWorkspaceView.swift) | New Recording setup (title, language, sources, Microphone menu) and the live view: reconnect status, source meters, and the **Voice Processing** switch with its notices | Add live text with synthetic preview events; keep recognition state separate from capture reconnect status |
 | [Worker](../apps/worker-audio-extraction/README.md) | File jobs; WhisperX/faster-whisper, alignment, pyannote diarization | Suitable for post-processing; no current continuous-audio transport |
 
 The current Swift system capture uses Core Audio taps, not ScreenCaptureKit. Replacing capture is unnecessary for this feature. The Rust client can later reuse the event/storage contract, but needs its own provider integration; Swift framework integration is not automatically portable.
@@ -140,7 +148,7 @@ Deepgram offers interim text plus distinct segment-final and speech-end indicato
 
 Proposed cloud design: start with one adapter, explicit transmission consent/settings, and either a user's Keychain-held credential or a server-brokered short-lived credential. Never embed an application-wide secret in the app. The server must check meeting ownership and usage limits before brokering or proxying. Use bounded reconnect/backoff, sequence numbers, a confirmed-audio watermark, and gap markers. Replaying uncertain audio can duplicate billing and results; reconcile by source/session/time rather than text alone. Provider retention and residency settings must be checked for the chosen account before describing this mode as private.
 
-Do not claim our existing “OpenAI-compatible” file URL supports streaming. File response streaming and ongoing audio ingestion are different protocols. [File transcription guide](https://developers.openai.com/api/docs/guides/speech-to-text)
+The app's OpenAI-compatible provider handles summaries only. File transcription with a streamed response and ongoing audio ingestion are different protocols; a file endpoint is not a streaming foundation. [File transcription guide](https://developers.openai.com/api/docs/guides/speech-to-text)
 
 ### Self-hosted streaming and repeated file chunks
 
@@ -152,8 +160,8 @@ Short overlapping uploads are acceptable for a disposable experiment. For a wind
 
 ```mermaid
 flowchart TD
-    M[Microphone PCM] --> C[Capture fan-out and shared clock]
-    S[System PCM] --> C
+    M[Microphone engine, replaced on rebuild] --> C["AudioCapture per-source sink: shared epoch, gaps, route changes"]
+    S[System tap, replaced on rebuild] --> C
     C --> W[Existing durable audio writer]
     C --> Q[Bounded owned PCM queues]
     Q --> P[Selected live provider per source]
@@ -172,15 +180,18 @@ Use a session generation to reject results from a previous recording or restarte
 
 Timing rules:
 
-- Express persisted times relative to the capture epoch, not callback arrival time or `Date()`.
-- Keep source offsets through resampling. Account for conversion buffering; do not reset sample counts per callback.
-- Match the writer's gap/overlap decisions or send explicit discontinuity times. Never concatenate separated audio and then pretend it was continuous.
+- Express persisted times relative to the capture epoch, not callback arrival time or `Date()`. One epoch covers the whole recording, including source rebuilds.
+- Keep source offsets through resampling. Account for conversion buffering; do not reset sample counts per callback. A rebuilt source can arrive in a new sample rate or channel count; start fresh converter state at that boundary. Feeding the writer's converted output avoids this, since the track format is fixed (see the table above).
+- Match the writer's decisions: it pads missing intervals with silence, trims overlapping frames, and records gaps of 0.1 seconds or longer in the track's `gaps`. Send explicit discontinuities for those intervals instead of recognizing padded silence as audio. Never concatenate separated audio and then pretend it was continuous.
+- Treat each route change (device, format, voice processing, with a reason) as a possible recognition discontinuity. `RecordingProfile.routeChanges` persists them, but the meeting saves the profile only at start and stop, so a live consumer needs AudioCapture events.
 - Sort across sources by audio time with deterministic tie-breaking. Recognition completion order is not conversation order.
 - Store word timing only when supported. Application turn boundaries are coarse estimates, not word alignment.
 
 Backpressure is a correctness issue. Start with a bounded queue sized in seconds and profile it; do not use an unbounded AsyncStream or create a Task for every buffer. On saturation, preserve recording, mark the skipped recognition interval, and offer later repair from saved audio. Do not invoke AudioCapture's recording-failure callback for an ASR-only failure. ASR startup should not hold the recording controls hostage to a download.
 
-For two-source capture, prefer independent recognition when resources permit; label text “Microphone” and “System audio” initially. A single mixed ASR stream is a possible lower-resource mode but loses source attribution and makes overlap harder. Do not silently downshift. Test external speaker leakage with headphones and speakers; the existing voice-processing option does not guarantee cancellation of every external app's audio. Avoid removing repeated phrases solely because their text matches.
+For two-source capture, prefer independent recognition when resources permit; label text “Microphone” and “System audio” initially. A single mixed ASR stream is a possible lower-resource mode but loses source attribution and puts simultaneous local and remote speech back into one signal. Do not silently downshift.
+
+Leaked speaker audio can make the microphone recognizer repeat remote speech. Automatic voice processing makes this less likely, but does not prevent it: the automatic setting or the live switch can be off, unknown routes start unprocessed, echo detection needs speech-like system audio, and residual echo with processing on is unmeasured. Test with headphones, and with speakers with processing on and off. Avoid removing repeated phrases solely because their text matches. Untested idea: the echo detector's envelope correlation and lag could provide acoustic evidence that a microphone span repeats system audio before text is de-duplicated.
 
 Persist finalized live phrases in a versioned per-meeting journal/checkpoint, with source, engine/model/locale, coverage, and completion status. Keep volatile text in memory. Atomically checkpoint and bound journal growth; on recovery, retain confirmed text and identify unprocessed audio ranges. Store user edits separately from provider revisions or create immutable transcript revisions with an active revision pointer. Backward-compatible decoding and export behavior need tests.
 
@@ -191,7 +202,7 @@ The current batch completion code assigns `meeting.transcript` wholesale. Before
 | Stage | Deliverable | Exit evidence |
 | --- | --- | --- |
 | 1. Capability and bilingual spike | Apple model readiness, one PCM source, provisional/final reducer, timestamp export; multilingual WhisperKit comparison | English, Mandarin, and mixed-speech quality/latency gates; offline after provisioning; final words preserved at stop |
-| 2. Capture integration | Existing microphone/system fan-out, two sessions, bounded queues | 60–120 minute capture without ASR-induced recording loss; synchronization and resource measurements |
+| 2. Capture integration | Per-source fan-out in AudioCapture, two sessions, bounded queues, discontinuities for source rebuilds | 60–120 minute capture without ASR-induced recording loss; live text continues through route changes and Voice Processing switches; synchronization and resource measurements |
 | 3. Product behavior | Live workspace, error states, checkpoints, recovery, transcript revision policy | Crash/stop/error scenarios, user edits preserved, synthetic UI Preview validated |
 | 4. Compatibility | macOS 14.2/15 feature gating, DictationTranscriber evaluation, optional WhisperKit spike | Actual oldest-OS launch and architecture matrix; no silently remote fallback |
 | 5. Optional remote mode | One cloud adapter or a separately justified self-hosted service | Account capability, measured latency/cost, reconnect/duplicate tests |
@@ -202,7 +213,7 @@ Suggested routing: filter providers by the selected language mode and validated 
 
 ## Evaluation and operating costs
 
-Create a consented, manually checked evaluation corpus containing Australian English, Mandarin, English–Mandarin mixed speech, accents, names/numbers, quiet and noisy rooms, remote compressed audio, overlapping speakers, and silence/music. Chinese and mixed-language cases are mandatory evaluation slices. Run the same timestamped PCM through providers at wall-clock pace; faster-than-realtime file tests cannot establish live latency.
+Create a consented, manually checked evaluation corpus containing Australian English, Mandarin, English–Mandarin mixed speech, accents, names/numbers, quiet and noisy rooms, remote compressed audio, overlapping speakers, speaker playback with voice processing on and off, and silence/music. Chinese and mixed-language cases are mandatory evaluation slices. Run the same timestamped PCM through providers at wall-clock pace; faster-than-realtime file tests cannot establish live latency.
 
 Suggested initial targets, subject to the spike:
 
@@ -215,15 +226,15 @@ Suggested initial targets, subject to the spike:
 | Text accuracy | Separate English WER, Mandarin CER, mixed error rate, and named-entity errors | Apply the proposed bilingual thresholds above to human references; compare existing batch output as a baseline |
 | Timeline | Known audible markers and transcript seek checks | Segment offsets within 250 ms on controlled fixtures; evaluate word times separately |
 | Resource use | App and speech-service CPU/memory, energy, thermal state | Bounded growth and usable concurrent meeting app |
-| Recovery | Provider death, network loss, disk failure, sleep/route change, app restart | Audio preserved where capture succeeds; gaps visible; no duplicated finals or lost edits |
+| Recovery | Provider death, network loss, disk failure, sleep, source rebuild after a route change or Voice Processing switch, app restart | Audio preserved where capture succeeds; gaps visible; no duplicated finals or lost edits |
 
-Also test denied microphone/system permission, first-run download cancellation, unsupported locale, model eviction, provider quota errors, rapid Start/Stop, stopping mid-word, and one source remaining silent. The current capture deliberately saves a partial meeting on route changes; live transcription should finalize that same partial session rather than invent transparent recording recovery.
+Also test denied microphone/system permission, first-run download cancellation, unsupported locale, model eviction, provider quota errors, rapid Start/Stop, stopping mid-word, and one source remaining silent. Capture continues through route changes, replacing a source's engine or tap and padding the gap. Live transcription must continue too: accept a new format, a gap, a voice-processing change, and a new capture generation for either source without ending the live session, and finalize once at **Stop & Save**. A recording ends early only on a writer error or when every selected source has failed.
 
 Apple avoids a separately contracted metered ASR service, but local inference still consumes device resources and model storage. Whisper variants add model delivery/support overhead. Cloud costs depend on actual billable audio/channels, retries, model, account plan, and any final batch pass; do not budget only wall-clock meeting duration. At a hypothetical rate r per audio minute, a 60-minute meeting sent as two continuously billed streams costs 120r before retry/post-processing costs. This is a formula, not a provider quote. Capture actual usage from a pilot before choosing a paid default. Self-hosting must include idle warm capacity and operational time, not just inference seconds.
 
 ## Open questions and limits of this research
 
-- No live recognition was run, no model was downloaded, and no meeting audio was sent to a provider. Accuracy, real latency, Apple two-session capacity, and battery impact remain unmeasured.
+- No live recognition was run, no model was downloaded, and no meeting audio was sent to a provider. Accuracy, real latency, Apple two-session capacity, battery impact, and duplicate text caused by speaker leakage remain unmeasured.
 - Supported locales and device readiness must be queried at runtime; documentation language lists are not recognition-language lists.
 - Verify permissions for the selected modern Speech path in the packaged app. Existing microphone/system purpose strings are present; an SFSpeechRecognizer adapter would require its own speech authorization setup. Do not add unrelated screen-capture permissions.
 - Check the chosen release's SDK availability and compiler diagnostics during implementation. This documentation change generated no build diagnostics; it does not certify the application warning-free.
