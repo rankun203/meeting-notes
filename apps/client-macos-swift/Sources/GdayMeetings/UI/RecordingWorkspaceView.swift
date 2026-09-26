@@ -69,9 +69,9 @@ struct RecordingSetupView: View {
     private var form: some View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Meeting title").font(.subheadline.weight(.medium))
+                Text("Meeting Title").font(.subheadline.weight(.medium))
                 TextField("Untitled Meeting", text: $title)
-                    .textFieldStyle(.roundedBorder).accessibilityLabel("Meeting title").disabled(
+                    .textFieldStyle(.roundedBorder).accessibilityLabel("Meeting Title").disabled(
                         store.isStartingRecording)
             }
             VStack(spacing: 0) {

@@ -36,8 +36,8 @@ struct WaveformScrollGesture {
             }
             target = min(duration, max(0, time))
         }
-        // Scroll the timeline using macOS's configured scrolling direction.
-        target = min(duration, max(0, target! - x / width * duration))
+        // Pan the playhead in the gesture’s direction, rather than scrolling content.
+        target = min(duration, max(0, target! + x / width * duration))
         return true
     }
 
@@ -55,6 +55,7 @@ final class WaveformScrollView: NSView {
     private var gesture = WaveformScrollGesture()
     private var monitor: Any?
     private var completion: DispatchWorkItem?
+    private var committedTarget: Double?
     private static weak var owner: WaveformScrollView?
 
     override init(frame: NSRect) {
@@ -127,7 +128,10 @@ final class WaveformScrollView: NSView {
             finish(commit: true)
         }
         else if phase.contains(.ended) || (phase.isEmpty && momentum.isEmpty) {
-            // Allow the touch-to-momentum handoff; coalesce phase-less wheel events.
+            // Update playback as soon as fingers lift. Retain the gesture briefly
+            // so momentum can continue from the same target without another seek.
+            if phase.contains(.ended) { commitTarget() }
+            // Phase-less wheels still coalesce until their events stop arriving.
             let work = DispatchWorkItem { [weak self] in self?.finish(commit: true) }
             completion = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -139,12 +143,20 @@ final class WaveformScrollView: NSView {
         completion?.cancel()
         completion = nil
         let target = gesture.target
+        if commit { commitTarget() }
         gesture.reset()
+        committedTarget = nil
         if Self.owner === self { Self.owner = nil }
-        if let target {
-            if commit { seek(target) }
+        if target != nil {
             scrub(nil)
         }
+    }
+
+    private func commitTarget() {
+        guard let target = gesture.target, target != committedTarget else { return }
+        committedTarget = target
+        seek(target)
+        scrub(nil)
     }
 
     func stop() {
