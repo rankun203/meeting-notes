@@ -52,6 +52,12 @@ struct WaveformTimeline: View {
                     })
         }
         .frame(height: 24)
+        .background {
+            WaveformScrollInput(time: time, duration: duration, seek: seek) { value in
+                if value != nil { focused = true }
+                scrub(value)
+            }
+        }
         .modifier(ActionHover(pressed: isScrubbing, cornerRadius: 4))
         .overlay(alignment: .center) {
             if waveforms.isEmpty {
@@ -80,7 +86,7 @@ struct WaveformTimeline: View {
             @unknown default: break
             }
         }
-        .help("Click or drag to seek. Arrow keys move five seconds.")
+        .help("Click, drag, or scroll horizontally to seek. Arrow keys move five seconds.")
         .onDisappear { if isScrubbing { scrub(nil) } }
     }
 }
