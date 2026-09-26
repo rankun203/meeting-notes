@@ -48,7 +48,7 @@ struct GdayMeetingsApp: App {
                     .disabled(store.isBusy || store.isStartingRecording || store.isFinalizingRecording)
             }
             CommandGroup(after: .help) {
-                Button("Export Recording Logs") { MeetingPanels.exportRecordingLogs(store) }
+                Button("Export Logs") { MeetingPanels.exportLogs(store) }
             }
             CommandMenu("Playback") {
                 Button(playback.isPlaying ? "Pause" : "Play") { playback.togglePlayPause() }

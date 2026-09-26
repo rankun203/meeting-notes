@@ -122,9 +122,41 @@ enum ServiceHTTP {
         return URL(string: "\(u.scheme!)://\(host)\(u.port.map { ":\($0)" } ?? "")")!
     }
     static func sameOrigin(_ a: URL, _ b: URL) -> Bool { a.scheme == b.scheme && a.host == b.host && a.port == b.port }
-    static func json(_ request: URLRequest) async throws -> [String: Any] {
-        let (data, response) = try await session.data(for: request)
+    static func json(_ request: URLRequest, trace: NetworkTrace) async throws -> [String: Any] {
+        let (data, response) = try await data(for: request, trace: trace)
         return try decode(data, response)
+    }
+    /// Every outbound request goes through `data` or `upload` so it appears in the network log.
+    static func data(for request: URLRequest, trace: NetworkTrace) async throws -> (Data, URLResponse) {
+        try await logged(request, trace: trace, bytesSent: request.httpBody?.count ?? 0) {
+            try await session.data(for: request)
+        }
+    }
+    static func upload(for request: URLRequest, fromFile file: URL, trace: NetworkTrace) async throws -> (
+        Data, URLResponse
+    ) {
+        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return try await logged(request, trace: trace, bytesSent: size) {
+            try await session.upload(for: request, fromFile: file)
+        }
+    }
+    private static func logged(
+        _ request: URLRequest, trace: NetworkTrace, bytesSent: Int,
+        _ send: () async throws -> (Data, URLResponse)
+    ) async throws -> (Data, URLResponse) {
+        do {
+            let result = try await send()
+            let status = (result.1 as? HTTPURLResponse)?.statusCode ?? 0
+            NetworkLog.record(
+                trace, request: request, bytesSent: bytesSent, outcome: NetworkLog.outcome(result.1),
+                failed: !(200..<300).contains(status))
+            return result
+        }
+        catch {
+            NetworkLog.record(
+                trace, request: request, bytesSent: bytesSent, outcome: NetworkLog.outcome(error), failed: true)
+            throw error
+        }
     }
     static func decode(_ data: Data, _ response: URLResponse) throws -> [String: Any] {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -163,8 +195,10 @@ struct LLMMessage: Codable {
     let content: String
 }
 enum LLMService {
-    static func complete(baseURL: String, apiKey: String, model: String, messages: [LLMMessage]) async throws -> String
-    {
+    static func complete(
+        baseURL: String, apiKey: String, model: String, messages: [LLMMessage],
+        provider: String = ServiceProviderKind.openAICompatible.title
+    ) async throws -> String {
         guard let base = URL(string: baseURL),
             base.scheme == "https"
                 || (base.scheme == "http" && ["localhost", "127.0.0.1", "[::1]"].contains(base.host ?? "")),
@@ -177,7 +211,8 @@ enum LLMService {
                 "model": model, "messages": messages.map { ["role": $0.role, "content": $0.content] }, "stream": false,
             ])
         if !apiKey.isEmpty { r.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
-        let result = try await ServiceHTTP.json(r)
+        let result = try await ServiceHTTP.json(
+            r, trace: .init(provider: provider, data: "meeting text (\(messages.count) messages)"))
         guard let choices = result["choices"] as? [[String: Any]],
             let message = choices.first?["message"] as? [String: Any], let text = message["content"] as? String
         else { throw ServiceError("The AI provider returned no message.") }

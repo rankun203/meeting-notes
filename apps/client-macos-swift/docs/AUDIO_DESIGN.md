@@ -87,7 +87,7 @@ Capture writes structured entries to the unified log under the subsystem `com.gd
 
 - Live: `log stream --level info --predicate 'subsystem == "com.gdaymeetings.macos"'`
 - Earlier runs: `log show --last 30m --info --predicate 'subsystem == "com.gdaymeetings.macos" OR (process == "GdayMeetings" AND subsystem == "com.apple.avfaudio")'`
-- In the app: **Help → Export Recording Logs** saves the last hour of this app run's entries, plus AVAudioEngine's, to `~/Library/Logs/Gday Meetings/` and shows the file in Finder. `OSLogStore` limited to the current process needs no entitlement, so earlier app runs need `log show`.
+- In the app: **Help → Export Logs** (also in **Settings → Data Privacy**) saves the last hour of this app run's entries, including the `network` category, plus AVAudioEngine's, to `~/Library/Logs/Gday Meetings/` and shows the file in Finder. `OSLogStore` limited to the current process needs no entitlement, so earlier app runs need `log show`.
 
 AVAudioEngine's own entries (`com.apple.avfaudio`) record engine start, stop, configuration changes, and format mismatches; they identified the device-selection loop described in the September 26, 2026 worklog. Core Audio's HAL entries are too verbose to export by default.
 

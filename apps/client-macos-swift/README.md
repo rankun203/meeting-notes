@@ -133,9 +133,21 @@ The meetings library lives in `~/.local/share/com.gdaymeetings.macos/`, and the 
 
 For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR` is only a library-location override for development: it does not enable UI Preview, disable recording/network access, or suppress all credential access (server authentication can still read Keychain). Tests use temporary directories and synthetic data.
 
-## Recording logs
+## Data privacy and logs
 
-Choose **Help → Export Recording Logs** to save the last hour of recording diagnostics from the running app to `~/Library/Logs/Gday Meetings/` and show the file in Finder. The logs contain device names, formats, and recovery decisions, but no audio. To follow a recording live, or to read logs from an earlier app run, see [Recording diagnostics](docs/AUDIO_DESIGN.md#recording-diagnostics).
+**Settings → Data Privacy** lists each type of data the app manages: recorded audio, meeting details, notes, transcripts, summaries, to-dos, chat messages, people and tags, Server Library searches, credentials, settings, and logs. For each type, it shows **Stays on this Mac** or the provider and host that receive it, and the action that sends it. The list is derived from the current service providers and settings (`Core/DataPrivacy.swift`). Opening the tab reads no credentials and makes no network requests.
+
+| Data | Sent when | Receiver |
+| --- | --- | --- |
+| Recorded audio, meeting language | **Transcribe**, or after each recording with **Automatically Transcribe Recordings** on | Filedrop stores the audio; RunPod downloads it and receives the language. The website receives audio, title, and language. |
+| Title, notes, transcript, summary, chat, Summary Instructions | **Generate Summary** or **Send** in a chat | The selected OpenAI-compatible provider. To-dos are not sent. |
+| Full meeting, audio, linked people and tags | **Archive to Server** | The signed-in Gday Meetings website. |
+| Search text | Server Library search | The signed-in Gday Meetings website. |
+| API keys and sign-in tokens (Keychain) | Each request, including connection checks when a provider panel opens | Only the provider they belong to. |
+
+Every outbound request is logged in the `network` category of the unified log with the provider, host and path, data category, bytes sent, and outcome. Entries never include bodies, headers, query strings, credentials, or local file paths (`Services/NetworkLog.swift`).
+
+Choose **Help → Export Logs**, or **Export Logs** in Data Privacy, to save the last hour of this app run's logs to `~/Library/Logs/Gday Meetings/` and show the file in Finder. The logs contain device names, formats, recovery decisions, and network transmission records, but no audio or meeting text. To follow a recording live, or to read logs from an earlier app run, see [Recording diagnostics](docs/AUDIO_DESIGN.md#recording-diagnostics).
 
 ## Human Interface Guidelines
 
@@ -149,7 +161,7 @@ The source cites the relevant Apple HIG principles beside the controls implement
 | [Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars) | Recording and contextual actions at the top of the window, labeled SF Symbols. |
 | [Settings](https://developer.apple.com/design/human-interface-guidelines/settings) | Standard Settings scene with grouped recording, transcription, and intelligence options. |
 | [Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility) | Native controls, semantic fonts/colors, accessible labels, keyboard navigation, and text selection. |
-| [Privacy](https://developer.apple.com/design/human-interface-guidelines/privacy) | Just-in-time recording permission requests and browser authentication. |
+| [Privacy](https://developer.apple.com/design/human-interface-guidelines/privacy) | Just-in-time recording permission requests, browser authentication, and Settings → Data Privacy. |
 | [Sheets](https://developer.apple.com/design/human-interface-guidelines/sheets) | Focused recording setup with draft choices, explicit start/cancel, and inline retry errors. |
 | [Feedback](https://developer.apple.com/design/human-interface-guidelines/feedback) | Actual source levels and distinct recording/saving states without invented progress. |
 | [Playing audio](https://developer.apple.com/design/human-interface-guidelines/playing-audio) | App-owned persistent transport; browsing never implicitly starts or replaces playback. |

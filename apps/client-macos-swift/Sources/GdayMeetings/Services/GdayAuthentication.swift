@@ -42,7 +42,8 @@ private struct OAuthSession: Codable {
         defer { signingIn = false }
         let base = try ServiceHTTP.origin(text)
         let discovery = try await ServiceHTTP.json(
-            URLRequest(url: base.appendingPathComponent(".well-known/openid-configuration")))
+            URLRequest(url: base.appendingPathComponent(".well-known/openid-configuration")),
+            trace: Self.trace("sign-in discovery"))
         func endpoint(_ key: String) throws -> URL {
             guard let text = discovery[key] as? String, let url = URL(string: text), ServiceHTTP.sameOrigin(url, base),
                 url.user == nil, url.password == nil
@@ -67,7 +68,7 @@ private struct OAuthSession: Codable {
                     "client_name": "Gday Meetings for Mac", "application_type": "native", "redirect_uris": [redirect],
                     "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
                     "token_endpoint_auth_method": "none", "scope": scopes,
-                ]))
+                ]), trace: Self.trace("app registration"))
         guard let client = registered["client_id"] as? String else {
             throw ServiceError("The server did not register this app.")
         }
@@ -96,11 +97,11 @@ private struct OAuthSession: Codable {
                 [
                     "grant_type": "authorization_code", "code": code, "client_id": client, "redirect_uri": redirect,
                     "code_verifier": verifier, "resource": base.absoluteString + "/api/platform",
-                ]))
+                ]), trace: Self.trace("sign-in token request"))
         guard let access = token["access_token"] as? String, let id = token["id_token"] as? String,
             (token["token_type"] as? String)?.lowercased() == "bearer"
         else { throw ServiceError("Invalid OAuth token response.") }
-        let jwks = try await ServiceHTTP.json(URLRequest(url: jwksURL))
+        let jwks = try await ServiceHTTP.json(URLRequest(url: jwksURL), trace: Self.trace("sign-in key request"))
         let claims = try Self.verifyIDToken(
             id, jwks: jwks, issuer: issuer, clientID: client, nonce: nonce, accessToken: access)
         let session = OAuthSession(
@@ -122,8 +123,9 @@ private struct OAuthSession: Codable {
         origin = nil
         if let old, let revoke = old.revocationEndpoint {
             for token in [old.accessToken, old.refreshToken].compactMap({ $0 }) {
-                _ = try? await ServiceHTTP.session.data(
-                    for: ServiceHTTP.form(revoke, ["token": token, "client_id": old.clientID]))
+                _ = try? await ServiceHTTP.data(
+                    for: ServiceHTTP.form(revoke, ["token": token, "client_id": old.clientID]),
+                    trace: Self.trace("sign-out token revocation"))
             }
         }
     }
@@ -148,7 +150,7 @@ private struct OAuthSession: Codable {
                     [
                         "grant_type": "refresh_token", "refresh_token": refresh, "client_id": current.clientID,
                         "resource": current.origin.absoluteString + "/api/platform",
-                    ]))
+                    ]), trace: Self.trace("sign-in token refresh"))
             guard let access = token["access_token"] as? String,
                 (token["token_type"] as? String)?.lowercased() == "bearer"
             else { throw ServiceError("Invalid refreshed token.") }

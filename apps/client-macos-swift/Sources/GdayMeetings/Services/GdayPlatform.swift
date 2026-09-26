@@ -26,7 +26,8 @@ struct ServerMeeting: Identifiable {
 }
 extension GdayServerService {
     func ensureTranscriptionAvailable() async throws {
-        let result = try await ServiceHTTP.json(authorizedRequest("api/platform/capabilities"))
+        let result = try await ServiceHTTP.json(
+            authorizedRequest("api/platform/capabilities"), trace: Self.trace("capabilities request"))
         guard result["durableTasks"] as? Bool == true, result["transcription"] as? Bool == true else {
             throw ServiceError(
                 "This server does not have durable transcription configured. Ask its administrator to configure a worker."
@@ -46,7 +47,8 @@ extension GdayServerService {
         r.httpMethod = "POST"
         r.timeoutInterval = 900
         r.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await ServiceHTTP.session.upload(for: r, fromFile: file)
+        let (data, response) = try await ServiceHTTP.upload(
+            for: r, fromFile: file, trace: Self.trace("recorded audio"))
         let json = try ServiceHTTP.decode(data, response)
         guard let value = json["url"] as? String, let url = URL(string: value, relativeTo: r.url)?.absoluteURL,
             ServiceHTTP.sameOrigin(url, r.url!)
@@ -73,7 +75,8 @@ extension GdayServerService {
                 ] as [String: Any]
             }, "executionOptions": ["language": language, "diarize": diarize], "idempotencyKey": idempotencyKey,
         ])
-        let result = try await ServiceHTTP.json(r)
+        let result = try await ServiceHTTP.json(
+            r, trace: Self.trace("transcription job (\(inputs.count) audio links, title, language)"))
         guard let id = result["id"] as? String else {
             throw ServiceError(
                 "The server returned no task ID. Retry using the saved attempt to recover the same task.")
@@ -83,7 +86,7 @@ extension GdayServerService {
     func task(id: String) async throws -> ServerTaskResult {
         var r = try await authorizedRequest("api/platform/tasks")
         r.url = r.url!.appendingPathComponent(id)
-        return try Self.parseTask(await ServiceHTTP.json(r))
+        return try Self.parseTask(await ServiceHTTP.json(r, trace: Self.trace("job status request")))
     }
     static func parseTask(_ result: [String: Any]) throws -> ServerTaskResult {
         guard let outputs = result["outputs"] as? [[String: Any]] else {
@@ -119,7 +122,7 @@ extension GdayServerService {
         var components = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "query", value: query)]
         r.url = components.url
-        let result = try await ServiceHTTP.json(r)
+        let result = try await ServiceHTTP.json(r, trace: Self.trace("search query"))
         guard let meetings = result["meetings"] as? [[String: Any]] else {
             throw ServiceError("Invalid server search results.")
         }
@@ -131,7 +134,8 @@ extension GdayServerService {
         }
     }
     func ensureArchiveAvailable() async throws {
-        let capabilities = try await ServiceHTTP.json(authorizedRequest("api/platform/capabilities"))
+        let capabilities = try await ServiceHTTP.json(
+            authorizedRequest("api/platform/capabilities"), trace: Self.trace("capabilities request"))
         guard capabilities["meetingImports"] as? Bool == true else {
             throw ServiceError("Upgrade the server to support existing-meeting imports.")
         }
@@ -143,7 +147,9 @@ extension GdayServerService {
         r.timeoutInterval = 900
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await ServiceHTTP.session.data(for: r)
+        let (data, response) = try await ServiceHTTP.data(
+            for: r, trace: Self.trace("meeting archive (text and \((body["audio"] as? [Any])?.count ?? 0) audio links)")
+        )
         if (response as? HTTPURLResponse)?.statusCode == 409 {
             throw ServiceError(
                 "The server already has this meeting with a different snapshot or transcription. Archives are immutable and cannot overwrite an existing meeting. Your local files are unchanged."
@@ -155,6 +161,10 @@ extension GdayServerService {
         var r = try await authorizedRequest("api/platform/meetings/import")
         r.url = r.url!.appendingPathComponent(externalID)
         r.timeoutInterval = 900
-        return try await ServiceHTTP.json(r)
+        return try await ServiceHTTP.json(r, trace: Self.trace("archive verification"))
+    }
+    /// Server calls are not tied to one provider record; the website is the only one.
+    nonisolated static func trace(_ data: String) -> NetworkTrace {
+        NetworkTrace(provider: ServiceProviderKind.gdayWebsite.title, data: data)
     }
 }

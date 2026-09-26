@@ -462,19 +462,20 @@ struct LibraryView: View {
 
 @MainActor
 enum MeetingPanels {
-    /// Help → Export Recording Logs: saves the last hour of this run's capture
-    /// diagnostics as a text file and shows it in Finder. No audio is included.
-    static func exportRecordingLogs(_ store: MeetingStore) {
+    /// Help → Export Logs and Settings → Data Privacy: saves the last hour of this
+    /// run's capture and network entries as a text file and shows it in Finder.
+    /// No audio, meeting text, or credentials are included.
+    static func exportLogs(_ store: MeetingStore) {
         let start = Date().addingTimeInterval(-3600)
         Task {
             do {
                 let url = try await Task.detached(priority: .userInitiated) {
-                    try RecordingLogExport.export(since: start, to: RecordingLogExport.directory)
+                    try LogExport.export(since: start, to: LogExport.directory)
                 }.value
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
             catch {
-                store.errorMessage = "Couldn’t export recording logs. \(error.localizedDescription)"
+                store.errorMessage = "Couldn’t export logs. \(error.localizedDescription)"
             }
         }
     }

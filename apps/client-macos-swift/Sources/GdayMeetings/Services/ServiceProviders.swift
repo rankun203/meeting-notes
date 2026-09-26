@@ -154,7 +154,10 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
     static let maximumRequestBytes = 10_000_000
     func submit(tracks: [ProviderAudioTrack], language: String, diarize: Bool = false) async throws -> String {
         let request = try submissionRequest(tracks: tracks, language: language, diarize: diarize)
-        let result = try await ServiceHTTP.json(request)
+        let result = try await ServiceHTTP.json(
+            request,
+            trace: .init(
+                provider: provider.name, data: "transcription job (\(tracks.count) audio links, language)"))
         guard let id = result["id"] as? String, !id.isEmpty else {
             throw ServiceError("RunPod returned no job ID. Check the endpoint's job history before submitting again.")
         }
@@ -195,16 +198,18 @@ struct RunPodProvider: TranscriptionProvider, DiarizationProvider {
         return request
     }
     func status(jobID: String) async throws -> ProviderTranscriptionStatus {
-        try Self.parseStatus(await ServiceHTTP.json(jobRequest("status", jobID: jobID)))
+        try Self.parseStatus(await ServiceHTTP.json(jobRequest("status", jobID: jobID), trace: jobTrace))
     }
     func status(jobID: String, expectedTracks: Set<String>) async throws -> ProviderTranscriptionStatus {
-        try Self.parseStatus(await ServiceHTTP.json(jobRequest("status", jobID: jobID)), expectedTracks: expectedTracks)
+        try Self.parseStatus(
+            await ServiceHTTP.json(jobRequest("status", jobID: jobID), trace: jobTrace), expectedTracks: expectedTracks)
     }
     func cancel(jobID: String) async throws {
         var request = try jobRequest("cancel", jobID: jobID)
         request.httpMethod = "POST"
-        _ = try await ServiceHTTP.json(request)
+        _ = try await ServiceHTTP.json(request, trace: .init(provider: provider.name, data: "job cancellation"))
     }
+    private var jobTrace: NetworkTrace { .init(provider: provider.name, data: "job status request") }
     private func jobRequest(_ operation: String, jobID: String) throws -> URLRequest {
         guard !jobID.isEmpty, !jobID.contains("/"), !provider.apiKey.isEmpty else {
             throw ServiceError("The RunPod job ID or API key is missing.")
@@ -268,7 +273,8 @@ struct OpenAISummaryProvider: SummarizationProvider {
             throw ServiceError("Enter a model name for \(provider.name).")
         }
         return try await LLMService.complete(
-            baseURL: provider.endpoint, apiKey: provider.apiKey, model: provider.model, messages: messages)
+            baseURL: provider.endpoint, apiKey: provider.apiKey, model: provider.model, messages: messages,
+            provider: provider.name)
     }
 }
 
@@ -277,20 +283,23 @@ struct OpenAISummaryProvider: SummarizationProvider {
         -> String
     {
         let server = suppliedServer ?? GdayServerService.shared
+        let checkTrace = NetworkTrace(provider: provider.name, data: "connection check")
         switch provider.kind {
         case .filedrop:
             return try await FiledropProvider(provider: provider).checkConnection()
         case .runpod:
             guard !provider.apiKey.isEmpty else { throw ServiceError("Enter the RunPod API key.") }
             let url = try ProviderEndpoint.runpod(provider.endpoint).appendingPathComponent("health")
-            let response = try await ServiceHTTP.json(ProviderEndpoint.authorized(url, key: provider.apiKey))
+            let response = try await ServiceHTTP.json(
+                ProviderEndpoint.authorized(url, key: provider.apiKey), trace: checkTrace)
             guard response["jobs"] is [String: Any], response["workers"] is [String: Any] else {
                 throw ServiceError("This endpoint did not return RunPod health information.")
             }
             return "Healthy"
         case .openAICompatible:
             let url = try ProviderEndpoint.base(provider.endpoint).appendingPathComponent("models")
-            let response = try await ServiceHTTP.json(ProviderEndpoint.authorized(url, key: provider.apiKey))
+            let response = try await ServiceHTTP.json(
+                ProviderEndpoint.authorized(url, key: provider.apiKey), trace: checkTrace)
             guard let models = response["data"] as? [[String: Any]] else {
                 throw ServiceError("This endpoint did not return a model list.")
             }
@@ -306,7 +315,8 @@ struct OpenAISummaryProvider: SummarizationProvider {
             else {
                 throw ServiceError("Sign in to this Gday Meetings website.")
             }
-            let response = try await ServiceHTTP.json(server.authorizedRequest("api/platform/capabilities"))
+            let response = try await ServiceHTTP.json(
+                server.authorizedRequest("api/platform/capabilities"), trace: checkTrace)
             guard response["durableTasks"] is Bool else {
                 throw ServiceError("This website did not return its capabilities.")
             }
@@ -336,7 +346,9 @@ struct FiledropProvider: FileTransferProvider {
 
     func info() async throws -> FiledropInfo {
         let base = try ProviderEndpoint.base(provider.endpoint)
-        let result = try await ServiceHTTP.json(URLRequest(url: base.appendingPathComponent("info")))
+        let result = try await ServiceHTTP.json(
+            URLRequest(url: base.appendingPathComponent("info")),
+            trace: .init(provider: provider.name, data: "upload limits request"))
         guard let extensions = result["allowed_extensions"] as? [String], !extensions.isEmpty,
             let maximum = result["max_file_size_bytes"] as? Int, maximum > 0,
             let expiry = result["expiry_secs"] as? Double, expiry.isFinite, expiry > 0
@@ -349,7 +361,9 @@ struct FiledropProvider: FileTransferProvider {
 
     func checkConnection() async throws -> String {
         let base = try ProviderEndpoint.base(provider.endpoint)
-        let health = try await ServiceHTTP.json(URLRequest(url: base.appendingPathComponent("health")))
+        let health = try await ServiceHTTP.json(
+            URLRequest(url: base.appendingPathComponent("health")),
+            trace: .init(provider: provider.name, data: "connection check"))
         guard let status = health["status"] as? String, ["available", "ok"].contains(status) else {
             throw ServiceError("Filedrop is not accepting uploads. Check its available storage.")
         }
@@ -360,7 +374,8 @@ struct FiledropProvider: FileTransferProvider {
         var request = ProviderEndpoint.authorized(base.appendingPathComponent("upload"), key: provider.apiKey)
         request.httpMethod = "POST"
         request.httpBody = Data()
-        let (data, response) = try await ServiceHTTP.session.data(for: request)
+        let (data, response) = try await ServiceHTTP.data(
+            for: request, trace: .init(provider: provider.name, data: "API key check (no file)"))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if code == 401 || code == 403 { throw ServiceError("Filedrop rejected the API key. Enter a valid key.") }
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -394,7 +409,8 @@ struct FiledropProvider: FileTransferProvider {
         request.httpMethod = "POST"
         request.timeoutInterval = 900
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await ServiceHTTP.session.upload(for: request, fromFile: file)
+        let (data, response) = try await ServiceHTTP.upload(
+            for: request, fromFile: file, trace: .init(provider: provider.name, data: "recorded audio"))
         let result = try ServiceHTTP.decode(data, response)
         guard let uploadedSize = result["size"] as? Int, uploadedSize == size else {
             throw ServiceError("Filedrop did not confirm the complete audio upload. Try uploading again.")

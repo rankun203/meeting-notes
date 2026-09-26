@@ -19,12 +19,14 @@ enum CaptureLog {
     }
 }
 
-/// Saves this app run's recording diagnostics to a text file for support.
-/// `OSLogStore` scoped to the current process needs no entitlement, so only
-/// entries from this run are available; earlier runs need `log show`.
-enum RecordingLogExport {
-    /// This app's entries plus AVAudioEngine's (engine start, stop, configuration
-    /// changes, and format mismatches). Core Audio's HAL entries are too verbose.
+/// Saves this app run's diagnostics (capture, recovery, and network transmission
+/// entries) to a text file for support. `OSLogStore` scoped to the current process
+/// needs no entitlement, so only entries from this run are available; earlier runs
+/// need `log show`.
+enum LogExport {
+    /// All of this app's categories, including `network` (see `NetworkLog`), plus
+    /// AVAudioEngine's (engine start, stop, configuration changes, and format
+    /// mismatches). Core Audio's HAL entries are too verbose.
     static let subsystems = [CaptureLog.subsystem, "com.apple.avfaudio"]
 
     static func export(since start: Date, to directory: URL) throws -> URL {
@@ -41,8 +43,8 @@ enum RecordingLogExport {
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let stamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let url = directory.appendingPathComponent("recording-log-\(stamp).txt")
-        let header = "Gday Meetings recording log from \(formatter.string(from: start)); \(lines.count) entries.\n"
+        let url = directory.appendingPathComponent("gday-meetings-log-\(stamp).txt")
+        let header = "Gday Meetings log from \(formatter.string(from: start)); \(lines.count) entries.\n"
         try (header + lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
         return url
     }

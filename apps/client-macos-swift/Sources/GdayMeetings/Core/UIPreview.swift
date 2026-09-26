@@ -26,6 +26,9 @@ enum UIPreview {
             }
             _ = store.addPerson(name: "Preview Person")
             _ = store.addTag(name: "Preview")
+            if ProcessInfo.processInfo.arguments.contains("--synthetic-providers") {
+                store.settings = syntheticProviderSettings(store.settings)
+            }
             if let flag = ProcessInfo.processInfo.arguments.firstIndex(of: "--provider-test-env") {
                 let arguments = ProcessInfo.processInfo.arguments
                 guard arguments.indices.contains(flag + 1), !arguments[flag + 1].hasPrefix("--") else {
@@ -75,6 +78,32 @@ enum UIPreview {
         runpod.enabledCapabilities = [.transcription, .diarization]
         runpod.uploadProviderID = filedrop.id
         return [runpod, filedrop]
+    }
+
+    /// Fills Settings → Data Privacy and provider panels without real services.
+    /// `.invalid` hosts never resolve (RFC 6761), so a connection check started by
+    /// opening a provider panel fails locally and no content can be uploaded.
+    static func syntheticProviderSettings(_ base: AppSettings) -> AppSettings {
+        var settings = base
+        var filedrop = ServiceProvider(kind: .filedrop)
+        filedrop.endpoint = "https://files.example.invalid"
+        filedrop.apiKey = "synthetic-preview-key"
+        filedrop.enabledCapabilities = [.fileTransfer]
+        var runpod = ServiceProvider(kind: .runpod)
+        runpod.endpoint = "https://api.runpod.example.invalid/v2/preview"
+        runpod.apiKey = "synthetic-preview-key"
+        runpod.enabledCapabilities = [.transcription, .diarization]
+        runpod.uploadProviderID = filedrop.id
+        var llm = ServiceProvider(kind: .openAICompatible)
+        llm.name = "Preview LLM"
+        llm.endpoint = "https://llm.example.invalid/v1"
+        llm.model = "preview-model"
+        llm.enabledCapabilities = [.summarization]
+        settings.serviceProviders = [runpod, filedrop, llm]
+        settings.transcriptionProviderID = runpod.id
+        settings.summaryProviderID = llm.id
+        settings.autoTranscribe = true
+        return settings
     }
 
     static func writeFixture(to url: URL, source: Int) throws {

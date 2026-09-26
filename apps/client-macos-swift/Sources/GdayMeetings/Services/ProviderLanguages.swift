@@ -40,7 +40,8 @@ extension RunPodProvider: ProviderLanguageListing {
             ProviderEndpoint.runpod(provider.endpoint).appendingPathComponent("runsync"),
             json: ["input": ["operation": "capabilities"]])
         request.setValue("Bearer \(provider.apiKey)", forHTTPHeaderField: "Authorization")
-        var response = try await ServiceHTTP.json(request)
+        let trace = NetworkTrace(provider: provider.name, data: "language list request")
+        var response = try await ServiceHTTP.json(request, trace: trace)
         for poll in 0...15 {
             if response["status"] as? String == "COMPLETED" {
                 guard let output = response["output"] as? [String: Any] else {
@@ -60,7 +61,7 @@ extension RunPodProvider: ProviderLanguageListing {
             try await Task.sleep(for: .seconds(2))
             let url = try ProviderEndpoint.runpod(provider.endpoint).appendingPathComponent("status")
                 .appendingPathComponent(id)
-            response = try await ServiceHTTP.json(ProviderEndpoint.authorized(url, key: provider.apiKey))
+            response = try await ServiceHTTP.json(ProviderEndpoint.authorized(url, key: provider.apiKey), trace: trace)
         }
         throw ServiceError("The worker has not returned its supported languages. Check again after it starts.")
     }
@@ -82,7 +83,9 @@ extension RunPodProvider: ProviderLanguageListing {
             else {
                 throw ServiceError("Sign in to this Gday Meetings website to load its languages.")
             }
-            let response = try await ServiceHTTP.json(server.authorizedRequest("api/platform/capabilities"))
+            let response = try await ServiceHTTP.json(
+                server.authorizedRequest("api/platform/capabilities"),
+                trace: .init(provider: provider.name, data: "language list request"))
             guard response["protocolVersion"] as? Int == 1 else {
                 throw ServiceError(
                     "This website does not support language discovery. Update the Gday Meetings website.")

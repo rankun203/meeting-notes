@@ -78,6 +78,9 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.tabItem { Label("Summaries", systemImage: "sparkles") }.tag("summaries")
+            DataPrivacyView()
+                .tabItem { Label("Data Privacy", systemImage: "hand.raised") }
+                .tag("privacy")
         }
         .formStyle(.grouped).padding(16).frame(width: 780, height: 650)
     }
