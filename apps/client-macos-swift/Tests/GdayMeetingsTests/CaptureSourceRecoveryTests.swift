@@ -282,9 +282,6 @@ struct CaptureSourceRecoveryTests {
             case .off: #expect(decisions == [false, false, false])
             }
         }
-        #expect(VoiceProcessingPolicy(override: nil) == .automatic)
-        #expect(VoiceProcessingPolicy(override: true) == .on)
-        #expect(VoiceProcessingPolicy(override: false) == .off)
     }
 
     @Test func reconnectingLevelsResetMetersAndStatus() {

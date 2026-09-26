@@ -38,6 +38,24 @@ struct RecordingRouteChange: Codable, Equatable {
     var sampleRate: Double
     var channels: UInt32
     var voiceProcessed: Bool
+    /// Why the source changed, from `Reason`; `nil` for the initial route and older recordings.
+    /// Stored as text so a reason added later never makes a saved library unreadable.
+    var reason: String? = nil
+
+    enum Reason: String {
+        /// The default device changed, or the device or format changed underneath the source.
+        case route
+        /// Voice Processing was switched on or off during recording.
+        case voiceProcessingSwitched
+        /// Echo detection turned voice processing on.
+        case echoDetected
+        /// Voice processing could not be enabled; the source records unprocessed.
+        case voiceProcessingUnavailable
+        /// The selected microphone is not connected; the source records from the default input.
+        case selectedMicrophoneUnavailable
+        /// The selected microphone is connected again and in use.
+        case selectedMicrophoneReturned
+    }
 }
 struct RecordingProfile: Codable, Equatable {
     /// Voice processing when recording started; later changes appear in `routeChanges`.

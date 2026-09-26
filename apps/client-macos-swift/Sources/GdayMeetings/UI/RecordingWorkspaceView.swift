@@ -11,12 +11,10 @@ struct RecordingSetupView: View {
     @ViewState private var language = "en"
     @ViewState private var microphone = true
     @ViewState private var systemAudio = true
-    @ViewState private var voiceProcessing = false
-    @ViewState private var voiceProcessingOverride: Bool?
     @ViewState private var format = RecordingFormat.opus
     @ViewState private var showOptions = false
     @ViewState private var startupError: String?
-    @StateObject private var audioRoute = RecordingRouteObserver()
+    @StateObject private var microphoneDevices = MicrophoneDeviceObserver()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -49,16 +47,11 @@ struct RecordingSetupView: View {
         .onAppear {
             microphone = store.settings.captureMicrophone
             systemAudio = store.settings.captureSystemAudio
-            audioRoute.start()
-            voiceProcessing = audioRoute.voiceProcessing
-            voiceProcessingOverride = nil
+            microphoneDevices.start()
             format = store.settings.recordingFormat
             language = store.settings.defaultLanguage
         }
-        .onChange(of: audioRoute.voiceProcessing) { _, enabled in
-            if voiceProcessingOverride == nil { voiceProcessing = enabled }
-        }
-        .onDisappear { audioRoute.stop() }
+        .onDisappear { microphoneDevices.stop() }
     }
 
     private var header: some View {
@@ -88,7 +81,9 @@ struct RecordingSetupView: View {
                 sourceToggle(
                     "Microphone", subtitle: "Record your voice and nearby sounds.", symbol: "mic.fill",
                     value: $microphone
-                )
+                ) {
+                    microphoneDevicePicker
+                }
                 Divider().padding(.leading, 44)
                 sourceToggle(
                     "System Audio", subtitle: "Record sound from other apps.", symbol: "speaker.wave.2.fill",
@@ -101,20 +96,6 @@ struct RecordingSetupView: View {
             }
             DisclosureGroup("Recording Options", isExpanded: $showOptions) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle(
-                        "Microphone Voice Processing",
-                        isOn: Binding(
-                            get: { voiceProcessing },
-                            set: {
-                                voiceProcessing = $0
-                                voiceProcessingOverride = $0
-                            }
-                        )
-                    ).disabled(!microphone)
-                    Text(
-                        "Reduce microphone echo and background noise for this recording. May lower other apps’ volume."
-                    )
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Picker("Audio Format", selection: $format) {
                         Text("Opus (Recommended)").tag(RecordingFormat.opus)
                         Text("M4A (AAC)").tag(RecordingFormat.m4a)
@@ -165,7 +146,7 @@ struct RecordingSetupView: View {
                     Task {
                         await store.startRecording(
                             title: title, language: language, microphoneEnabled: microphone, systemEnabled: systemAudio,
-                            format: format, voiceProcessingEnabled: voiceProcessingOverride)
+                            format: format)
                         if let id = store.recordingID {
                             onStarted(id)
                             dismiss()
@@ -185,13 +166,71 @@ struct RecordingSetupView: View {
             }
         }
     }
+    /// HIG Pop-up buttons: a menu of mutually exclusive choices, showing the current one.
+    /// The saved microphone stays listed while disconnected so the choice isn't lost.
+    /// https://developer.apple.com/design/human-interface-guidelines/pop-up-buttons
+    private var microphoneDevicePicker: some View {
+        Picker(
+            "Microphone Device",
+            selection: Binding(
+                get: { store.settings.microphoneDevice?.uid },
+                set: { uid in
+                    let saved = store.settings.microphoneDevice
+                    store.settings.microphoneDevice =
+                        uid == saved?.uid
+                        ? saved
+                        : microphoneDevices.devices.first { $0.uid == uid }.map {
+                            MicrophoneDeviceChoice(uid: $0.uid, name: $0.name)
+                        }
+                    store.saveSettings()
+                })
+        ) {
+            ForEach(
+                Self.microphoneMenu(
+                    devices: microphoneDevices.devices, defaultName: microphoneDevices.defaultName,
+                    saved: store.settings.microphoneDevice), id: \.uid
+            ) { item in
+                Text(item.title).tag(item.uid)
+            }
+        }
+        .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+        .disabled(!microphone)
+    }
+
+    struct MicrophoneMenuItem: Equatable {
+        /// `nil` is System Default.
+        var uid: String?
+        var title: String
+    }
+
+    static func microphoneMenu(devices: [AudioInputDevice], defaultName: String?, saved: MicrophoneDeviceChoice?)
+        -> [MicrophoneMenuItem]
+    {
+        var items = [
+            MicrophoneMenuItem(uid: nil, title: defaultName.map { "System Default (\($0))" } ?? "System Default")
+        ]
+        items += devices.map { MicrophoneMenuItem(uid: $0.uid, title: $0.name) }
+        // Capture uses the system default until the saved microphone reconnects.
+        if let saved, !devices.contains(where: { $0.uid == saved.uid }) {
+            items.append(MicrophoneMenuItem(uid: saved.uid, title: "\(saved.name) (Unavailable)"))
+        }
+        return items
+    }
+
     private func sourceToggle(_ name: String, subtitle: String, symbol: String, value: Binding<Bool>) -> some View {
+        sourceToggle(name, subtitle: subtitle, symbol: symbol, value: value) { EmptyView() }
+    }
+
+    private func sourceToggle<Detail: View>(
+        _ name: String, subtitle: String, symbol: String, value: Binding<Bool>, @ViewBuilder detail: () -> Detail
+    ) -> some View {
         HStack(spacing: 13) {
             Image(systemName: symbol).font(.title3).foregroundStyle(value.wrappedValue ? Color.accentColor : .secondary)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
                 Text(name).fontWeight(.medium)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                detail()
             }
             Spacer()
             Toggle(name, isOn: value).labelsHidden().toggleStyle(.switch)
@@ -244,12 +283,19 @@ struct RecordingWorkspaceView: View {
                     }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
                 }
             }
-            HStack(spacing: 26) {
-                RecordingSourceMeter(
-                    title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone,
-                    saving: store.isFinalizingRecording,
-                    activity: store.recordingActivity.bars(microphone: true),
-                    activityTime: store.recordingActivity.bucketStart, tint: .accentColor)
+            HStack(alignment: .top, spacing: 26) {
+                VStack(alignment: .leading, spacing: 10) {
+                    RecordingSourceMeter(
+                        title: "Microphone", symbol: "mic.fill", source: store.recordingLevels.microphone,
+                        saving: store.isFinalizingRecording,
+                        activity: store.recordingActivity.bars(microphone: true),
+                        activityTime: store.recordingActivity.bucketStart, tint: .accentColor)
+                    if store.recordingLevels.microphone.enabled && !store.isFinalizingRecording {
+                        RecordingVoiceProcessingControl(status: store.recordingLevels.microphoneStatus) {
+                            store.setRecordingVoiceProcessing($0)
+                        }
+                    }
+                }
                 RecordingSourceMeter(
                     title: "System Audio", symbol: "speaker.wave.2.fill", source: store.recordingLevels.system,
                     saving: store.isFinalizingRecording,
@@ -276,6 +322,33 @@ struct RecordingWorkspaceView: View {
         return value >= 3600
             ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60)
             : String(format: "%02d:%02d", value / 60, value % 60)
+    }
+}
+
+/// HIG Toggles: a switch for a setting that takes effect immediately. It shows
+/// the running engine's state, so automatic changes move it too; it is disabled
+/// while the microphone rebuilds rather than queueing another change.
+/// https://developer.apple.com/design/human-interface-guidelines/toggles
+struct RecordingVoiceProcessingControl: View {
+    let status: RecordingMicrophoneStatus
+    let onChange: (Bool) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                Toggle("Voice Processing", isOn: Binding(get: { status.voiceProcessing }, set: onChange))
+                    .toggleStyle(.switch).controlSize(.small).font(.callout)
+                    .disabled(!status.canSwitch)
+                    .help("Reduces echo and background noise in the microphone track. May lower other apps’ volume.")
+                if status.echoDetected {
+                    Label("Echo detected", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .help("The microphone is picking up system audio. Turn on Voice Processing or use headphones.")
+                }
+            }
+            ForEach(status.notices, id: \.self) { notice in
+                Text(notice).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

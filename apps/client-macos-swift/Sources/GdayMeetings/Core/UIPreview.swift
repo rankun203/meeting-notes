@@ -99,6 +99,7 @@ enum UIPreview {
 struct PreviewContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewState private var appearance = 0
+    @ViewState private var previewVoiceProcessing = false
     private static func recordingLevel(at time: Double, offset: Double, reconnects: Bool = false)
         -> RecordingSourceLevel
     {
@@ -148,13 +149,23 @@ struct PreviewContainer<Content: View>: View {
                             Label(status ?? "Reconnecting system audio…", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.subheadline).foregroundStyle(.secondary).opacity(status == nil ? 0 : 1)
                                 .accessibilityHidden(status == nil)
-                            HStack(spacing: 26) {
-                                RecordingSourceMeter(
-                                    title: "Microphone", symbol: "mic.fill",
-                                    source: Self.recordingLevel(
-                                        at: now, offset: 0),
-                                    saving: false, activity: history.bars(microphone: true),
-                                    activityTime: history.bucketStart, tint: .accentColor)
+                            HStack(alignment: .top, spacing: 26) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    RecordingSourceMeter(
+                                        title: "Microphone", symbol: "mic.fill",
+                                        source: Self.recordingLevel(
+                                            at: now, offset: 0),
+                                        saving: false, activity: history.bars(microphone: true),
+                                        activityTime: history.bucketStart, tint: .accentColor)
+                                    // Off shows the echo hint; On shows the automatic-change notice.
+                                    RecordingVoiceProcessingControl(
+                                        status: RecordingMicrophoneStatus(
+                                            voiceProcessing: previewVoiceProcessing, canSwitch: true,
+                                            echoDetected: !previewVoiceProcessing,
+                                            notices: previewVoiceProcessing
+                                                ? ["Echo detected · Voice Processing turned on"] : [])
+                                    ) { previewVoiceProcessing = $0 }
+                                }
                                 RecordingSourceMeter(
                                     title: "System Audio", symbol: "speaker.wave.2.fill",
                                     source: Self.recordingLevel(

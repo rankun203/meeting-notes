@@ -66,6 +66,13 @@ enum RecordingFormat: String, Codable, CaseIterable {
     case opus, m4a, wav
 }
 
+/// A microphone chosen in New Recording. The UID identifies the device when it
+/// reconnects; the name labels it while it is disconnected.
+struct MicrophoneDeviceChoice: Codable, Equatable {
+    var uid: String
+    var name: String
+}
+
 struct AppSettings: Codable, Equatable {
     var serviceProviders: [ServiceProvider] = []
     var transcriptionProviderID: UUID?
@@ -75,12 +82,17 @@ struct AppSettings: Codable, Equatable {
     var captureSystemAudio = true
     var captureMicrophone = true
     var recordingFormat: RecordingFormat = .opus
+    /// On: voice processing follows the output route and turns on when echo is
+    /// detected. Off: recordings start unprocessed and nothing turns it on.
+    var automaticVoiceProcessing = true
+    /// `nil` records from the macOS default input.
+    var microphoneDevice: MicrophoneDeviceChoice?
     var summarizationPrompt =
         "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     enum CodingKeys: String, CodingKey {
         case serviceProviders, transcriptionProviderID, summaryProviderID, defaultLanguage, autoTranscribe,
             captureSystemAudio,
-            captureMicrophone, recordingFormat, summarizationPrompt
+            captureMicrophone, recordingFormat, summarizationPrompt, automaticVoiceProcessing, microphoneDevice
     }
 
 }
@@ -191,6 +203,9 @@ extension AppSettings {
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
         recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
+        // A new key: the legacy `microphoneVoiceProcessing` preference stays ignored.
+        automaticVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .automaticVoiceProcessing) ?? true
+        microphoneDevice = try? values.decodeIfPresent(MicrophoneDeviceChoice.self, forKey: .microphoneDevice)
         summarizationPrompt =
             try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)
             ?? "Summarize this meeting with decisions, key points, and action items. Do not invent information."

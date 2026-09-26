@@ -165,9 +165,17 @@ struct TimedAudioWriterTests {
         current.routeChanges = [
             RecordingRouteChange(
                 time: 12, source: "microphone", device: "AirPods", sampleRate: 24000, channels: 1,
-                voiceProcessed: false)
+                voiceProcessed: false),
+            RecordingRouteChange(
+                time: 30, source: "microphone", device: "AirPods", sampleRate: 24000, channels: 1,
+                voiceProcessed: true, reason: RecordingRouteChange.Reason.echoDetected.rawValue),
         ]
         #expect(try JSONDecoder().decode(RecordingProfile.self, from: JSONEncoder().encode(current)) == current)
+        // An unknown future reason still decodes.
+        let future = Data(
+            #"{"time":1,"source":"microphone","sampleRate":48000,"channels":1,"voiceProcessed":false,"reason":"later"}"#
+                .utf8)
+        #expect(try JSONDecoder().decode(RecordingRouteChange.self, from: future).reason == "later")
     }
 
     private func temporaryWAV() -> URL {

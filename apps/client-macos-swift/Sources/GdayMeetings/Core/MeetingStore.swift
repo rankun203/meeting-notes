@@ -17,10 +17,15 @@ final class MeetingStore: ObservableObject {
     }
     @Published var recordingID: UUID?
     @Published var presentsRecordingSetup = false
-    @Published var isBusy = false
+    /// Clearing the activity text with the busy flag keeps progress transient;
+    /// outcomes appear in the content itself, and failures use errorMessage.
+    @Published var isBusy = false {
+        didSet { if !isBusy { statusMessage = "" } }
+    }
     @Published var errorMessage: String?
     @Published var recordingPermissionNeeded: RecordingPermission?
     @Published var captureHealth = ""
+    /// Progress text for the current long-running task. Shown only while isBusy.
     @Published var statusMessage = ""
     @Published var recordingStartedAt: Date?
     @Published var isFinalizingRecording = false
@@ -262,7 +267,7 @@ final class MeetingStore: ObservableObject {
 
     func startRecording(
         title: String? = nil, language: String? = nil, microphoneEnabled: Bool? = nil, systemEnabled: Bool? = nil,
-        format: RecordingFormat? = nil, voiceProcessingEnabled: Bool? = nil
+        format: RecordingFormat? = nil
     ) async {
         guard !UIPreview.enabled else {
             errorMessage = "Recording is disabled in UI Preview."
@@ -310,7 +315,9 @@ final class MeetingStore: ObservableObject {
             }
             let files = try await capture.start(
                 directory: directory(for: meeting.id), microphoneEnabled: microphone,
-                systemEnabled: systemAudio, voiceProcessingEnabled: voiceProcessingEnabled)
+                systemEnabled: systemAudio,
+                voiceProcessing: settings.automaticVoiceProcessing ? .automatic : .off,
+                microphoneDevice: settings.microphoneDevice)
             var recorded = meeting
             recorded.audioFiles = files
             recorded.recordingProfile = capture.profile
@@ -328,11 +335,10 @@ final class MeetingStore: ObservableObject {
                         ? "Microphone: Apple voice processing" : "Microphone: unprocessed") : nil,
                 systemAudio ? "System audio: separate track" : nil,
             ].compactMap { $0 }.joined(separator: " · ")
-            statusMessage = "Recording"
         }
         catch {
             if error is CancellationError {
-                statusMessage = "Recording cancelled"
+                // Cancelling is deliberate, so it needs no notice.
             }
             else if let permission = RecordingPermissions.permission(for: error) {
                 recordingPermissionNeeded = permission
@@ -344,6 +350,8 @@ final class MeetingStore: ObservableObject {
         isBusy = false
         captureTransition = false
     }
+    /// The live Voice Processing switch; explicit for the rest of the recording.
+    func setRecordingVoiceProcessing(_ enabled: Bool) { recorder?.setVoiceProcessing(enabled) }
     func stopRecording(transcribeAfter: Bool = true) async {
         guard let id = recordingID else { return }
         guard !captureTransition else { return }
@@ -354,7 +362,8 @@ final class MeetingStore: ObservableObject {
         var stopFailed = false
         do { try await recorder?.stop() }
         catch {
-            errorMessage = error.localizedDescription
+            errorMessage =
+                "Couldn’t finish the recording. Audio captured before the problem is kept in this meeting. \(error.localizedDescription)"
             stopFailed = true
         }
         let profile = recorder?.profile
@@ -366,11 +375,10 @@ final class MeetingStore: ObservableObject {
             if !save() { stopFailed = true }
         }
         if !stopFailed && activeRecordingFormat != .wav {
-            statusMessage = "Saving \(activeRecordingFormat.rawValue.uppercased()) audio…"
             do { try await finalizeRecordingAudio(id: id, format: activeRecordingFormat) }
             catch {
                 errorMessage =
-                    "Audio compression failed; the original WAV recording was retained. \(error.localizedDescription)"
+                    "Couldn’t convert the recording to \(activeRecordingFormat.rawValue.uppercased()). The original WAV audio is kept in this meeting. \(error.localizedDescription)"
                 stopFailed = true
             }
         }
@@ -378,7 +386,6 @@ final class MeetingStore: ObservableObject {
         recordingStartedAt = nil
         recordingActivity = RecordingActivityHistory()
         recordingLevels = RecordingLevels()
-        statusMessage = stopFailed ? "Recording interrupted; partial audio retained" : "Recording saved"
         captureTransition = false
         isBusy = false
         isFinalizingRecording = false
@@ -528,7 +535,6 @@ final class MeetingStore: ObservableObject {
             }
             throw error
         }
-        statusMessage = target == nil ? "Imported \(additions.count) meeting(s)" : "Added \(additions.count) track(s)"
         return target.map { [$0] } ?? additions.map(\.id)
     }
     func importArchive(url: URL) throws {

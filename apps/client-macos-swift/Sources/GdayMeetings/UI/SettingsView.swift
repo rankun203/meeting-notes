@@ -36,6 +36,13 @@ struct SettingsView: View {
                         "Microphone and system audio each require your permission. macOS asks for access the first time you record each source."
                     ).font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Voice Processing") {
+                    Toggle("Turn On Voice Processing Automatically", isOn: setting(\.automaticVoiceProcessing))
+                        .disabled(audioSettingsLocked)
+                    Text(
+                        "Turns on when audio plays through speakers or the microphone picks up system audio. Reduces echo and background noise in the microphone track, and may lower other apps’ volume."
+                    ).font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Audio Format") {
                     Picker("Audio Format", selection: setting(\.recordingFormat)) {
                         Text("Opus (Recommended)").tag(RecordingFormat.opus)

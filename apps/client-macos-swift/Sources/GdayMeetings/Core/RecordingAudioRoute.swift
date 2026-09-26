@@ -1,6 +1,14 @@
 import Combine
 import CoreAudio
 
+/// A connected input device. `uid` persists across reconnection and restarts;
+/// `id` is only valid while the device stays connected.
+struct AudioInputDevice: Equatable, Identifiable {
+    var id: AudioObjectID
+    var uid: String
+    var name: String
+}
+
 /// Query before capture creates its private aggregate devices. Do not infer
 /// speakers from a device name or transport: USB and Bluetooth can carry either.
 enum RecordingAudioRoute {
@@ -47,16 +55,43 @@ enum RecordingAudioRoute {
     }
 
     /// The device's display name for recording metadata, when the driver provides one.
-    static func deviceName(_ device: AudioObjectID) -> String? {
+    static func deviceName(_ device: AudioObjectID) -> String? { stringProperty(device, kAudioObjectPropertyName) }
+
+    private static func stringProperty(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName, mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
+            mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var name: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr, let name else {
             return nil
         }
         return name.takeRetainedValue() as String
+    }
+
+    /// Physical and virtual devices with input streams, in Core Audio order.
+    /// Aggregates are excluded: capture's own tap aggregate and VoiceProcessingIO's
+    /// aggregate appear here while recording, and neither is a microphone.
+    static func inputDevices(read: PropertyReader = readProperty, uid: (AudioObjectID) -> String? = deviceUID)
+        -> [AudioInputDevice]
+    {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        return (read(system, kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal) ?? []).compactMap {
+            device in
+            let transport = read(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal)?.first
+            guard transport != kAudioDeviceTransportTypeAggregate, transport != kAudioDeviceTransportTypeAutoAggregate,
+                read(device, kAudioDevicePropertyIsHidden, kAudioObjectPropertyScopeGlobal)?.first ?? 0 == 0,
+                !(read(device, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput) ?? []).isEmpty,
+                let identifier = uid(device)
+            else { return nil }
+            return AudioInputDevice(id: device, uid: identifier, name: deviceName(device) ?? identifier)
+        }
+    }
+
+    /// The connected input device with this persistent UID, if any.
+    static func inputDevice(uid: String) -> AudioInputDevice? { inputDevices().first { $0.uid == uid } }
+
+    static func deviceUID(_ device: AudioObjectID) -> String? {
+        stringProperty(device, kAudioDevicePropertyDeviceUID)
     }
 
     static func readProperty(
@@ -79,15 +114,7 @@ enum RecordingAudioRoute {
 
 extension VoiceProcessingPolicy {
     /// Automatic follows the current output on every microphone rebuild; an
-    /// explicit choice from New Recording holds for the whole session.
-    init(override: Bool?) {
-        switch override {
-        case nil: self = .automatic
-        case true?: self = .on
-        case false?: self = .off
-        }
-    }
-
+    /// explicit choice holds for the rest of the session.
     func enabled(speakerRoute: () -> Bool = { RecordingAudioRoute.defaultVoiceProcessing() }) -> Bool {
         switch self {
         case .automatic: return speakerRoute()
@@ -97,54 +124,43 @@ extension VoiceProcessingPolicy {
     }
 }
 
-/// Keep the setup default current without opening audio devices. Capture checks
-/// the route again after permission prompts; an explicit user override wins.
+/// Keeps New Recording's microphone menu current without opening audio
+/// devices: the device list and the default input's name.
 @MainActor
-final class RecordingRouteObserver: ObservableObject {
-    @Published private(set) var voiceProcessing = false
-    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+final class MicrophoneDeviceObserver: ObservableObject {
+    @Published private(set) var devices: [AudioInputDevice] = []
+    @Published private(set) var defaultName: String?
+    private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
 
     func start() {
         stop()
-        voiceProcessing = RecordingAudioRoute.defaultVoiceProcessing()
-        observe(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice)
-        guard
-            let device = RecordingAudioRoute.readProperty(
-                object: AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDefaultOutputDevice,
-                scope: kAudioObjectPropertyScopeGlobal
-            )?.first, device != kAudioObjectUnknown
-        else { return }
-        observe(device, kAudioDevicePropertyDataSource, scope: kAudioObjectPropertyScopeOutput)
-        observe(device, kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput)
-        for stream in RecordingAudioRoute.readProperty(
-            object: device, selector: kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeOutput
-        ) ?? [] {
-            observe(stream, kAudioStreamPropertyTerminalType)
+        refresh()
+        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice] {
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.listeners.isEmpty else { return }
+                    self.refresh()
+                }
+            }
+            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
+                == noErr
+            {
+                listeners.append((address, listener))
+            }
         }
     }
 
     func stop() {
-        for (object, var address, listener) in listeners {
-            AudioObjectRemovePropertyListenerBlock(object, &address, .main, listener)
+        for (var address, listener) in listeners {
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener)
         }
         listeners.removeAll()
     }
 
-    private func observe(
-        _ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
-        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
-    ) {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectHasProperty(object, &address) else { return }
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            Task { @MainActor [weak self] in
-                guard let self, !self.listeners.isEmpty else { return }
-                self.start()
-            }
-        }
-        if AudioObjectAddPropertyListenerBlock(object, &address, .main, listener) == noErr {
-            listeners.append((object, address, listener))
-        }
+    private func refresh() {
+        devices = RecordingAudioRoute.inputDevices()
+        defaultName = RecordingAudioRoute.defaultDevice(output: false).flatMap(RecordingAudioRoute.deviceName)
     }
 }
