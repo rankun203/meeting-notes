@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// Language choices come from the selected transcription provider's saved list.
-/// Showing the picker never contacts the provider: RunPod discovery starts a
-/// billable job, so lists load only when the person chooses Load Languages.
-/// Retaining the stored value keeps offline recording independent of service availability.
+/// Language choices come from the selected transcription provider: RunPod's list is
+/// built in, and a website's list is saved after the person chooses Load Languages.
+/// Showing the picker never contacts the provider. Retaining the stored value keeps offline recording independent of service availability.
 struct MeetingLanguagePicker: View {
     @EnvironmentObject private var store: MeetingStore
     var title = "Language"
@@ -18,8 +17,10 @@ struct MeetingLanguagePicker: View {
     }
     private var state: ProviderLanguageState { store.languageState(for: selectedProviderID) }
     private var languages: [ProviderLanguage] {
-        if case .loaded(let catalog, _) = state { return catalog.languages }
-        return []
+        switch state {
+        case .builtIn(let catalog), .loaded(let catalog, _): catalog.languages
+        case .idle, .loading, .failed: []
+        }
     }
     private var selectedName: String {
         guard TranscriptionLanguage.isExplicit(selection) else { return "Choose a Language" }
@@ -27,7 +28,7 @@ struct MeetingLanguagePicker: View {
             ?? Locale.current.localizedString(forIdentifier: selection) ?? selection
     }
     private var unsupported: Bool {
-        guard case .loaded = state, TranscriptionLanguage.isExplicit(selection) else { return false }
+        guard !languages.isEmpty, TranscriptionLanguage.isExplicit(selection) else { return false }
         return !languages.contains { $0.code == selection }
     }
 
@@ -101,6 +102,8 @@ struct MeetingLanguagePicker: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
+            case .builtIn:
+                EmptyView()
             case .loading:
                 Text("Loading Languages…").font(.caption).foregroundStyle(.secondary)
             case .failed(let message):
@@ -129,16 +132,5 @@ struct MeetingLanguagePicker: View {
         }
         .font(.caption)
         .disabled(!provider.supports(.transcription))
-        if let note = ProviderLanguageLoadNote.text(for: provider) {
-            Text(note).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-/// Discloses cost where Load Languages appears, so the action is never a surprise.
-enum ProviderLanguageLoadNote {
-    static func text(for provider: ServiceProvider) -> String? {
-        provider.kind == .runpod ? "Loading languages starts a short RunPod job. RunPod charges apply." : nil
     }
 }

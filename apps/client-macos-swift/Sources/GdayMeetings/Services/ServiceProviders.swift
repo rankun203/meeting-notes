@@ -83,7 +83,7 @@ enum ProviderTranscriptionStatus {
     case complete([ServerTranscriptSegment])
     case failed(String)
 }
-protocol TranscriptionProvider: ProviderLanguageListing {
+protocol TranscriptionProvider {
     func submit(tracks: [ProviderAudioTrack], language: String, diarize: Bool) async throws -> String
     func status(jobID: String) async throws -> ProviderTranscriptionStatus
     func cancel(jobID: String) async throws

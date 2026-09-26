@@ -130,7 +130,7 @@ The app-facing [transcription](../../docs/protocols/transcription.md) and [diari
 
 RunPod accepts `{"input":{"operation":"capabilities"}}` through `/runsync`. The handler returns `{"protocolVersion":1,"transcription":{"languages":[{"code":"en","name":"English"}]}}`, with the actual list derived from the installed WhisperX recognition and alignment metadata. Local HTTP exposes the same object through authenticated `GET /capabilities`. English-only `.en` models restrict the list to English; supported Chinese adds simplified and traditional script variants. `auto` is not advertised.
 
-Discovery runs before track validation and pipeline initialization. It downloads no weights and processes no recording. Metadata imports still require the installed runtime libraries, and RunPod may charge for worker startup/execution. Older deployed workers need an update; clients must show unavailable metadata rather than assume language support. See the [language discovery contract](../../docs/protocols/transcription.md#discover-supported-languages).
+Discovery runs before track validation and pipeline initialization. It downloads no weights and processes no recording. Metadata imports still require the installed runtime libraries, and RunPod may charge for worker startup/execution. Older deployed workers need an update; clients must show unavailable metadata rather than assume language support. The Swift app does not run this operation: it ships the list that `scripts/export-languages.py` generates from `capabilities.py` and the pinned WhisperX version. Rerun that script after changing either. See the [language discovery contract](../../docs/protocols/transcription.md#discover-supported-languages).
 
 ## Input
 

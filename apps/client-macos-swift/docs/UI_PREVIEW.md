@@ -26,7 +26,7 @@ The bundle flag `GdayUIPreview` enables this mode; developers can also launch th
 
 ## Provider testing
 
-UI Preview uses the real provider adapters. Saving an enabled provider or opening its panel checks its connection without uploading meeting content. Language lists load only when you choose **Load Languages**; for RunPod this starts a short, billable job. Transcription and other content operations use the same actions as the full app. **Transcribe** starts the configured upload and job directly; provider panels contain the brief destination and charge details. Preview fixtures are synthetic by default; importing another recording does not automatically upload it.
+UI Preview uses the real provider adapters. Saving an enabled provider or opening its panel checks its connection without uploading meeting content. RunPod's language list is built in. A website's language list loads only when you choose **Load Languages**. Transcription and other content operations use the same actions as the full app. **Transcribe** starts the configured upload and job directly; provider panels contain the brief destination and charge details. Preview fixtures are synthetic by default; importing another recording does not automatically upload it.
 
 To seed test providers without typing credentials, build Preview, then launch its executable with an explicit credential-file path:
 

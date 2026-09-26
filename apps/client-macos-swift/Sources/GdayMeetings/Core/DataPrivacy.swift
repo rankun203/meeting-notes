@@ -57,7 +57,7 @@ enum PrivacyTrigger: Int, Comparable {
     case openProvider
     /// A disabled provider is contacted only to list models while its endpoint or key is edited.
     case editProvider
-    /// Load Languages. For RunPod this starts a billable job, so it is never automatic.
+    /// Load Languages, which only website providers offer. RunPod's list is built in.
     case loadLanguages
     static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
     /// Completes "when you …". `afterRecording` is not a user action.
@@ -223,7 +223,9 @@ enum DataPrivacy {
             var triggers = Set(routes.filter { $0.receivers.contains { $0.id == provider.id } }.map(\.trigger))
             if provider.isEnabled {
                 triggers.insert(.openProvider)
-                if provider.supports(.transcription) { triggers.insert(.loadLanguages) }
+                if provider.supports(.transcription), ProviderLanguageService.builtInCatalog(for: provider) == nil {
+                    triggers.insert(.loadLanguages)
+                }
             }
             else if provider.kind == .openAICompatible {
                 triggers.insert(.editProvider)

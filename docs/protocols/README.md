@@ -59,7 +59,7 @@ Show a status icon with text. Do not communicate status through color alone.
 
 Errors identify the field or operation and a recovery action. Distinguish rejected credentials, invalid addresses, unavailable services, and incompatible responses. Reopening an enabled provider's panel checks again; a previous success is not evidence of a current connection.
 
-Requests that are free, send only credentials, and start no work may run automatically for enabled providers: connection checks, model lists, and website language lists. Anything that can be billed or starts provider work, such as a RunPod job, requires an explicit action and a nearby charge note. Disabled providers are never contacted automatically; the only exception is listing models while the person edits that provider's endpoint or key. UI Preview uses the same provider checks and can run deliberately started service jobs with test credentials. Its temporary library and in-memory credentials avoid Keychain prompts; opening or saving settings must not upload content.
+Requests that are free, send only credentials, and start no work may run automatically for enabled providers: connection checks, model lists, and website language lists. The Swift app ships RunPod's language list instead of running a billable discovery job. Anything that can be billed or starts provider work, such as a RunPod job, requires an explicit action and a nearby charge note. Disabled providers are never contacted automatically; the only exception is listing models while the person edits that provider's endpoint or key. UI Preview uses the same provider checks and can run deliberately started service jobs with test credentials. Its temporary library and in-memory credentials avoid Keychain prompts; opening or saving settings must not upload content.
 
 ## Shared contract rules
 
@@ -72,4 +72,4 @@ Requests that are free, send only credentials, and start no work may run automat
 - Validate response types, identifiers, and time ranges before applying results. An HTTP success with malformed output is an error.
 - Keep recording, local playback, and the local library available when a provider fails.
 
-The [transcription protocol](transcription.md#discover-supported-languages) defines version 1 language metadata. Language lists come entirely from providers, with no app fallback catalog. Other capability discovery and shared wire-level version negotiation remain future work; existing adapters use their documented APIs.
+The [transcription protocol](transcription.md#discover-supported-languages) defines version 1 language metadata. Language lists come from providers, with no app fallback catalog. RunPod is the exception: the Swift app ships the list from this repository's worker. Other capability discovery and shared wire-level version negotiation remain future work; existing adapters use their documented APIs.

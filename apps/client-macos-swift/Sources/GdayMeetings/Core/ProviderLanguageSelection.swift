@@ -6,9 +6,11 @@ extension MeetingStore {
         return ProviderLanguageIdentity(provider: provider)
     }
 
-    /// Reads cached state only. Pickers call this, so it must never send a request.
+    /// Reads built-in or cached state only. Pickers call this, so it must never send a request.
     func languageState(for providerID: UUID?) -> ProviderLanguageState {
-        guard let identity = languageIdentity(for: providerID) else { return .idle }
+        guard let provider = settings.serviceProviders.first(where: { $0.id == providerID }) else { return .idle }
+        if let catalog = ProviderLanguageService.builtInCatalog(for: provider) { return .builtIn(catalog) }
+        let identity = ProviderLanguageIdentity(provider: provider)
         if let transient = providerLanguageStates[identity] { return transient }
         if let entry = cachedLanguages(identity) {
             return .loaded(entry.value, fetchedAt: entry.fetchedAt)
@@ -22,10 +24,12 @@ extension MeetingStore {
         providerLanguageCache.entry(providerID: identity.providerID, fingerprint: identity.fingerprint)
     }
 
-    /// Loads the provider's current list. Call only from an explicit action, such as
-    /// Load Languages: for RunPod this starts a worker job that can incur charges.
+    /// Loads the provider's current list when the person chooses Load Languages.
+    /// Providers with a built-in list are never asked.
     func refreshProviderLanguages(providerID: UUID?) async {
-        guard let provider = settings.serviceProviders.first(where: { $0.id == providerID }) else { return }
+        guard let provider = settings.serviceProviders.first(where: { $0.id == providerID }),
+            ProviderLanguageService.builtInCatalog(for: provider) == nil
+        else { return }
         _ = try? await resolveProviderLanguages(provider, refresh: true)
     }
 
@@ -63,7 +67,10 @@ extension MeetingStore {
                 .init(
                     providerID: identity.providerID, fingerprint: identity.fingerprint, value: catalog,
                     fetchedAt: Date()),
-                keeping: Set(settings.serviceProviders.map(\.id)))
+                // Entries saved for RunPod before its list was built in are dropped here.
+                keeping: Set(
+                    settings.serviceProviders.filter { ProviderLanguageService.builtInCatalog(for: $0) == nil }
+                        .map(\.id)))
             providerLanguageStates.removeValue(forKey: identity)
             return catalog
         }
@@ -79,10 +86,17 @@ extension MeetingStore {
     }
 
     /// Transcribe is an explicit action that already starts provider work. It uses the
-    /// saved list and loads one only when none exists.
+    /// built-in or saved list, and loads a website list only when none is saved.
     func validateTranscriptionLanguage(_ language: String, for provider: ServiceProvider) async throws {
         guard TranscriptionLanguage.isExplicit(language) else {
             throw ServiceError("Choose a language for this meeting before transcribing.")
+        }
+        if let catalog = ProviderLanguageService.builtInCatalog(for: provider) {
+            guard catalog.languages.contains(where: { $0.code == language }) else {
+                throw ServiceError(
+                    "\(provider.name) does not support this meeting's language. Choose a listed language.")
+            }
+            return
         }
         let catalog = try await resolveProviderLanguages(provider, refresh: false)
         guard catalog.languages.contains(where: { $0.code == language }) else {

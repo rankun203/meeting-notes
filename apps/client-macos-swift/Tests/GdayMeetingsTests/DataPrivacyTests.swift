@@ -55,7 +55,8 @@ struct DataPrivacyTests {
         }
         #expect(
             texts(rows, .credentials) == [
-                "Sent to RunPod (api.runpod.ai) to authenticate when you transcribe a meeting, open the provider in Settings, or choose Load Languages",
+                // RunPod languages are built in, so Load Languages sends nothing to RunPod.
+                "Sent to RunPod (api.runpod.ai) to authenticate when you transcribe a meeting or open the provider in Settings",
                 "Sent to Filedrop (files.example.com) to authenticate when you transcribe a meeting or open the provider in Settings",
             ])
 

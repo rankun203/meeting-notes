@@ -12,11 +12,13 @@ struct ProviderLanguageCatalog: Codable, Equatable {
 enum ProviderLanguageState: Equatable {
     /// No list has been loaded for the current configuration. Loading needs an explicit action.
     case idle
+    /// The app ships this provider's list, so it is always available and never loaded.
+    case builtIn(ProviderLanguageCatalog)
     case loading
     case loaded(ProviderLanguageCatalog, fetchedAt: Date)
     case failed(String)
 }
-/// Names the worker or website whose languages a list describes. Credentials and
+/// Names the website whose languages a discovered list describes. Credentials and
 /// enablement are excluded: they do not change the list, and the fingerprint is
 /// stored on disk with the cached list.
 struct ProviderLanguageIdentity: Hashable {
@@ -29,52 +31,21 @@ struct ProviderLanguageIdentity: Hashable {
         ])
     }
 }
-protocol ProviderLanguageListing {
-    func supportedLanguages() async throws -> ProviderLanguageCatalog
-}
-
-extension RunPodProvider: ProviderLanguageListing {
-    func supportedLanguages() async throws -> ProviderLanguageCatalog {
-        guard !provider.apiKey.isEmpty else { throw ServiceError("Enter the RunPod API key.") }
-        var request = try ServiceHTTP.request(
-            ProviderEndpoint.runpod(provider.endpoint).appendingPathComponent("runsync"),
-            json: ["input": ["operation": "capabilities"]])
-        request.setValue("Bearer \(provider.apiKey)", forHTTPHeaderField: "Authorization")
-        let trace = NetworkTrace(provider: provider.name, data: "language list request")
-        var response = try await ServiceHTTP.json(request, trace: trace)
-        for poll in 0...15 {
-            if response["status"] as? String == "COMPLETED" {
-                guard let output = response["output"] as? [String: Any] else {
-                    throw ServiceError(
-                        "This worker did not return language capabilities. Update the Gday audio worker.")
-                }
-                return try ProviderLanguageService.workerCatalog(output, source: provider.name)
-            }
-            guard let status = response["status"] as? String, ["IN_QUEUE", "IN_PROGRESS"].contains(status),
-                let id = response["id"] as? String, !id.isEmpty, !id.contains("/")
-            else {
-                throw ServiceError(
-                    "This worker could not report its supported languages. Update the Gday audio worker or check its logs."
-                )
-            }
-            guard poll < 15 else { break }
-            try await Task.sleep(for: .seconds(2))
-            let url = try ProviderEndpoint.runpod(provider.endpoint).appendingPathComponent("status")
-                .appendingPathComponent(id)
-            response = try await ServiceHTTP.json(ProviderEndpoint.authorized(url, key: provider.apiKey), trace: trace)
-        }
-        throw ServiceError("The worker has not returned its supported languages. Check again after it starts.")
-    }
-}
-
 @MainActor enum ProviderLanguageService {
+    /// RunPod runs this repository's worker, so the app ships that worker's list
+    /// (RunPodLanguages.swift) instead of starting a billable job to ask for it. A
+    /// deployed worker that differs rejects the language when the job runs.
+    nonisolated static func builtInCatalog(for provider: ServiceProvider) -> ProviderLanguageCatalog? {
+        provider.kind == .runpod ? ProviderLanguageCatalog(languages: RunPodLanguages.all, source: provider.name) : nil
+    }
+
+    /// Discovers a list from providers without a built-in one. Only the Gday Meetings
+    /// website supports discovery; its request is free.
     static func catalog(for provider: ServiceProvider) async throws -> ProviderLanguageCatalog {
         guard provider.supports(.transcription) else {
             throw ServiceError("Enable Transcription for this provider to load its languages.")
         }
         switch provider.kind {
-        case .runpod:
-            return try await RunPodProvider(provider: provider).supportedLanguages()
         case .gdayWebsite:
             let server = GdayServerService.shared
             let origin = try ServiceHTTP.origin(provider.endpoint)
@@ -91,18 +62,11 @@ extension RunPodProvider: ProviderLanguageListing {
                     "This website does not support language discovery. Update the Gday Meetings website.")
             }
             return try parseLanguages(response["transcriptionLanguages"], source: provider.name)
+        case .runpod:
+            throw ServiceError("RunPod languages are built in and are not loaded.")
         case .openAICompatible, .filedrop:
             throw ServiceError("This provider does not support transcription.")
         }
-    }
-
-    nonisolated static func workerCatalog(_ response: [String: Any], source: String) throws -> ProviderLanguageCatalog {
-        guard response["protocolVersion"] as? Int == 1,
-            let transcription = response["transcription"] as? [String: Any]
-        else {
-            throw ServiceError("This worker does not support language discovery. Update the Gday audio worker.")
-        }
-        return try parseLanguages(transcription["languages"], source: source)
     }
 
     nonisolated static func parseLanguages(_ value: Any?, source: String) throws -> ProviderLanguageCatalog {

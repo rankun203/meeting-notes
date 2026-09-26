@@ -7,8 +7,9 @@ import Testing
     private func makeStore() -> MeetingStore {
         MeetingStore(dataDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
     }
-    private func provider(_ name: String) -> ServiceProvider {
-        var provider = ServiceProvider(kind: .runpod)
+    /// Discovery tests use the website, the only provider whose list is loaded.
+    private func provider(_ name: String, kind: ServiceProviderKind = .gdayWebsite) -> ServiceProvider {
+        var provider = ServiceProvider(kind: kind)
         provider.name = name
         provider.endpoint = "https://example.test/\(name)"
         provider.enabledCapabilities = [.transcription]
@@ -61,7 +62,7 @@ import Testing
 
     @Test func readingLanguagesNeverContactsTheProvider() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let selected = provider("RunPod")
+        let selected = provider("Website")
         let first = MeetingStore(dataDirectory: directory)
         first.settings.serviceProviders = [selected]
         var jobs = 0
@@ -69,17 +70,17 @@ import Testing
             jobs += 1
             return ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Worker")
         }
-        // Without a saved list, pickers show a Load Languages action instead of starting a job.
+        // Without a saved list, pickers show a Load Languages action instead of sending a request.
         #expect(first.languageState(for: selected.id) == .idle)
         #expect(jobs == 0)
         await first.refreshProviderLanguages(providerID: selected.id)
         #expect(jobs == 1)
 
-        // A later launch reads the saved list; pickers and Transcribe start no job.
+        // A later launch reads the saved list; pickers and Transcribe send no request.
         let second = MeetingStore(dataDirectory: directory)
         second.settings.serviceProviders = [selected]
         second.providerLanguageLoader = { _ in
-            Issue.record("A saved list must not start a language job")
+            Issue.record("A saved list must not be loaded again")
             throw ServiceError("Unexpected request")
         }
         guard case .loaded(let catalog, _) = second.languageState(for: selected.id) else {
@@ -88,7 +89,64 @@ import Testing
         }
         #expect(catalog.languages.map(\.code) == ["en"])
         try await second.validateTranscriptionLanguage("en", for: selected)
-        #expect(ProviderLanguageLoadNote.text(for: selected)?.contains("RunPod charges apply") == true)
+    }
+
+    @Test func runpodUsesTheBuiltInWorkerList() throws {
+        let catalog = try #require(ProviderLanguageService.builtInCatalog(for: provider("RunPod", kind: .runpod)))
+        let names = Dictionary(uniqueKeysWithValues: catalog.languages.map { ($0.code, $0.name) })
+        #expect(names["en"] == "English")
+        #expect(names["zh"] == "Chinese")
+        #expect(names["zh-cn"] == "Chinese (Simplified)")
+        #expect(names["zh-tw"] == "Chinese (Traditional)")
+        #expect(names.count == catalog.languages.count)
+        // The worker sorts by name; the list must also pass the discovery schema checks.
+        #expect(catalog.languages.map(\.name) == catalog.languages.map(\.name).sorted())
+        let entries = catalog.languages.map { ["code": $0.code, "name": $0.name] }
+        #expect(try ProviderLanguageService.parseLanguages(entries, source: "RunPod") == catalog)
+        #expect(ProviderLanguageService.builtInCatalog(for: provider("Website")) == nil)
+    }
+
+    @Test func runpodNeverLoadsLanguages() async throws {
+        let store = makeStore()
+        var selected = provider("RunPod", kind: .runpod)
+        store.settings.serviceProviders = [selected]
+        store.providerLanguageLoader = { _ in
+            Issue.record("RunPod languages must never be loaded")
+            throw ServiceError("Unexpected request")
+        }
+        // The picker has the list immediately, even before a key is entered.
+        guard case .builtIn(let catalog) = store.languageState(for: selected.id) else {
+            Issue.record("Expected the built-in RunPod list")
+            return
+        }
+        #expect(catalog.languages.contains { $0.code == "zh-tw" })
+        await store.refreshProviderLanguages(providerID: selected.id)
+        try await store.validateTranscriptionLanguage("zh-cn", for: selected)
+        await #expect(throws: (any Error).self) { try await ProviderLanguageService.catalog(for: selected) }
+        // The list does not depend on the endpoint or model.
+        selected.endpoint += "/changed"
+        selected.model = "other"
+        store.settings.serviceProviders[0] = selected
+        #expect(store.languageState(for: selected.id) == .builtIn(catalog))
+        #expect(store.providerLanguageStates.isEmpty)
+        #expect(store.providerLanguageCache.entries.isEmpty)
+    }
+
+    @Test func runpodRejectsUnlistedLanguageBeforeUpload() async throws {
+        let store = makeStore()
+        let selected = provider("RunPod", kind: .runpod)
+        store.settings.serviceProviders = [selected]
+        let id = store.createMeeting(title: "Welsh meeting", language: "cy")
+        do {
+            try await store.transcribeWithProvider(id: id, provider: selected)
+            Issue.record("An unlisted language must stop transcription")
+        }
+        catch {
+            #expect(
+                error.localizedDescription
+                    == "RunPod does not support this meeting's language. Choose a listed language.")
+        }
+        #expect(store.meetings.first?.transcriptionAttempt == nil)
     }
 
     @Test func transcribeLoadsLanguagesOnceWhenNoneAreSaved() async throws {
@@ -157,7 +215,7 @@ import Testing
 
     @Test func pendingJobPollDoesNotRequireLanguageDiscovery() async throws {
         let store = makeStore()
-        let selected = provider("Pending")
+        let selected = provider("Pending", kind: .runpod)
         store.settings.serviceProviders = [selected]
         store.providerLanguageLoader = { _ in
             Issue.record("An existing task must not discover languages")
@@ -205,12 +263,10 @@ import Testing
         #expect(store.languageState(for: selected.id) == .idle)
     }
 
-    @Test func metadataSchemaHasNoClientLanguageFallback() throws {
-        let response: [String: Any] = [
-            "protocolVersion": 1, "transcription": ["languages": [["code": "cy", "name": "Welsh"]]],
-        ]
-        #expect(try ProviderLanguageService.workerCatalog(response, source: "Worker").languages.map(\.code) == ["cy"])
-        #expect(throws: (any Error).self) { try ProviderLanguageService.workerCatalog([:], source: "Old worker") }
+    @Test func discoveredListsAreValidated() throws {
+        let entries = [["code": "cy", "name": "Welsh"]]
+        #expect(try ProviderLanguageService.parseLanguages(entries, source: "Website").languages.map(\.code) == ["cy"])
+        #expect(throws: (any Error).self) { try ProviderLanguageService.parseLanguages(nil, source: "Old website") }
         #expect(throws: (any Error).self) { try ProviderLanguageService.parseLanguages([], source: "Unavailable") }
         #expect(throws: (any Error).self) {
             try ProviderLanguageService.parseLanguages([["code": "auto", "name": "Automatic"]], source: "Worker")

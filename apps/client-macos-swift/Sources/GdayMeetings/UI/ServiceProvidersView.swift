@@ -361,23 +361,28 @@ private struct ServiceProviderPanel: View {
 
     private var languageState: ProviderLanguageState { store.languageState(for: draft.id) }
 
-    /// Lists load only from this button or the language picker. Saving never loads
-    /// them, because RunPod discovery starts a job that can incur charges.
+    /// Website lists load only from this button or the language picker; saving never
+    /// loads them. RunPod's list is built in, so it has no Load Languages action.
     private var languagesSection: some View {
         Section("Transcription Languages") {
-            HStack(alignment: .firstTextBaseline) {
-                Label(languageStatus.text, systemImage: languageStatus.icon)
+            // The draft decides, so an unsaved RunPod provider also shows its list.
+            if let catalog = ProviderLanguageService.builtInCatalog(for: draft) {
+                Label("\(catalog.languages.count) languages · Built in", systemImage: "checkmark.circle")
                     .foregroundStyle(.secondary)
                     .font(.callout)
-                    .textSelection(.enabled)
-                Spacer()
-                Button("Load Languages") {
-                    Task { await store.refreshProviderLanguages(providerID: draft.id) }
-                }
-                .disabled(hasChanges || saved?.supports(.transcription) != true || languageState == .loading)
             }
-            if let note = ProviderLanguageLoadNote.text(for: draft) {
-                Text(note).font(.caption).foregroundStyle(.secondary)
+            else {
+                HStack(alignment: .firstTextBaseline) {
+                    Label(languageStatus.text, systemImage: languageStatus.icon)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Load Languages") {
+                        Task { await store.refreshProviderLanguages(providerID: draft.id) }
+                    }
+                    .disabled(hasChanges || saved?.supports(.transcription) != true || languageState == .loading)
+                }
             }
         }
     }
@@ -391,7 +396,7 @@ private struct ServiceProviderPanel: View {
             return ("Turn on Transcription to load languages.", "circle.slash")
         }
         switch languageState {
-        case .idle: return ("Not Loaded", "circle.dashed")
+        case .idle, .builtIn: return ("Not Loaded", "circle.dashed")
         case .loading: return ("Loading Languages…", "clock")
         case .failed(let message): return (message, "exclamationmark.circle.fill")
         case .loaded(let catalog, let fetchedAt):
