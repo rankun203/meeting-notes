@@ -99,10 +99,15 @@ enum UIPreview {
 struct PreviewContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewState private var appearance = 0
-    private static func recordingLevel(at time: Double, offset: Double) -> RecordingSourceLevel {
+    private static func recordingLevel(at time: Double, offset: Double, reconnects: Bool = false)
+        -> RecordingSourceLevel
+    {
         let phase = (time + offset).truncatingRemainder(dividingBy: 7)
         let value = phase < 4 ? abs(sin(time * 5 + offset)) * 0.65 + 0.12 : 0
-        return RecordingSourceLevel(enabled: true, hasSamples: true, rmsDB: value * 60 - 60)
+        // Simulate a 4-second device reconnect every 20 seconds to show that state.
+        let reconnecting = reconnects && time.truncatingRemainder(dividingBy: 20) >= 16
+        return RecordingSourceLevel(
+            enabled: true, hasSamples: true, reconnecting: reconnecting, rmsDB: value * 60 - 60)
     }
     private static func recordingHistory(at time: Double) -> RecordingActivityHistory {
         var history = RecordingActivityHistory()
@@ -112,7 +117,7 @@ struct PreviewContainer<Content: View>: View {
             history.append(
                 RecordingLevels(
                     microphone: recordingLevel(at: sampleTime, offset: 0),
-                    system: recordingLevel(at: sampleTime, offset: 3)), at: sampleTime)
+                    system: recordingLevel(at: sampleTime, offset: 3, reconnects: true)), at: sampleTime)
         }
         return history
     }
@@ -134,19 +139,29 @@ struct PreviewContainer<Content: View>: View {
                     TimelineView(.periodic(from: .now, by: 0.1)) { _ in
                         let now = ProcessInfo.processInfo.systemUptime
                         let history = Self.recordingHistory(at: now)
-                        HStack(spacing: 26) {
-                            RecordingSourceMeter(
-                                title: "Microphone", symbol: "mic.fill",
-                                source: Self.recordingLevel(
-                                    at: now, offset: 0),
-                                saving: false, activity: history.bars(microphone: true),
-                                activityTime: history.bucketStart, tint: .accentColor)
-                            RecordingSourceMeter(
-                                title: "System Audio", symbol: "speaker.wave.2.fill",
-                                source: Self.recordingLevel(
-                                    at: now, offset: 3),
-                                saving: false, activity: history.bars(microphone: false),
-                                activityTime: history.bucketStart, tint: .teal)
+                        let status = RecordingWorkspaceView.reconnectingStatus(
+                            RecordingLevels(
+                                microphone: Self.recordingLevel(at: now, offset: 0),
+                                system: Self.recordingLevel(at: now, offset: 3, reconnects: true)))
+                        VStack(alignment: .leading, spacing: 10) {
+                            // Reserve the line so the simulated reconnect does not shift the meters.
+                            Label(status ?? "Reconnecting system audio…", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.subheadline).foregroundStyle(.secondary).opacity(status == nil ? 0 : 1)
+                                .accessibilityHidden(status == nil)
+                            HStack(spacing: 26) {
+                                RecordingSourceMeter(
+                                    title: "Microphone", symbol: "mic.fill",
+                                    source: Self.recordingLevel(
+                                        at: now, offset: 0),
+                                    saving: false, activity: history.bars(microphone: true),
+                                    activityTime: history.bucketStart, tint: .accentColor)
+                                RecordingSourceMeter(
+                                    title: "System Audio", symbol: "speaker.wave.2.fill",
+                                    source: Self.recordingLevel(
+                                        at: now, offset: 3, reconnects: true),
+                                    saving: false, activity: history.bars(microphone: false),
+                                    activityTime: history.bucketStart, tint: .teal)
+                            }
                         }.padding(18).frame(maxWidth: 500)
                     }
                 }.padding(.horizontal, 12).padding(.vertical, 6)

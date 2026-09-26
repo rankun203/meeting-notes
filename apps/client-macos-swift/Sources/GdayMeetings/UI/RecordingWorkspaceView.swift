@@ -16,6 +16,7 @@ struct RecordingSetupView: View {
     @ViewState private var format = RecordingFormat.opus
     @ViewState private var showOptions = false
     @ViewState private var startupError: String?
+    @StateObject private var audioRoute = RecordingRouteObserver()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,11 +49,16 @@ struct RecordingSetupView: View {
         .onAppear {
             microphone = store.settings.captureMicrophone
             systemAudio = store.settings.captureSystemAudio
-            voiceProcessing = RecordingAudioRoute.defaultVoiceProcessing()
+            audioRoute.start()
+            voiceProcessing = audioRoute.voiceProcessing
             voiceProcessingOverride = nil
             format = store.settings.recordingFormat
             language = store.settings.defaultLanguage
         }
+        .onChange(of: audioRoute.voiceProcessing) { _, enabled in
+            if voiceProcessingOverride == nil { voiceProcessing = enabled }
+        }
+        .onDisappear { audioRoute.stop() }
     }
 
     private var header: some View {
@@ -62,7 +68,7 @@ struct RecordingSetupView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 Text("New Recording").font(.title2.weight(.semibold))
-                Text("Choose the audio you want to include.")
+                Text("Choose audio sources to record.")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -80,11 +86,12 @@ struct RecordingSetupView: View {
                 .disabled(store.isStartingRecording)
             VStack(spacing: 0) {
                 sourceToggle(
-                    "Microphone", subtitle: "Your voice and the room around you", symbol: "mic.fill", value: $microphone
+                    "Microphone", subtitle: "Record your voice and nearby sounds.", symbol: "mic.fill",
+                    value: $microphone
                 )
                 Divider().padding(.leading, 44)
                 sourceToggle(
-                    "System Audio", subtitle: "Meeting participants and other app audio", symbol: "speaker.wave.2.fill",
+                    "System Audio", subtitle: "Record sound from other apps.", symbol: "speaker.wave.2.fill",
                     value: $systemAudio)
             }
             .padding(.horizontal, 14).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
@@ -105,7 +112,7 @@ struct RecordingSetupView: View {
                         )
                     ).disabled(!microphone)
                     Text(
-                        "Enabled by default when speakers are detected. Can reduce echo and background noise, and may lower other apps’ volume. Applies to this recording only."
+                        "Reduce microphone echo and background noise for this recording. May lower other apps’ volume."
                     )
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Picker("Audio Format", selection: $format) {
@@ -206,6 +213,11 @@ struct RecordingWorkspaceView: View {
                         Circle().fill(store.isFinalizingRecording ? Color.secondary : .red).frame(width: 7, height: 7)
                         Text(store.isFinalizingRecording ? "Saving Recording" : "Recording").font(
                             .subheadline.weight(.semibold))
+                        // Recording continues while a device reconnects; Stop & Save stays available.
+                        if !store.isFinalizingRecording, let status = Self.reconnectingStatus(store.recordingLevels) {
+                            Label(status, systemImage: "arrow.triangle.2.circlepath")
+                                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
                     }
                     TimelineView(.periodic(from: .now, by: 1)) { timeline in
                         let elapsed =
@@ -248,6 +260,16 @@ struct RecordingWorkspaceView: View {
         .padding(18)
         .background(.background, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.quaternary))
+    }
+    static func reconnectingStatus(_ levels: RecordingLevels) -> String? {
+        let microphone = levels.microphone.enabled && levels.microphone.reconnecting
+        let system = levels.system.enabled && levels.system.reconnecting
+        switch (microphone, system) {
+        case (true, true): return "Reconnecting microphone and system audio…"
+        case (true, false): return "Reconnecting microphone…"
+        case (false, true): return "Reconnecting system audio…"
+        case (false, false): return nil
+        }
     }
     static func elapsed(_ seconds: TimeInterval) -> String {
         let value = max(0, Int(seconds.isFinite ? seconds : 0))
@@ -314,14 +336,13 @@ struct RecordingSourceMeter: View {
                 Spacer(minLength: 0)
                 RecordingActivitySurface(
                     bars: activity, bucketStart: activityTime, tint: tint,
-                    animate: source.enabled && source.hasSamples && !source.stale && !saving && !reduceMotion
-                        && scenePhase == .active
+                    animate: receiving && !reduceMotion && scenePhase == .active
                 )
                 .frame(minWidth: 40, idealWidth: 110, maxWidth: 110)
                 .frame(height: 24)
                 .help("Last 10 seconds · " + statusText)
                 .overlay(alignment: .trailing) {
-                    if saving || !source.enabled || !source.hasSamples || source.stale {
+                    if !receiving {
                         Image(systemName: statusSymbol).font(.caption2).foregroundStyle(.secondary)
                             .padding(2).background(.background, in: Circle())
                     }
@@ -339,8 +360,11 @@ struct RecordingSourceMeter: View {
         .accessibilityLabel(title)
         .help(statusText)
         .accessibilityValue(
-            !saving && source.enabled && source.hasSamples && !source.stale
-                ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
+            receiving ? "\(statusText), \(Int(source.rmsDB)) decibels" : statusText)
+    }
+
+    private var receiving: Bool {
+        !saving && source.enabled && source.hasSamples && !source.stale && !source.reconnecting
     }
 
     private var sourceLabel: some View { Label(title, systemImage: symbol).font(.subheadline.weight(.medium)) }
@@ -351,6 +375,7 @@ struct RecordingSourceMeter: View {
     private var statusSymbol: String {
         if !source.enabled { return "minus.circle" }
         if saving { return "hourglass" }
+        if source.reconnecting { return "arrow.triangle.2.circlepath" }
         if !source.hasSamples { return "clock" }
         if source.stale { return "exclamationmark.triangle" }
         return source.rmsDB < -60 ? "waveform" : "waveform.circle.fill"

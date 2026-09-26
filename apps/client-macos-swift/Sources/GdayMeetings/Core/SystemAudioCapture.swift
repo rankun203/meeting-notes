@@ -5,8 +5,9 @@ import CoreAudio
 /// Core Audio's IOProc is hard realtime, including the block API's synchronous
 /// dispatch queue. Only the preallocated C ring runs there; this queue consumes it.
 /// https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps
-// Control methods are serialized by AudioCapture; buffer/failure handlers and
-// reusable PCM storage belong to queue. Hardware sees only the opaque C ring.
+// Control methods are serialized by AudioCapture's recovery queue; buffer/failure
+// handlers and reusable PCM storage belong to queue. Hardware sees only the opaque
+// C ring. One instance is one tap session: recovery replaces it, never restarts it.
 final class SystemAudioCapture: @unchecked Sendable {
     private let queue: DispatchQueue
     private var tap: AudioObjectID = kAudioObjectUnknown
@@ -20,9 +21,14 @@ final class SystemAudioCapture: @unchecked Sendable {
     private var originalFormat = AudioStreamBasicDescription()
     private(set) var format: AVAudioFormat!
     var onBuffer: ((AVAudioPCMBuffer, TimeInterval) throws -> Void)?
+    /// Terminal: the writer rejected audio (disk or invalid data).
     var onFailure: ((Error) -> Void)?
+    /// Recoverable: the tap, its format, or its device changed or stopped
+    /// delivering usable audio. The owner rebuilds a fresh session.
+    var onInterrupted: (() -> Void)?
     private let maxFrames: UInt32 = 8192
     private var failed = false  // consumer queue only
+    private var interrupted = false  // consumer queue only
 
     init(queue: DispatchQueue) { self.queue = queue }
 
@@ -115,12 +121,6 @@ final class SystemAudioCapture: @unchecked Sendable {
         }
     }
 
-    // Register after configuring VoiceProcessingIO, which may create an aggregate
-    // itself. Subsequent user output-route changes end this recording explicitly.
-    func observeOutputRoute() throws {
-        try observe(AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDefaultOutputDevice)
-    }
-
     private func readFormat() throws -> AudioStreamBasicDescription {
         var result = AudioStreamBasicDescription()
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
@@ -133,12 +133,7 @@ final class SystemAudioCapture: @unchecked Sendable {
     private func observe(_ object: AudioObjectID, selector: AudioObjectPropertySelector) throws {
         var address = AudioObjectPropertyAddress(
             mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.fail(
-                MeetingError.message(
-                    "The system-audio device or format changed. Available audio will be saved; start a new recording on the current device."
-                ))
-        }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.interrupt() }
         try check(AudioObjectAddPropertyListenerBlock(object, &address, queue, block), "Observe system-audio device")
         listeners.append((object, address, block))
     }
@@ -157,25 +152,20 @@ final class SystemAudioCapture: @unchecked Sendable {
             do { try onBuffer?(buffer, AVAudioTime.seconds(forHostTime: hostTime)) }
             catch { fail(error) }
         }
-        switch GdayAudioRingFailure(ring) {
-        case 0: break
-        case 1:
-            fail(
-                MeetingError.message(
-                    "System-audio capture could not keep up with incoming audio. Available audio will be saved; close busy applications before recording again."
-                ))
-        case 3: fail(MeetingError.message("System audio lost its host-clock timestamp. Available audio will be saved."))
-        default:
-            fail(
-                MeetingError.message(
-                    "The system-audio buffer format changed or exceeded its supported size. Available audio will be saved."
-                ))
-        }
+        // Overflow (1), a missing host timestamp (3), or an unexpected buffer
+        // layout invalidate only this ring. A fresh tap and ring resume capture;
+        // the writer pads the lost interval with silence.
+        if GdayAudioRingFailure(ring) != 0 { interrupt() }
     }
     private func fail(_ error: Error) {
         guard !failed else { return }
         failed = true
         onFailure?(error)
+    }
+    private func interrupt() {
+        guard !interrupted else { return }
+        interrupted = true
+        onInterrupted?()
     }
     func stop() throws {
         // Stop and unregister before releasing callback context. No timing sleeps
@@ -207,6 +197,7 @@ final class SystemAudioCapture: @unchecked Sendable {
             drain()
             onBuffer = nil
             onFailure = nil
+            onInterrupted = nil
         }
         if aggregate != kAudioObjectUnknown {
             remember(AudioHardwareDestroyAggregateDevice(aggregate), "Remove capture device")

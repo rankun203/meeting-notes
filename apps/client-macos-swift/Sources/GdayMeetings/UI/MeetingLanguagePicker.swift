@@ -7,6 +7,8 @@ struct MeetingLanguagePicker: View {
     var title = "Language"
     @Binding var selection: String
     var providerID: UUID?
+    var compact = false
+    @ViewState private var showInformation = false
 
     private var selectedProviderID: UUID? { providerID ?? store.settings.transcriptionProviderID }
     private var state: ProviderLanguageState { store.languageState(for: selectedProviderID) }
@@ -25,29 +27,63 @@ struct MeetingLanguagePicker: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker(title, selection: $selection) {
-                ForEach(languages) { language in
-                    Text(language.name).tag(language.code)
-                }
-                if !languages.contains(where: { $0.code == selection }) {
-                    Text(unsupported ? "\(selectedName) (Unsupported)" : selectedName)
-                        .tag(selection)
-                        .disabled(true)
-                }
+        HStack(spacing: 4) {
+            if compact {
+                languagePicker.labelsHidden().frame(width: 120)
             }
-            .pickerStyle(.menu)
-            .disabled(languages.isEmpty)
-            status
+            else {
+                languagePicker
+            }
+            Button {
+                showInformation.toggle()
+            } label: {
+                Image(systemName: informationSymbol)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Language Information")
+            .help("About transcription language")
+            .popover(isPresented: $showInformation) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Transcription Language").font(.headline)
+                    Text("Choose the language spoken in this meeting.")
+                    status
+                }
+                .font(.callout)
+                .padding(16)
+                .frame(width: 280, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .task(id: store.languageIdentity(for: selectedProviderID)) {
             await store.loadProviderLanguages(providerID: selectedProviderID)
         }
     }
 
+    private var informationSymbol: String {
+        if case .failed = state { return "exclamationmark.circle" }
+        return "info.circle"
+    }
+
+    private var languagePicker: some View {
+        Picker(title, selection: $selection) {
+            ForEach(languages) { language in
+                Text(language.name).tag(language.code)
+            }
+            if !languages.contains(where: { $0.code == selection }) {
+                Text(unsupported ? "\(selectedName) (Unsupported)" : selectedName)
+                    .tag(selection)
+                    .disabled(true)
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(languages.isEmpty)
+    }
+
     @ViewBuilder private var status: some View {
         if selectedProviderID == nil {
-            Text("Language selection is available when a transcription provider is selected.")
+            Text("Select a transcription provider in Settings to change the language.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

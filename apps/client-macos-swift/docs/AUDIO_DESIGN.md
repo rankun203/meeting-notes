@@ -1,3 +1,10 @@
+---
+title: Native audio design and validation
+date: 2026-09-26
+status: active
+scope: swift-app-audio
+---
+
 # Native audio design and validation
 
 This client must record a meeting hosted by another app, keep microphone and remote participants separate, and build using only Apple's Command Line Tools. That differs from a VoIP app that owns both ends of the call's audio graph.
@@ -14,11 +21,29 @@ Voice processing can reduce other apps' playback volume. Configure minimum ducki
 
 The Core Audio IOProc is a real-time callback. It copies Float32 input into a bounded, preallocated C ring and retains each buffer's input host timestamp; a separate consumer performs Swift processing and file writing. Callback arrival time includes scheduling delay and must not replace the input timestamp. Overflow or incompatible data fails explicitly rather than allowing unbounded memory growth or corrupting channel layout. The aggregate does not opt into waiting for a tapped application to start playing audio. Teardown stops IO before releasing callback memory, drains pending audio, and destroys the aggregate and tap. Taps do not provide noise suppression or acoustic echo cancellation. [Apple's real-time audio guidance](https://developer.apple.com/documentation/audiotoolbox/analyzing-audio-performance-with-instruments), [IOProc timing contract](https://developer.apple.com/documentation/coreaudio/audiodeviceioproc).
 
+### Output route detection
+
+Read the default output's stream terminal types through Core Audio. Recognize both Core Audio's four-character speaker constants and the numeric speaker terminal types defined in [Apple's IOAudioFamily headers](https://github.com/apple-oss-distributions/IOAudioFamily/blob/main/IOAudioTypes.h). The built-in speaker on the validation Mac returned `0x0301`; checking only `kAudioStreamTerminalTypeSpeaker` missed it. Numeric desktop, room, communication, and low-frequency speaker endpoints also enable processing. Headphones and unknown routes remain off; device names, transport types, and jack presence alone do not identify an acoustic speaker path.
+
+While New Recording is open, Core Audio property listeners refresh the default when the default output, selected data source, stream list, or terminal type changes. An explicit toggle choice remains in effect for that recording. Listeners are removed when the sheet closes. Drivers that omit properties or reject listeners still use the initial route check and the existing check before capture starts. This observes the system default route, not every other app's independent output selection.
+
+### Device changes during recording
+
+A route change does not end a recording. Capture follows the macOS default input and output, not a device selected inside another app such as Teams or Zoom. The meeting, files, host-clock epoch, and elapsed timer stay the same; each source's engine or tap is replaced.
+
+- **Triggers.** The microphone rebuilds after an engine configuration change, a new default input, a missing host timestamp, or 3 seconds without buffers after it has delivered. System audio rebuilds after a tap format change, loss of its aggregate device, a ring failure, a new default output, or the same 3-second watchdog. Notifications are ignored when the default device ID has not changed, so capture's own aggregate and voice-processing changes do not trigger rebuilds.
+- **Retries.** `CaptureSourceRecovery` debounces notifications for 0.3 seconds, then retries with backoff from 0.25 seconds doubling to a 5-second cap for as long as recording continues. A new route notification resets the backoff. Each request has a generation number; a late attempt tears down what it built and installs nothing. A healthy source keeps recording while the other reconnects.
+- **Voice processing.** In automatic mode, each microphone rebuild re-reads the output route; if the route rejects processing, capture continues unprocessed. A new default output rebuilds the microphone when processing is on, or when automatic mode now selects it. An explicit On or Off holds for the session.
+- **Timeline.** Each track keeps its first format. The writer maps channels (duplicate to widen, average to narrow) and resamples later devices to that format. While a source reconnects, silence is written about once per second, staying 0.5 seconds behind the host clock, and gaps of 0.1 seconds or longer are saved in the track metadata. At stop, both tracks end at the same host time. The recording profile saves the voice-processing policy and every device, format, and processing change.
+- **Terminal failures.** Writer errors end the recording. Revoked microphone access stops the microphone only; the recording ends only when every selected source has failed. System audio has no revocable permission reported by Core Audio, so it keeps retrying.
+- **Stop & Save.** Stop cancels pending retries, removes listeners, and waits at most 3 seconds for native teardown. A Core Audio call that is still blocked after that is abandoned, not cancelled: its thread stays blocked until the call returns, then releases its session. Isolating capture in a helper process would bound this fully; that is deferred.
+- **Status.** The recording header and source meters show “Reconnecting microphone…” or “Reconnecting system audio…” until audio arrives from the new device.
+
 ## Track and file invariants
 
 - Keep permission/setup delays outside the recording timeline; use a shared capture epoch once sources are ready.
 - Use capture timestamps to retain gaps and align sources. Never assume callback arrival times or buffer counts alone establish synchronization.
-- Preserve each source's channel count and duration; retain capture format metadata. Opus storage uses a 48 kHz timeline with native sample-rate conversion. Stereo channels are not two independent speakers; source tracks and diarized identities are different concepts.
+- Fix each track's format at its first device, convert later devices to it, and preserve duration; retain capture format and route-change metadata. Opus storage uses a 48 kHz timeline with native sample-rate conversion. Stereo channels are not two independent speakers; source tracks and diarized identities are different concepts.
 - Keep microphone monitoring off and exclude this app's playback from system capture.
 - Keep file I/O away from hardware render callbacks. Own any buffer memory that outlives a callback, bound queued work, and surface write/format/route failures.
 - Drain pending writes before closing files. A partial recording with an explicit failure is preferable to silently claiming a complete recording.
@@ -49,7 +74,8 @@ Before claiming a route is validated, exercise the following on physical hardwar
 | Built-in mic + speakers, processing off/on | Remote speech leakage into mic, near-end intelligibility, simultaneous speech, startup convergence, and playback ducking. |
 | Wired/USB headset | Clean separate tracks, no feedback, sample-rate and channel correctness. |
 | Bluetooth headset | Input/output profile changes, bandwidth changes, recording continuity, and explicit handling of disconnection. |
-| Output/input route changes during capture | No crash, no silently wrong timing, retained partial recording and clear recovery instructions. |
+| Output/input route changes during capture | Recording continues on the new default devices without user action; gaps are silent and recorded; tracks stay aligned; automatic voice processing follows the output; no duplicate playback. |
+| Silent system audio for over 3 seconds | The tap keeps delivering buffers, so the watchdog does not rebuild system audio repeatedly. |
 | Quiet system audio or muted microphone | Distinguish silence from missing callbacks; do not infer permission denial from silence alone. |
 | Long meeting | Bounded memory, stable track alignment, valid final containers, conversion size limits, and resumable server processing. |
 | App quit, device loss, sleep, disk failure | Finalization or an actionable failure; previously saved material remains readable. |

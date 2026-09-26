@@ -55,22 +55,19 @@ struct MeetingDetailView: View {
                     meetingDate(meeting).fixedSize()
                     Spacer(minLength: 8)
                     MeetingLanguagePicker(
-                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID
+                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID, compact: true
                     )
-                    .frame(minWidth: 160, idealWidth: 220, maxWidth: 260, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    associationsMenu
+                    .fixedSize()
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     meetingDate(meeting)
                     MeetingLanguagePicker(
-                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID
+                        selection: text(\.language), providerID: meeting.transcriptionAttempt?.providerID, compact: true
                     )
-                    .frame(maxWidth: 260, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    associationsMenu
+                    .fixedSize()
                 }
             }.font(.callout).foregroundStyle(.secondary)
+            associationsMenu.font(.callout).foregroundStyle(.secondary)
             if !meeting.personIDs.isEmpty || !meeting.tagIDs.isEmpty {
                 Text(associationSummary(meeting)).font(.callout).foregroundStyle(.secondary)
             }

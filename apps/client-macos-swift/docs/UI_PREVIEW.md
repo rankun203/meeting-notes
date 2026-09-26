@@ -47,4 +47,4 @@ To use an already installed signing certificate consistently, set `GDAY_CODESIGN
 
 Normal settings saves now write credentials only when their values changed. The normal app still reads saved credentials at startup; this is not a promise of prompt-free production launches.
 
-The collapsible **Recording visualization preview · synthetic levels** section shows the production microphone/system meters with simulated ten-second histories. Use it to check miniature waveform layout and appearance without starting capture. It is absent from the full app.
+The collapsible **Recording visualization preview · synthetic levels** section shows the production microphone/system meters with simulated ten-second histories. Use it to check miniature waveform layout and appearance without starting capture. System Audio simulates a four-second device reconnect every 20 seconds, showing “Reconnecting system audio…” and the reset meter. The simulation does not exercise real device recovery. It is absent from the full app.

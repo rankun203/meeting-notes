@@ -27,6 +27,7 @@ struct RecordingAudioRouteTests {
             kAudioStreamTerminalTypeLine, kAudioStreamTerminalTypeDigitalAudioInterface,
             kAudioStreamTerminalTypeHDMI, kAudioStreamTerminalTypeDisplayPort,
             kAudioStreamTerminalTypeReceiverSpeaker,
+            0x0300, 0x0302, 0x0303, 0x0402, 0x0603,
         ] {
             terminals = [terminal]
             #expect(!RecordingAudioRoute.defaultVoiceProcessing(read: read))
@@ -35,6 +36,11 @@ struct RecordingAudioRouteTests {
         #expect(RecordingAudioRoute.defaultVoiceProcessing(read: read))
         terminals = [kAudioStreamTerminalTypeLFESpeaker]
         #expect(RecordingAudioRoute.defaultVoiceProcessing(read: read))
+        // Regression: the built-in speaker returned 769 (0x0301), not 'spkr'.
+        for terminal: UInt32 in [0x0301, 0x0304, 0x0305, 0x0306, 0x0307] {
+            terminals = [terminal]
+            #expect(RecordingAudioRoute.defaultVoiceProcessing(read: read))
+        }
         terminals = []
         #expect(!RecordingAudioRoute.defaultVoiceProcessing(read: read))
         #expect(!RecordingAudioRoute.defaultVoiceProcessing(read: { _, _, _ in nil }))
