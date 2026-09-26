@@ -12,9 +12,18 @@ import Testing
         let store = try store()
         let id = store.createMeeting(title: "Offline recording")
         await store.transcribe(id: id)
-        #expect(store.errorMessage?.contains("Choose a transcription provider") == true)
+        #expect(store.errorMessage == "Choose a transcription provider in Settings → Defaults.")
         #expect(store.meetings.first?.transcriptionAttempt == nil)
         #expect(!store.isBusy)
+    }
+
+    @Test func missingSummaryProviderPointsToDefaults() throws {
+        let store = try store()
+        #expect {
+            _ = try store.summaryProvider()
+        } throws: { error in
+            error.localizedDescription == "Choose and enable a summary provider in Settings → Defaults."
+        }
     }
 
     @Test func runpodRequiresExplicitEnabledUploadProvider() throws {

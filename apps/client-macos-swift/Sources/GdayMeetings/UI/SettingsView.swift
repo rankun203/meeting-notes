@@ -61,54 +61,18 @@ struct SettingsView: View {
             ServiceProvidersView()
                 .tabItem { Label("Service Providers", systemImage: "server.rack") }
                 .tag("providers")
-            Form {
-                Section("Transcription") {
-                    providerPicker(
-                        "Provider", capability: .transcription, selection: setting(\.transcriptionProviderID))
-                    Text("Transcription sends recording audio to the selected provider.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }.tabItem { Label("Transcription", systemImage: "text.bubble") }.tag("transcription")
-            Form {
-                Section("Summaries") {
-                    providerPicker("Provider", capability: .summarization, selection: setting(\.summaryProviderID))
-                    TextField("Summary Instructions", text: setting(\.summarizationPrompt), axis: .vertical)
-                        .lineLimit(3...6)
-                    Text("Summaries and chat send the selected transcript and notes to this provider.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }.tabItem { Label("Summaries", systemImage: "sparkles") }.tag("summaries")
+            DefaultsSettingsView()
+                .tabItem { Label("Defaults", systemImage: "slider.horizontal.3") }
+                .tag("defaults")
             DataPrivacyView()
                 .tabItem { Label("Data Privacy", systemImage: "hand.raised") }
                 .tag("privacy")
         }
         .formStyle(.grouped).padding(16).frame(width: 780, height: 650)
-    }
-
-    private func providerPicker(
-        _ title: String, capability: ProviderCapability, selection: Binding<UUID?>
-    ) -> some View {
-        Picker(title, selection: selection) {
-            Text("None").tag(nil as UUID?)
-            ForEach(
-                store.settings.serviceProviders.filter {
-                    availableForDefault($0, capability: capability)
-                }
-            ) { provider in
-                Text(provider.name).tag(Optional(provider.id))
-            }
-            if let selected = selection.wrappedValue,
-                !store.settings.serviceProviders.contains(where: {
-                    $0.id == selected && availableForDefault($0, capability: capability)
-                })
-            {
-                Text("Provider Unavailable").tag(Optional(selected))
-            }
+        .onAppear {
+            // The Transcription and Summaries tabs became Defaults; a saved
+            // selection of either would otherwise show no tab.
+            if settingsTab == "transcription" || settingsTab == "summaries" { settingsTab = "defaults" }
         }
-    }
-
-    private func availableForDefault(_ provider: ServiceProvider, capability: ProviderCapability) -> Bool {
-        ProviderConfigurationEligibility.canSelect(
-            provider, for: capability, providers: store.settings.serviceProviders)
     }
 }

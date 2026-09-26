@@ -9,6 +9,15 @@ struct TranscriptionActionButton: View {
     let meeting: Meeting
 
     private var provider: ServiceProvider? { try? store.transcriptionProvider(for: meeting) }
+    /// A provider is ready but no default is chosen: Defaults is the next step.
+    /// Otherwise the provider itself needs setup in Service Providers.
+    private var defaultNeedsChoosing: Bool {
+        meeting.transcriptionAttempt == nil && store.settings.transcriptionProviderID == nil
+            && store.settings.serviceProviders.contains {
+                ProviderConfigurationEligibility.canSelect(
+                    $0, for: .transcription, providers: store.settings.serviceProviders)
+            }
+    }
     private var title: String {
         if meeting.transcriptionAttempt?.result != nil { return "Apply Saved Transcript…" }
         if meeting.transcriptionAttempt != nil { return "Resume Transcription" }
@@ -21,7 +30,7 @@ struct TranscriptionActionButton: View {
                 confirming = true
             }
             else if provider == nil {
-                settingsTab = "providers"
+                settingsTab = defaultNeedsChoosing ? "defaults" : "providers"
                 openSettings()
             }
             else {

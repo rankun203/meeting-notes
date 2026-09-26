@@ -150,7 +150,7 @@ The Cloud panel can be richer, like the supplied iCloud reference. Lead with acc
 
 ### Choose a provider for each task
 
-**Settings → Transcription** selects the default transcription and speaker-label providers. **Settings → Summaries** selects the default summary provider. Each starts at **None** until explicitly chosen. Pickers list enabled providers that support the task and explain unavailable choices.
+**Settings → Defaults** has one section per capability. It selects the default transcription and speaker-label providers, and the default summary provider. Each starts at **None** until explicitly chosen. Pickers list enabled providers that support the task and explain unavailable choices.
 
 Per-meeting actions show the selected provider and allow a change. Adding, signing in to, or enabling a provider never changes these defaults. If a provider fails or is disabled, keep the choice visible and ask the person to retry or choose another provider.
 
@@ -345,7 +345,7 @@ Show Available, Reserved, and Spent points in a history linked to meetings. The 
 
 ## Settings and errors
 
-Group settings under **Recording**, **Service Providers**, **Transcription**, **Summaries**, and **AI & Integrations**. Service Providers contains connection details, capability switches, models, online copies, and account settings. Transcription and Summaries select task defaults and automation. AI & Integrations manages tool access. Cloud points and purchases stay in the Cloud provider panel.
+Group settings under **Recording**, **Service Providers**, **Defaults**, and **AI & Integrations**. Service Providers contains connection details, capability switches, models, online copies, and account settings. Defaults selects the provider for each capability, with one section per capability. AI & Integrations manages tool access. Cloud points and purchases stay in the Cloud provider panel.
 
 Summaries and chat need their own service choice and permission to send text. Permission to transcribe does not include sending notes or transcripts to an AI service.
 

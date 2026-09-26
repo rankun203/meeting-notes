@@ -18,7 +18,7 @@ extension MeetingStore {
     func transcriptionProvider(for meeting: Meeting) throws -> ServiceProvider {
         let providerID = meeting.transcriptionAttempt?.providerID ?? settings.transcriptionProviderID
         guard let providerID, let provider = settings.serviceProviders.first(where: { $0.id == providerID }) else {
-            throw ServiceError("Choose a transcription provider in Settings → Transcription.")
+            throw ServiceError("Choose a transcription provider in Settings → Defaults.")
         }
         guard provider.supports(.transcription) else {
             throw ServiceError("Enable Transcription for \(provider.name) in Service Providers.")
@@ -38,7 +38,7 @@ extension MeetingStore {
         guard let id = settings.summaryProviderID,
             let provider = settings.serviceProviders.first(where: { $0.id == id }),
             provider.kind == .openAICompatible, provider.supports(.summarization)
-        else { throw ServiceError("Choose and enable a summary provider in Settings → Summaries.") }
+        else { throw ServiceError("Choose and enable a summary provider in Settings → Defaults.") }
         return OpenAISummaryProvider(provider: provider)
     }
     func summarize(id: UUID) async {
