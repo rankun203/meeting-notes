@@ -64,6 +64,7 @@ Code is under `apps/client-macos-swift/Sources/GdayMeetings/`.
 
 ## Notes
 
+- **Read-only libraries.** `ProviderMetadataCache` takes a `canWrite` closure; `MeetingStore` passes `canSave`. With a read-only library, such as one saved by a newer app version, fetched lists stay in memory for the session and no cache file is written. `readOnlyLibraryGainsNoCacheFile` covers this.
 - **Concurrent edits.** Only three stored-property lines in `MeetingStore.swift` were changed. Capture, archive, `Models.swift`, and library UI files were not touched.
-- **Validation from the repository root.** `make format-macos`, `make lint-macos`, `make test-macos` (182 tests passed; the baseline was 164, and other agents' concurrent tests are included), and `make build-macos-preview` passed. No Swift compiler warnings appeared; the linker search-path warnings existed before this change.
+- **Validation from the repository root.** `make format-macos`, `make lint-macos`, `make test-macos` (183 tests passed; the baseline was 164, and other agents' concurrent tests are included), and `make build-macos-preview` passed. No Swift compiler warnings appeared; the linker search-path warnings existed before this change.
 - **Not validated.** No real network requests were made, and nothing was launched on screen. The combo box's keyboard behavior, filtering, and layout in the grouped Form, and the picker popover layout, still need checking in UI Preview.
