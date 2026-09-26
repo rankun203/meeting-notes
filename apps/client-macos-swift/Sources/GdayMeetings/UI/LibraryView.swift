@@ -5,6 +5,12 @@ import UniformTypeIdentifiers
 private enum LibraryDestination: Hashable { case meetings, people, tags, server }
 
 struct LibraryView: View {
+    /// Splits after the first sentence; a single-sentence message has no body.
+    static func alertParts(_ text: String?) -> (title: String, message: String) {
+        let text = text ?? ""
+        guard let end = text.range(of: ". ") else { return (text, "") }
+        return (String(text[..<end.lowerBound]) + ".", String(text[end.upperBound...]))
+    }
     @EnvironmentObject private var store: MeetingStore
     @EnvironmentObject private var playback: MeetingPlayback
     @ViewState private var destination: LibraryDestination? = .meetings
@@ -305,9 +311,10 @@ struct LibraryView: View {
                 else if playback.hasSelection && !recordingActive {
                     MeetingPlayerBar(showMeeting: showMeeting)
                 }
-                if !recordingActive && (store.isBusy || !store.statusMessage.isEmpty) {
+                // Progress for long-running work only; it disappears when the work ends.
+                if !recordingActive && store.isBusy {
                     HStack(spacing: 8) {
-                        if store.isBusy { ProgressView().controlSize(.small) }
+                        ProgressView().controlSize(.small)
                         Text(store.statusMessage).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         Spacer()
                     }.padding(.horizontal, 16).padding(.vertical, 8).background(.bar)
@@ -319,15 +326,17 @@ struct LibraryView: View {
         }
         .background(PlaybackSpaceKey(playback: playback))
         .onChange(of: store.recordingID) { _, id in if let id { showMeeting(id) } }
+        // Messages lead with the problem; that sentence is the title, and what was
+        // kept and technical detail follow as the smaller message text.
         .alert(
-            "Unable to Complete Action",
+            Self.alertParts(store.errorMessage).title,
             isPresented: Binding(
                 get: { store.errorMessage != nil && !store.presentsRecordingSetup },
                 set: { if !$0 { store.errorMessage = nil } })
         ) {
             Button("OK") { store.errorMessage = nil }
         } message: {
-            Text(store.errorMessage ?? "")
+            Text(Self.alertParts(store.errorMessage).message)
         }
         .alert(
             store.recordingPermissionNeeded?.title ?? "Recording Access Needed",
@@ -478,8 +487,7 @@ enum MeetingPanels {
             "Choose your existing Gday Meetings data folder. Meetings and audio are copied into the Swift app."
         if panel.runModal() == .OK, let url = panel.url {
             do {
-                let count = try store.importLegacyLibrary(url: url)
-                store.statusMessage = "Imported \(count) meetings"
+                _ = try store.importLegacyLibrary(url: url)
             }
             catch { store.errorMessage = error.localizedDescription }
         }

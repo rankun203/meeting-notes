@@ -12,7 +12,6 @@ extension MeetingStore {
         }
         catch {
             errorMessage = error.localizedDescription
-            statusMessage = "Transcription stopped"
         }
     }
 
@@ -70,11 +69,9 @@ extension MeetingStore {
                 current.todos += Self.actionItems(from: result).filter { !known.contains($0.title.lowercased()) }
                 updateMeeting(current)
             }
-            statusMessage = "Summary complete"
         }
         catch {
             errorMessage = error.localizedDescription
-            statusMessage = "Summary failed"
         }
     }
     func sendChat(id: UUID, message: String) async {
@@ -99,11 +96,9 @@ extension MeetingStore {
                 current.chat.append(ChatMessage(role: "assistant", content: result))
                 updateMeeting(current)
             }
-            statusMessage = ""
         }
         catch {
-            errorMessage = error.localizedDescription
-            statusMessage = "Chat request failed. Your message was saved."
+            errorMessage = "Couldn’t get a reply. Your message is saved in this chat. \(error.localizedDescription)"
         }
     }
     func sendContextChat(personID: UUID? = nil, tagID: UUID? = nil, message: String) async -> String? {

@@ -136,11 +136,10 @@ extension MeetingStore {
                 throw ServiceError(
                     "The server archive could not be verified. Local files have been preserved; retry to verify.")
             }
-            statusMessage = "Archive verified on the server. Your local meeting and recordings are preserved."
         }
         catch {
-            errorMessage = error.localizedDescription
-            statusMessage = "Archive incomplete; local files are preserved. Retry to resume."
+            errorMessage =
+                "Couldn’t finish archiving this meeting. The meeting and audio on this Mac are kept. Choose Archive to Server to resume. \(error.localizedDescription)"
         }
     }
     private static func saveArchive(_ checkpoint: ArchiveCheckpoint, to url: URL) throws {

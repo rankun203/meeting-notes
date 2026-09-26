@@ -84,6 +84,29 @@ import Testing
         let imported = try #require(store.audioURL(for: importedMeeting))
         #expect(try Data(contentsOf: imported) == audio)
     }
+    @Test func progressTextClearsWhenWorkEnds() throws {
+        let url = try directory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = MeetingStore(dataDirectory: url)
+        store.isBusy = true
+        store.statusMessage = "Writing summary…"
+        store.isBusy = false
+        #expect(store.statusMessage.isEmpty)
+    }
+    @Test func failedRecordingFinalizationRaisesError() async throws {
+        let url = try directory()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = MeetingStore(dataDirectory: url)
+        // A meeting with no audio files makes compression fail after capture stops.
+        let id = store.createMeeting(title: "Interrupted")
+        store.recordingID = id
+        await store.stopRecording(transcribeAfter: false)
+        let message = try #require(store.errorMessage)
+        #expect(message.contains("original WAV audio is kept"))
+        #expect(store.recordingID == nil)
+        #expect(!store.isBusy && !store.isFinalizingRecording)
+        #expect(store.statusMessage.isEmpty)
+    }
 }
 
 @MainActor struct MeetingIntegrityTests {
@@ -133,4 +156,11 @@ import Testing
         try store.importArchive(url: file)
         #expect(store.meetings.first?.transcriptionAttempt == nil)
     }
+}
+
+@Test func errorAlertUsesFirstSentenceAsTitle() {
+    let parts = LibraryView.alertParts("Couldn’t finish the recording. Audio is kept. Core Audio -50.")
+    #expect(parts.title == "Couldn’t finish the recording.")
+    #expect(parts.message == "Audio is kept. Core Audio -50.")
+    #expect(LibraryView.alertParts("No microphone input is available.").message.isEmpty)
 }

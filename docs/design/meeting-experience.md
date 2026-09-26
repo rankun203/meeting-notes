@@ -224,15 +224,15 @@ If local transcription needs a model, show its download size and progress, with 
 
 ### During recording
 
-Show elapsed time, source levels, notes, and **Stop Recording**. Use **Saving on this Mac** while recording and **Saved on this Mac** after saving succeeds.
+Show elapsed time, source levels, notes, and **Stop Recording**. Use **Saving on this Mac** while recording.
 
 When live transcription is enabled, show its state: Preparing, Listening, or Interrupted. Distinguish unfinished text from confirmed text. If transcription fails, keep recording. If the network disconnects, keep the selected service; never send audio to another service automatically.
 
-Report recording and storage failures separately from transcription problems. Show a saved message only when the audio is safe.
+Report recording and storage failures separately from transcription problems.
 
 ### After recording
 
-Save the audio, then open the meeting for playback. Show **Recording saved on this Mac**.
+Save the audio, then open the meeting for playback. Do not confirm a successful save. If saving fails, show an alert that states what failed and which audio was kept.
 
 If transcription is not configured, the transcript area says:
 

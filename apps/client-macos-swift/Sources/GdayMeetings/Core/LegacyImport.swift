@@ -112,7 +112,6 @@ extension MeetingStore {
                 "No legacy meetings were found. Choose the recordings folder, a meeting folder, or the previous application's data folder."
             )
         }
-        statusMessage = "Imported \(imported) meetings"
         return imported
     }
 }

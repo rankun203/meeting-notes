@@ -106,7 +106,9 @@ extension MeetingStore {
                     return
                 }
             }
-            statusMessage = "Transcription is still running. Resume Transcription checks the same job."
+            throw ServiceError(
+                "\(provider.name) is still transcribing this meeting. Choose Resume Transcription later to check the same job."
+            )
         case .runpod:
             try await transcribeOnRunPod(id: id, provider: provider, meeting: meeting, attempt: &attempt)
         case .openAICompatible, .filedrop:
@@ -235,8 +237,9 @@ extension MeetingStore {
                 return
             }
         }
-        statusMessage =
-            "Transcription is still running. Resume Transcription checks the same job. RunPod keeps completed results for 30 minutes."
+        throw ServiceError(
+            "\(runpod.provider.name) is still transcribing this meeting. Choose Resume Transcription later to check the same job. RunPod keeps completed results for 30 minutes."
+        )
     }
 
     func saveTranscriptionAttempt(_ attempt: ProviderTranscriptionAttempt, meetingID: UUID) throws {
@@ -280,7 +283,6 @@ extension MeetingStore {
         errorMessage = nil
         updateMeeting(latest)
         if let errorMessage { throw ServiceError(errorMessage) }
-        statusMessage = "Transcription complete"
     }
 }
 
