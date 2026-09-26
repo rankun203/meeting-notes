@@ -50,6 +50,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     /// Changes at runtime: the live switch and echo detection make it explicit.
     private var policy = VoiceProcessingPolicy.automatic
     private var microphoneRoute = MicrophoneRoute()
+    /// Whether the selected microphone may be bound; see `SelectedMicrophoneFallback`.
+    private var selectedFallback = SelectedMicrophoneFallback(connected: false)
     /// A switch or echo request waiting for the rebuilt engine; blocks further switching.
     private var pendingVoiceProcessing: Bool?
     private var pendingReason: RecordingRouteChange.Reason?
@@ -73,6 +75,8 @@ final class AudioCapture: NSObject, @unchecked Sendable {
 
     private struct SourceDelivery {
         var everDelivered = false
+        /// The installed session has delivered; reported once to its recovery controller.
+        var sessionDelivered = false
         /// A rebuilt session has not delivered yet; the source still shows as reconnecting.
         var awaitingResume = false
         var sessionStart: TimeInterval = 0
@@ -106,6 +110,15 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         initialPolicy = voiceProcessing
         policy = voiceProcessing
         selectedMicrophone = microphoneDevice
+        if let microphoneDevice {
+            locked {
+                selectedFallback = SelectedMicrophoneFallback(
+                    connected: RecordingAudioRoute.inputDevice(uid: microphoneDevice.uid) != nil)
+            }
+        }
+        CaptureLog.capture.notice(
+            "Recording start: microphone \(microphoneEnabled), system audio \(systemEnabled), voice processing policy \(voiceProcessing.rawValue, privacy: .public), selected microphone \(microphoneDevice?.name ?? "System Default", privacy: .public)"
+        )
         levels.microphone.enabled = microphoneEnabled
         levels.system.enabled = systemEnabled
         var files: [String] = []
@@ -121,6 +134,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 let session = try makeSystemSession(generation: 0)
                 recovery.install(session)
                 initialSystemFormat = session.format
+                CaptureLog.capture.notice(
+                    "System audio tap started: \(CaptureLog.describe(session.format), privacy: .public), output \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public)"
+                )
                 try await RecordingPermissions.checkCancellation(since: cancellationGeneration)
             }
             epoch = hostNow()
@@ -160,6 +176,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             return files
         }
         catch {
+            CaptureLog.capture.error("Recording start failed: \(error.localizedDescription, privacy: .public)")
             try? await stop()
             throw error
         }
@@ -205,11 +222,15 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         // Frames count across reconnects, so a source that delivered earlier and
         // was reconnecting at stop does not trigger this error.
         let systemFrames = queue.sync { systemWriter?.capturedFrames ?? 0 }
-        if (expectedMicrophone && (microphoneWriter?.capturedFrames ?? 0) == 0) || (expectedSystem && systemFrames == 0)
-        {
-            throw MeetingError.message(
-                "A selected audio source delivered no samples. Available tracks were saved. Check microphone and system-audio permissions and the selected devices; system silence can also produce no samples."
-            )
+        let microphoneFrames = microphoneWriter?.capturedFrames ?? 0
+        CaptureLog.capture.notice(
+            "Recording stopped: microphone \(microphoneFrames) frames, system audio \(systemFrames) frames")
+        let silentMicrophone = expectedMicrophone && microphoneFrames == 0
+        let silentSystem = expectedSystem && systemFrames == 0
+        if silentMicrophone || silentSystem {
+            throw CaptureSourceError.noAudio(
+                microphone: silentMicrophone, systemAudio: silentSystem,
+                otherTrackSaved: expectedMicrophone && expectedSystem && !(silentMicrophone && silentSystem))
         }
     }
 
@@ -217,7 +238,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
 
     private func makeMicrophoneRecovery() -> CaptureSourceRecovery<MicrophoneSession> {
         let recovery = CaptureSourceRecovery<MicrophoneSession>(
-            scheduler: QueueRecoveryScheduler(queue: queue),
+            label: "microphone", scheduler: QueueRecoveryScheduler(queue: queue),
             attemptQueue: DispatchQueue(label: "com.gdaymeetings.macos.microphone-recovery"),
             start: { [weak self] generation in
                 guard let self else { throw CancellationError() }
@@ -225,11 +246,12 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             },
             stop: { $0.teardown() },
             isPermanent: { ($0 as? CaptureSourceError) == .microphoneAccessDenied })
-        recovery.onStateChange = { [weak self] state in self?.sourceStateChanged(state) }
+        recovery.onStateChange = { [weak self] state in self?.sourceStateChanged(state, source: "microphone") }
         recovery.onInstalled = { [weak self] session in
             guard let self else { return }
             let reason = self.locked {
                 self.microphoneDelivery.sessionStart = ProcessInfo.processInfo.systemUptime
+                self.microphoneDelivery.sessionDelivered = false
                 self.microphoneDelivery.awaitingResume = self.microphoneDelivery.everDelivered
                 return self.adoptMicrophone(session)
             }
@@ -249,7 +271,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
 
     private func makeSystemRecovery() -> CaptureSourceRecovery<SystemAudioCapture> {
         let recovery = CaptureSourceRecovery<SystemAudioCapture>(
-            scheduler: QueueRecoveryScheduler(queue: queue),
+            label: "system audio", scheduler: QueueRecoveryScheduler(queue: queue),
             attemptQueue: DispatchQueue(label: "com.gdaymeetings.macos.system-audio-recovery"),
             start: { [weak self] generation in
                 guard let self else { throw CancellationError() }
@@ -262,13 +284,17 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             // System audio has no revocable runtime permission that Core Audio
             // reports; keep retrying while the recording is active.
             isPermanent: { _ in false })
-        recovery.onStateChange = { [weak self] state in self?.sourceStateChanged(state) }
+        recovery.onStateChange = { [weak self] state in self?.sourceStateChanged(state, source: "system audio") }
         recovery.onInstalled = { [weak self] capture in
             guard let self else { return }
             self.locked {
                 self.systemDelivery.sessionStart = ProcessInfo.processInfo.systemUptime
+                self.systemDelivery.sessionDelivered = false
                 self.systemDelivery.awaitingResume = self.systemDelivery.everDelivered
             }
+            CaptureLog.capture.notice(
+                "System audio tap rebuilt: \(CaptureLog.describe(capture.format), privacy: .public), output \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public)"
+            )
             if let format = capture.format {
                 self.recordRoute(
                     source: "system", format: format, voiceProcessed: false,
@@ -283,6 +309,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         let capture = SystemAudioCapture(queue: queue)
         capture.onFailure = { [weak self] error in self?.report(error) }
         capture.onInterrupted = { [weak self] in
+            CaptureLog.capture.notice("System audio tap interrupted (generation \(generation))")
             self?.systemRecovery?.sessionInterrupted(generation: generation)
         }
         capture.onBuffer = { [weak self] buffer, timestamp in
@@ -308,17 +335,52 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     /// whether the selected microphone is connected. When voice processing
     /// cannot be enabled, capture continues unprocessed and the live view says
     /// so: losing the microphone is worse than recording it without processing.
+    /// When the selected microphone cannot be bound or started, capture falls
+    /// back to the default input once, with the same notice as a disconnected
+    /// device, rather than retrying a device that keeps failing.
     private func makeMicrophoneSession(
         generation: Int, writer: (AVAudioFormat, Bool) throws -> TimedAudioWriter
     ) throws -> MicrophoneSession {
-        let processed = locked { policy }.enabled()
+        let policy = locked { policy }
+        let processed = policy.enabled()
+        CaptureLog.capture.notice(
+            "Microphone build \(generation): voice processing \(processed ? "on" : "off", privacy: .public) (policy \(policy.rawValue, privacy: .public), output \(Self.defaultDeviceName(output: true) ?? "unknown", privacy: .public))"
+        )
         // A missing selected microphone records from the default input until it returns.
-        let device = selectedMicrophone.flatMap { RecordingAudioRoute.inputDevice(uid: $0.uid) }
+        let connected = selectedMicrophone.flatMap { RecordingAudioRoute.inputDevice(uid: $0.uid) }
+        if let connected, locked({ selectedFallback.allowsSelected(connected: true) }) {
+            do {
+                return try buildWithVoiceProcessingFallback(
+                    generation: generation, voiceProcessing: processed, device: connected, writer: writer)
+            }
+            catch {
+                locked { selectedFallback.selectedFailed() }
+                CaptureLog.capture.error(
+                    "Selected microphone \(connected.name, privacy: .public) (\(connected.id)) failed: \(error.localizedDescription, privacy: .public). Using the default input until it reconnects."
+                )
+            }
+        }
+        else if let selectedMicrophone {
+            CaptureLog.capture.notice(
+                "Selected microphone \(selectedMicrophone.name, privacy: .public) \(connected == nil ? "not connected" : "skipped after a failure", privacy: .public); using the default input"
+            )
+        }
+        return try buildWithVoiceProcessingFallback(
+            generation: generation, voiceProcessing: processed, device: nil, writer: writer)
+    }
+
+    private func buildWithVoiceProcessingFallback(
+        generation: Int, voiceProcessing processed: Bool, device: AudioInputDevice?,
+        writer: (AVAudioFormat, Bool) throws -> TimedAudioWriter
+    ) throws -> MicrophoneSession {
         do {
             return try buildMicrophoneEngine(
                 generation: generation, voiceProcessing: processed, device: device, writer: writer)
         }
         catch  where processed {
+            CaptureLog.capture.error(
+                "Voice-processed microphone failed: \(error.localizedDescription, privacy: .public). Retrying unprocessed."
+            )
             let session = try buildMicrophoneEngine(
                 generation: generation, voiceProcessing: false, device: device, writer: writer)
             session.voiceProcessingUnavailable = true
@@ -336,6 +398,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         do {
             try configure(
                 session, generation: generation, voiceProcessing: requested, device: device?.id, writer: makeWriter)
+            CaptureLog.capture.notice(
+                "Microphone \(generation) started on \(session.deviceName ?? "unknown", privacy: .public)\(device.map { " (\($0.id))" } ?? " (default input)", privacy: .public): \(CaptureLog.describe(session.format), privacy: .public), voice processing \(session.voiceProcessing ? "on" : "off", privacy: .public)"
+            )
             return session
         }
         catch {
@@ -350,19 +415,36 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     ) throws {
         let engine = session.engine
         let input = engine.inputNode
-        // Bind before reading the format so it describes the selected microphone.
-        if let device { try Self.bindInput(input, to: device) }
-        // Preserve the physical microphone rate before VoiceProcessingIO can
-        // expose a multichannel aggregate default. Its channels are not a
-        // supported mapping of processed speech to be averaged or truncated.
-        let microphoneDeviceFormat = input.outputFormat(forBus: 0)
-        guard microphoneDeviceFormat.sampleRate > 0, microphoneDeviceFormat.channelCount > 0 else {
+        // Selecting a device leaves AVAudioEngine a pending configuration change
+        // (it starts on a default-device aggregate). Started before that change is
+        // processed, the engine stops itself or keeps the previous device's format
+        // (24 kHz AirPods while the Mac microphone ran at 48 kHz, so the tap was
+        // rejected), then posts AVAudioEngineConfigurationChange, which rebuilt the
+        // microphone into the same state forever. Bind, then let the change settle
+        // before reading formats or starting. Measured on macOS 26.
+        if let device {
+            let pending = PendingConfigurationChange(engine: engine)
+            if try Self.bindInput(input, to: device) { pending.prepareAndWait(engine, step: "select device") }
+        }
+        // The hardware side reflects the bound device; the node's output format
+        // can still describe the previous device until the engine reconfigures.
+        let hardware = input.inputFormat(forBus: 0)
+        let client = input.outputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, client.channelCount > 0 else {
             throw MeetingError.message("No microphone input is available.")
+        }
+        if client.sampleRate != hardware.sampleRate {
+            CaptureLog.capture.error(
+                "Microphone client format \(CaptureLog.describe(client), privacy: .public) differs from hardware \(CaptureLog.describe(hardware), privacy: .public); using the hardware rate"
+            )
         }
         // Enable only while stopped. Both hardware I/O nodes participate; never feed
         // captured system audio or microphone monitoring back to the speakers.
         // https://developer.apple.com/videos/play/wwdc2019/510/
+        var pendingVoiceProcessingBind: PendingConfigurationChange?
         if requested {
+            // Settling prepared the engine; voice processing changes only while uninitialized.
+            if device != nil { engine.stop() }
             do { try input.setVoiceProcessingEnabled(true) }
             catch {
                 let cause = error as NSError
@@ -375,7 +457,12 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 throw CaptureSourceError.voiceProcessing("Apple voice processing is unavailable on this audio route.")
             }
             // Enabling voice processing resets the input to the default device.
-            if let device { try Self.bindInput(input, to: device) }
+            // Its configuration change settles after the graph is wired: preparing
+            // before `connect` would make AVAudioEngine reject the connection.
+            if let device {
+                let pending = PendingConfigurationChange(engine: engine)
+                if try Self.bindInput(input, to: device) { pendingVoiceProcessingBind = pending }
+            }
             // Other applications count as other audio. Minimum reduces but does not
             // promise to eliminate ducking; do not claim external-app AEC guarantees.
             // https://developer.apple.com/videos/play/wwdc2023/10235/
@@ -392,8 +479,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             // channels is performed. Raw capture keeps its device channel layout.
             // https://developer.apple.com/documentation/avfaudio/avaudionode/installtap(onbus:buffersize:format:block:)
             guard
-                let speechFormat = AVAudioFormat(
-                    standardFormatWithSampleRate: microphoneDeviceFormat.sampleRate, channels: 1)
+                let speechFormat = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate, channels: 1)
             else {
                 throw CaptureSourceError.voiceProcessing("Could not configure the mono voice-processing client format.")
             }
@@ -422,7 +508,13 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             }
         }
         else {
-            format = input.outputFormat(forBus: 0)
+            // A tap whose rate differs from the hardware is rejected ("Failed to
+            // create tap") and delivers nothing, so take the rate from the hardware.
+            guard
+                let rawFormat = AVAudioFormat(
+                    standardFormatWithSampleRate: hardware.sampleRate, channels: client.channelCount)
+            else { throw MeetingError.message("Could not configure the microphone format.") }
+            format = rawFormat
         }
         session.format = format
         let writer = try makeWriter(format, session.voiceProcessing)
@@ -454,6 +546,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             }
         }
         engine.prepare()
+        pendingVoiceProcessingBind?.wait(step: "select device after voice processing")
         do { try engine.start() }
         catch {
             let cause = error as NSError
@@ -468,35 +561,67 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         }
         // Never record a different microphone than the one shown: confirm the
         // running engine still uses the selected device.
-        if let device, Self.boundInput(input) != device {
-            throw CaptureSourceError.voiceProcessing("The selected microphone was replaced when the engine started.")
+        let startedDevice = Self.boundInput(input)
+        if let device, startedDevice != device {
+            throw CaptureSourceError.selectedMicrophone(
+                "The selected microphone was replaced when the engine started (bound \(startedDevice.map(String.init) ?? "none"), expected \(device))."
+            )
         }
         // A device, sample-rate, or channel change stops this engine. Recovery
-        // builds a fresh engine on the current default input for the same track.
+        // builds a fresh engine for the same track. A notification that leaves the
+        // engine running on the same device and hardware format changed nothing
+        // this track depends on, so it is logged and ignored rather than rebuilt.
         // https://developer.apple.com/documentation/avfaudio/avaudioengineconfigurationchangenotification
+        let started = MicrophoneConfigurationChange(
+            running: true, device: startedDevice, sampleRate: input.inputFormat(forBus: 0).sampleRate,
+            channels: input.inputFormat(forBus: 0).channelCount)
         session.configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
-            self?.microphoneRecovery?.routeChanged(generation: generation)
+        ) { [weak self, weak engine] _ in
+            guard let self, let engine else { return }
+            let input = engine.inputNode
+            let hardware = input.inputFormat(forBus: 0)
+            let now = MicrophoneConfigurationChange(
+                running: engine.isRunning, device: Self.boundInput(input), sampleRate: hardware.sampleRate,
+                channels: hardware.channelCount)
+            guard now.requiresRebuild(since: started) else {
+                CaptureLog.capture.notice(
+                    "Microphone \(generation) configuration change ignored: still running on device \(now.device.map(String.init) ?? "none", privacy: .public), \(CaptureLog.describe(hardware), privacy: .public)"
+                )
+                return
+            }
+            CaptureLog.capture.notice(
+                "Microphone \(generation) configuration changed: running \(now.running), device \(now.device.map(String.init) ?? "none", privacy: .public), \(CaptureLog.describe(hardware), privacy: .public)"
+            )
+            self.microphoneRecovery?.routeChanged(generation: generation)
         }
     }
 
     /// Selects the device on the I/O unit's input element (1) and confirms it.
-    /// With voice processing on, `AUAudioUnit.setDeviceID` moves VoiceProcessingIO's
-    /// output instead and the microphone stays on the default input (measured on
-    /// macOS 26); the input element selects only the microphone for both modes.
+    /// Returns whether the device changed, which leaves a configuration change
+    /// pending. With voice processing on, `AUAudioUnit.setDeviceID` moves
+    /// VoiceProcessingIO's output instead and the microphone stays on the default
+    /// input (measured on macOS 26); the input element selects only the
+    /// microphone for both modes.
     /// https://developer.apple.com/documentation/audiotoolbox/kaudiooutputunitproperty_currentdevice
-    private static func bindInput(_ input: AVAudioInputNode, to device: AudioObjectID) throws {
+    private static func bindInput(_ input: AVAudioInputNode, to device: AudioObjectID) throws -> Bool {
         guard let unit = input.audioUnit else {
-            throw MeetingError.message("The microphone engine has no input unit.")
+            throw CaptureSourceError.selectedMicrophone("The microphone engine has no input unit.")
         }
+        let previous = boundInput(input)
+        guard previous != device else { return false }
         var value = device
         let status = AudioUnitSetProperty(
             unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 1, &value,
             UInt32(MemoryLayout<AudioObjectID>.size))
-        guard status == noErr, boundInput(input) == device else {
-            throw MeetingError.message("Could not select the microphone (Core Audio \(status)).")
+        let bound = boundInput(input)
+        CaptureLog.capture.notice(
+            "Microphone input element: device \(previous.map(String.init) ?? "none", privacy: .public) → \(device), status \(status), read back \(bound.map(String.init) ?? "none", privacy: .public)"
+        )
+        guard status == noErr, bound == device else {
+            throw CaptureSourceError.selectedMicrophone("Could not select the microphone (Core Audio \(status)).")
         }
+        return true
     }
 
     private static func boundInput(_ input: AVAudioInputNode) -> AudioObjectID? {
@@ -552,6 +677,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 self.pendingReason = .voiceProcessingSwitched
                 return true
             }
+            CaptureLog.capture.notice(
+                "Voice Processing switched \(enabled ? "on" : "off", privacy: .public)\(rebuild ? "; rebuilding microphone" : "", privacy: .public)"
+            )
             if rebuild { recovery.routeChanged() }
         }
     }
@@ -599,6 +727,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         if output {
             guard device != knownOutput else { return }
             knownOutput = device
+            CaptureLog.capture.notice(
+                "Default output changed to \(device.flatMap(RecordingAudioRoute.deviceName) ?? "none", privacy: .public) (\(device.map(String.init) ?? "none", privacy: .public))"
+            )
             systemRecovery?.routeChanged()
             // Voice processing couples to the output device, so a processed engine
             // must move with it. An unprocessed engine only rebuilds when automatic
@@ -610,28 +741,41 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             guard device != knownInput else { return }
             knownInput = device
             // A connected selected microphone does not follow the default input.
-            if locked({ microphoneRoute.usesSelectedDevice }), microphoneRecovery?.state == .running { return }
+            let pinned = locked({ microphoneRoute.usesSelectedDevice }) && microphoneRecovery?.state == .running
+            CaptureLog.capture.notice(
+                "Default input changed to \(device.flatMap(RecordingAudioRoute.deviceName) ?? "none", privacy: .public) (\(device.map(String.init) ?? "none", privacy: .public))\(pinned ? "; selected microphone keeps recording" : "", privacy: .public)"
+            )
+            if pinned { return }
             microphoneRecovery?.routeChanged()
         }
     }
 
     /// Runs on queue. Moves to the default input when the selected microphone
-    /// disconnects, and back when it returns. Only a running engine reacts:
-    /// VoiceProcessingIO's own aggregate changes the device list during a
-    /// rebuild, and the next attempt resolves the selected microphone anyway.
+    /// disconnects, and back when it returns. Only a change in the selected
+    /// device's connection counts: VoiceProcessingIO's own aggregate changes the
+    /// device list on every rebuild and must not trigger another one.
     private func inputDevicesChanged() {
-        guard let selectedMicrophone, let recovery = microphoneRecovery, recovery.state == .running else { return }
+        guard let selectedMicrophone, let recovery = microphoneRecovery else { return }
         let connected = RecordingAudioRoute.inputDevice(uid: selectedMicrophone.uid) != nil
-        if connected != locked({ microphoneRoute.usesSelectedDevice }) { recovery.routeChanged() }
+        let rebuild = locked {
+            selectedFallback.connectionChanged(connected: connected, usingSelected: microphoneRoute.usesSelectedDevice)
+        }
+        guard rebuild else { return }
+        CaptureLog.capture.notice(
+            "Selected microphone \(selectedMicrophone.name, privacy: .public) \(connected ? "connected" : "disconnected", privacy: .public); rebuilding microphone"
+        )
+        recovery.routeChanged()
     }
 
-    private func sourceStateChanged(_ state: CaptureSourceState) {
+    private func sourceStateChanged(_ state: CaptureSourceState, source: String) {
+        CaptureLog.capture.notice("\(source, privacy: .public) state: \(String(describing: state), privacy: .public)")
         publishHealth()
         // Start padding right away so a resumed source never appends after a large backlog.
         if state == .reconnecting { queue.async { [weak self] in self?.superviseSources() } }
     }
 
     private func sourceFailedPermanently(_ error: Error) {
+        CaptureLog.capture.error("Source stopped permanently: \(error.localizedDescription, privacy: .public)")
         publishHealth()
         let microphoneFailed = !expectedMicrophone || microphoneRecovery?.state == .failed
         let systemFailed = !expectedSystem || systemRecovery?.state == .failed
@@ -687,17 +831,17 @@ final class AudioCapture: NSObject, @unchecked Sendable {
     private func superviseSources() {
         let host = hostNow()
         let now = ProcessInfo.processInfo.systemUptime
-        let sources: [(CaptureSourceState?, TimedAudioWriter?, SourceDelivery, (() -> Void)?)] = [
+        let sources: [(String, CaptureSourceState?, TimedAudioWriter?, SourceDelivery, (() -> Void)?)] = [
             (
-                microphoneRecovery?.state, microphoneWriter, locked { microphoneDelivery },
-                microphoneRecovery.map { recovery in { recovery.sessionInterrupted() } }
+                "microphone", microphoneRecovery?.state, microphoneWriter, locked { microphoneDelivery },
+                microphoneRecovery.map { recovery in { [weak self] in self?.microphoneStalled(recovery) } }
             ),
             (
-                systemRecovery?.state, systemWriter, locked { systemDelivery },
+                "system audio", systemRecovery?.state, systemWriter, locked { systemDelivery },
                 systemRecovery.map { recovery in { recovery.sessionInterrupted() } }
             ),
         ]
-        for (state, writer, delivery, interrupt) in sources {
+        for (source, state, writer, delivery, interrupt) in sources {
             switch state {
             case .reconnecting?, .failed?:
                 // Pad in one-second steps so the writer never flushes a long outage
@@ -705,13 +849,36 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 do { try writer?.padSilence(throughHostSeconds: host - 0.5) }
                 catch { report(error) }
             case .running?:
-                if delivery.everDelivered, now - max(delivery.last, delivery.sessionStart) > Self.deliveryWatchdog {
+                // A microphone always delivers buffers, even of silence, so one that
+                // never started delivering is broken too. System audio keeps the
+                // earlier rule: only a tap that delivered and then stopped.
+                let watched = delivery.everDelivered || source == "microphone"
+                let quiet = now - max(delivery.last, delivery.sessionStart)
+                if watched, quiet > Self.deliveryWatchdog {
+                    CaptureLog.capture.error(
+                        "\(source, privacy: .public) watchdog: no audio for \(quiet, format: .fixed(precision: 1)) s\(delivery.sessionDelivered ? "" : " since the session started", privacy: .public)"
+                    )
                     interrupt?()
                 }
             default: break
             }
         }
         evaluateEcho()
+    }
+
+    /// Runs on queue. A selected microphone that started but never delivered is
+    /// treated like one that failed to bind: the next build uses the default input.
+    private func microphoneStalled(_ recovery: CaptureSourceRecovery<MicrophoneSession>) {
+        let fallBack: Bool = locked {
+            guard microphoneRoute.usesSelectedDevice, !microphoneDelivery.sessionDelivered else { return false }
+            selectedFallback.selectedFailed()
+            return true
+        }
+        if fallBack {
+            CaptureLog.capture.error(
+                "Selected microphone delivered no audio; using the default input until it reconnects")
+        }
+        recovery.sessionInterrupted()
     }
 
     /// Runs on queue once per second. Echo only matters while the microphone is
@@ -731,7 +898,10 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             pendingReason = .echoDetected
             return true
         }
-        if turnOn { microphoneRecovery?.routeChanged() }
+        if turnOn {
+            CaptureLog.capture.notice("Echo detected; turning Voice Processing on")
+            microphoneRecovery?.routeChanged()
+        }
     }
 
     private func publishHealth() {
@@ -809,6 +979,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         let meanSquare = measured.hasSamples ? pow(10, measured.rmsDB / 10) : 0
         let duration = buffer.format.sampleRate > 0 ? Double(buffer.frameLength) / buffer.format.sampleRate : 0
         let tracksEcho = expectedMicrophone && expectedSystem
+        var firstInSession = false
         let resumed: Bool = locked {
             if tracksEcho {
                 if microphone {
@@ -821,15 +992,28 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             if microphone {
                 levels.microphone = measured
                 defer { microphoneDelivery.awaitingResume = false }
+                firstInSession = !microphoneDelivery.sessionDelivered
+                microphoneDelivery.sessionDelivered = true
                 microphoneDelivery.everDelivered = true
                 microphoneDelivery.last = now
                 return microphoneDelivery.awaitingResume
             }
             levels.system = measured
             defer { systemDelivery.awaitingResume = false }
+            firstInSession = !systemDelivery.sessionDelivered
+            systemDelivery.sessionDelivered = true
             systemDelivery.everDelivered = true
             systemDelivery.last = now
             return systemDelivery.awaitingResume
+        }
+        // Once per session: working audio clears the recovery loop guard.
+        if firstInSession {
+            if microphone {
+                microphoneRecovery?.sessionDelivered()
+            }
+            else {
+                systemRecovery?.sessionDelivered()
+            }
         }
         // Clear the reconnecting status as soon as audio arrives again.
         if resumed { publishHealth() }
@@ -862,7 +1046,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
         let device = microphoneRoute.deviceName ?? "System Default"
         if let selectedMicrophone, !microphoneRoute.usesSelectedDevice {
             status.notices.append(
-                microphoneRoute.selectedDeviceUsed
+                microphoneRoute.selectedDeviceUsed && !selectedFallback.failed
                     ? "\(selectedMicrophone.name) disconnected · Using \(device)"
                     : "\(selectedMicrophone.name) unavailable · Using \(device)")
         }
@@ -881,7 +1065,10 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             failure = error
             return true
         }
-        if first { onFailure?(error) }
+        if first {
+            CaptureLog.capture.fault("Recording failed: \(error.localizedDescription, privacy: .public)")
+            onFailure?(error)
+        }
     }
 
     private func prepareSystemWriter(directory: URL) throws {
@@ -929,19 +1116,127 @@ final class MicrophoneSession {
     }
 }
 
+/// Waits for the AVAudioEngineConfigurationChange that selecting an input
+/// device leaves pending. Create it before binding so the notification cannot
+/// be missed; it stops observing when waited on or released.
+final class PendingConfigurationChange {
+    /// The change posted about 0.1 s after `prepare` in measurements; a device
+    /// that is already current posts none, so the wait must stay short.
+    static let timeout: TimeInterval = 0.5
+    private let posted = DispatchSemaphore(value: 0)
+    private var observer: NSObjectProtocol?
+
+    init(engine: AVAudioEngine) {
+        observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [posted] _ in posted.signal() }
+    }
+
+    deinit { cancel() }
+
+    func prepareAndWait(_ engine: AVAudioEngine, step: String) {
+        engine.prepare()
+        wait(step: step)
+    }
+
+    /// Call after `prepare`, which is when AVAudioEngine applies the change.
+    func wait(step: String) {
+        let began = DispatchTime.now()
+        let settled = posted.wait(timeout: began + Self.timeout) == .success
+        cancel()
+        let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
+        CaptureLog.capture.notice(
+            "Microphone \(step, privacy: .public): configuration \(settled ? "settled" : "change not posted", privacy: .public) after \(milliseconds, format: .fixed(precision: 0)) ms"
+        )
+    }
+
+    private func cancel() {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+    }
+}
+
+/// The microphone engine state that matters to its track. A configuration
+/// notification that changes none of it (the engine still runs on the same
+/// device and hardware format) needs no rebuild.
+struct MicrophoneConfigurationChange: Equatable {
+    var running: Bool
+    var device: AudioObjectID?
+    var sampleRate: Double
+    var channels: AVAudioChannelCount
+
+    func requiresRebuild(since started: Self) -> Bool {
+        !(running && device == started.device && sampleRate == started.sampleRate && channels == started.channels)
+    }
+}
+
+/// Decides whether a microphone build may use the selected device. After it
+/// fails to bind, start, or deliver audio once, builds use the default input
+/// until the device disconnects and reconnects, so a failing device costs one
+/// fallback instead of a rebuild loop. Only changes in the device's connection
+/// trigger rebuilds; device-list noise from capture's own aggregates does not.
+struct SelectedMicrophoneFallback: Equatable {
+    private(set) var failed = false
+    private var connected: Bool
+
+    init(connected: Bool) { self.connected = connected }
+
+    func allowsSelected(connected: Bool) -> Bool { connected && !failed }
+
+    mutating func selectedFailed() { failed = true }
+
+    /// Returns whether the microphone should be rebuilt for this device-list change.
+    mutating func connectionChanged(connected now: Bool, usingSelected: Bool) -> Bool {
+        guard now != connected else { return false }
+        connected = now
+        if now {
+            // A reconnected device gets another chance.
+            failed = false
+            return !usingSelected
+        }
+        return usingSelected
+    }
+}
+
 enum CaptureSourceError: LocalizedError, Equatable {
     /// Microphone access was revoked during recording; retrying cannot recover it.
     case microphoneAccessDenied
     /// Voice processing failed on the current route or device; capture falls back to unprocessed.
     case voiceProcessing(String)
+    /// The selected microphone could not be bound or stayed unbound; capture falls back to the default input.
+    case selectedMicrophone(String)
+    /// A recorded source captured no audio at all. The other track, if any, was saved.
+    case noAudio(microphone: Bool, systemAudio: Bool, otherTrackSaved: Bool)
 
     var errorDescription: String? {
         switch self {
         case .microphoneAccessDenied:
             return "Microphone access is off. Available audio was saved. Allow microphone access in System Settings."
-        case .voiceProcessing(let message):
+        case .voiceProcessing(let message), .selectedMicrophone(let message):
             return message
+        case .noAudio(let microphone, let systemAudio, let otherTrackSaved):
+            // The first sentence is the alert title (LibraryView.alertParts).
+            let microphoneHelp =
+                "Check the microphone selected in New Recording and microphone access in System Settings → Privacy & Security."
+            let systemHelp =
+                "Allow Gday Meetings in System Settings → Privacy & Security → Screen & System Audio Recording."
+            switch (microphone, systemAudio) {
+            case (true, true):
+                return "Microphone and System Audio recorded no audio. \(microphoneHelp) \(systemHelp)"
+            case (true, false):
+                return "Microphone recorded no audio. "
+                    + (otherTrackSaved ? "The System Audio track was saved. " : "") + microphoneHelp
+            default:
+                return "System Audio recorded no audio. "
+                    + (otherTrackSaved ? "The Microphone track was saved. " : "") + systemHelp
+            }
         }
+    }
+
+    /// A finished recording with an empty source, as opposed to a capture failure.
+    var isNoAudio: Bool {
+        if case .noAudio = self { return true }
+        return false
     }
 }
 

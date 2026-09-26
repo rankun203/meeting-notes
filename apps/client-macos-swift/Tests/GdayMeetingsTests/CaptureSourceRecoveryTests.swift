@@ -284,6 +284,110 @@ struct CaptureSourceRecoveryTests {
         }
     }
 
+    /// Each rebuilt session triggers the next rebuild before delivering audio,
+    /// as a device selection's own configuration change did. The loop guard
+    /// turns the 0.3 s flapping into a backoff that caps at 5 s.
+    @Test func rebuildLoopBacksOffUntilAudioArrives() {
+        let harness = Harness()
+        harness.installInitial()
+        harness.recovery.routeChanged(generation: 0)
+        harness.advance(0.3)
+        for _ in 0..<8 {
+            guard let latest = harness.installed.last else { break }
+            harness.recovery.routeChanged(generation: latest.generation)
+            harness.advance(10)
+        }
+        #expect(harness.scheduler.delays == [0.3, 0.3, 0.5, 1, 2, 4, 5, 5, 5])
+        #expect(harness.installed.count == 9)
+        // Audio from the latest session clears the guard: the next route change is prompt.
+        harness.recovery.sessionDelivered()
+        harness.recovery.routeChanged(generation: harness.installed.last?.generation)
+        #expect(harness.scheduler.delays.last == 0.3)
+    }
+
+    @Test func deliveringSessionsKeepThePromptDebounce() {
+        let harness = Harness()
+        harness.installInitial()
+        for _ in 0..<5 {
+            harness.recovery.sessionDelivered()
+            harness.recovery.routeChanged()
+            harness.advance(0.3)
+        }
+        #expect(harness.scheduler.delays == [0.3, 0.3, 0.3, 0.3, 0.3])
+        #expect(harness.installed.count == 5)
+    }
+
+    @Test func deliveryReportsOutsideRunningAreIgnored() {
+        let harness = Harness()
+        harness.installInitial()
+        harness.recovery.routeChanged()
+        // A buffer from a session that is being replaced does not clear the guard.
+        harness.recovery.sessionDelivered()
+        harness.advance(0.3)
+        harness.recovery.routeChanged()
+        harness.advance(1)
+        harness.recovery.routeChanged()
+        #expect(harness.scheduler.delays == [0.3, 0.3, 0.5])
+    }
+
+    @Test func selectedMicrophoneFallsBackOnceAndRetriesAfterReconnect() {
+        var fallback = SelectedMicrophoneFallback(connected: true)
+        #expect(fallback.allowsSelected(connected: true))
+        #expect(!fallback.allowsSelected(connected: false))
+        // A bind, start, or delivery failure uses the default input from now on.
+        fallback.selectedFailed()
+        #expect(fallback.failed)
+        #expect(!fallback.allowsSelected(connected: true))
+        // Device-list noise (capture's own aggregates) never rebuilds.
+        var noise: [Bool] = []
+        for _ in 0..<5 { noise.append(fallback.connectionChanged(connected: true, usingSelected: false)) }
+        #expect(noise.allSatisfy { !$0 })
+        // Disconnecting while on the default input needs no rebuild.
+        let disconnectedUnused = fallback.connectionChanged(connected: false, usingSelected: false)
+        #expect(!disconnectedUnused)
+        // Reconnecting gives the device another chance.
+        let reconnected = fallback.connectionChanged(connected: true, usingSelected: false)
+        #expect(reconnected)
+        #expect(!fallback.failed)
+        #expect(fallback.allowsSelected(connected: true))
+        // Losing the device in use rebuilds onto the default input.
+        let disconnectedInUse = fallback.connectionChanged(connected: false, usingSelected: true)
+        #expect(disconnectedInUse)
+    }
+
+    @Test func ownConfigurationChangeDoesNotRebuild() {
+        let started = MicrophoneConfigurationChange(running: true, device: 109, sampleRate: 48_000, channels: 1)
+        #expect(!started.requiresRebuild(since: started))
+        var stopped = started
+        stopped.running = false
+        #expect(stopped.requiresRebuild(since: started))
+        var otherDevice = started
+        otherDevice.device = 180
+        #expect(otherDevice.requiresRebuild(since: started))
+        var otherRate = started
+        otherRate.sampleRate = 24_000
+        #expect(otherRate.requiresRebuild(since: started))
+        var otherChannels = started
+        otherChannels.channels = 2
+        #expect(otherChannels.requiresRebuild(since: started))
+    }
+
+    @Test func emptySourceMessageNamesTheSource() {
+        let microphone = CaptureSourceError.noAudio(microphone: true, systemAudio: false, otherTrackSaved: true)
+        let parts = LibraryView.alertParts(microphone.localizedDescription)
+        #expect(parts.title == "Microphone recorded no audio.")
+        #expect(parts.message.hasPrefix("The System Audio track was saved. "))
+        #expect(!parts.message.contains("kept"))
+        let system = CaptureSourceError.noAudio(microphone: false, systemAudio: true, otherTrackSaved: false)
+        #expect(LibraryView.alertParts(system.localizedDescription).title == "System Audio recorded no audio.")
+        #expect(!system.localizedDescription.contains("saved"))
+        let both = CaptureSourceError.noAudio(microphone: true, systemAudio: true, otherTrackSaved: false)
+        #expect(
+            LibraryView.alertParts(both.localizedDescription).title == "Microphone and System Audio recorded no audio.")
+        #expect(both.isNoAudio)
+        #expect(!CaptureSourceError.microphoneAccessDenied.isNoAudio)
+    }
+
     @Test func reconnectingLevelsResetMetersAndStatus() {
         let level = RecordingSourceLevel(enabled: true, hasSamples: true, reconnecting: true, rmsDB: -10)
         #expect(level.statusText == "Reconnecting…")

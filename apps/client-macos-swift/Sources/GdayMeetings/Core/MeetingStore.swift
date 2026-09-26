@@ -362,8 +362,12 @@ final class MeetingStore: ObservableObject {
         var stopFailed = false
         do { try await recorder?.stop() }
         catch {
+            // An empty source is not a failed recording; its message names the
+            // source and says which track was saved.
             errorMessage =
-                "Couldn’t finish the recording. Audio captured before the problem is kept in this meeting. \(error.localizedDescription)"
+                (error as? CaptureSourceError)?.isNoAudio == true
+                ? error.localizedDescription
+                : "Couldn’t finish the recording. Audio captured before the problem is kept in this meeting. \(error.localizedDescription)"
             stopFailed = true
         }
         let profile = recorder?.profile

@@ -31,8 +31,16 @@ enum CaptureSourceState: Equatable { case running, reconnecting, failed, stopped
 ///   deadline. The attempt keeps its thread until the call returns, then sees the
 ///   stale generation and releases its own resources. Isolating capture in a
 ///   disposable helper process would bound this fully; that is deferred.
+/// - Loop guard: a session replaced before it delivered any audio did not fix
+///   anything. From the `loopThreshold`th such rebuild in a row, requests wait
+///   out a doubling backoff instead of the debounce, and route changes stop
+///   resetting it, until a session reports `sessionDelivered`. A rebuild that
+///   triggers the next one (as a device selection's own configuration change
+///   did) therefore slows to one attempt per 5 seconds instead of flapping.
 final class CaptureSourceRecovery<Session>: @unchecked Sendable {
     typealias State = CaptureSourceState
+    /// Undelivered rebuilds in a row before requests back off.
+    static var loopThreshold: Int { 2 }
 
     struct Timing {
         var debounce: TimeInterval = 0.3
@@ -41,6 +49,8 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
     }
 
     private let timing: Timing
+    /// Names the source in log lines.
+    private let label: String
     private let scheduler: RecoveryScheduling
     private let attemptQueue: DispatchQueue
     private let startSession: (_ generation: Int) throws -> Session
@@ -56,6 +66,10 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
     private var failure: Error?
     private var lastError: Error?
     private var stateValue = State.stopped
+    /// The installed session has delivered audio.
+    private var delivered = false
+    private var undeliveredRebuilds = 0
+    private var loopBackoff: TimeInterval
 
     /// Called outside the lock after each state transition.
     var onStateChange: ((State) -> Void)?
@@ -65,10 +79,11 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
     var onPermanentFailure: ((Error) -> Void)?
 
     init(
-        timing: Timing = Timing(), scheduler: RecoveryScheduling, attemptQueue: DispatchQueue,
-        start: @escaping (_ generation: Int) throws -> Session, stop: @escaping (Session) -> Void,
-        isPermanent: @escaping (Error) -> Bool
+        label: String = "source", timing: Timing = Timing(), scheduler: RecoveryScheduling,
+        attemptQueue: DispatchQueue, start: @escaping (_ generation: Int) throws -> Session,
+        stop: @escaping (Session) -> Void, isPermanent: @escaping (Error) -> Bool
     ) {
+        self.label = label
         self.timing = timing
         self.scheduler = scheduler
         self.attemptQueue = attemptQueue
@@ -76,6 +91,7 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
         stopSession = stop
         self.isPermanent = isPermanent
         backoff = timing.initialBackoff
+        loopBackoff = timing.initialBackoff
     }
 
     var state: State { locked { stateValue } }
@@ -90,7 +106,27 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
             current = session
             installedGeneration = generation
             stateValue = .running
+            delivered = false
         }
+        CaptureLog.recovery.notice("\(self.label, privacy: .public): initial session installed")
+    }
+
+    /// The installed session delivered its first audio. Clears the loop guard.
+    /// Callers report once per session, not per buffer.
+    func sessionDelivered() {
+        let cleared: (generation: Int, rebuilds: Int)? = locked {
+            guard stateValue == .running, !delivered else { return nil }
+            delivered = true
+            defer {
+                undeliveredRebuilds = 0
+                loopBackoff = timing.initialBackoff
+            }
+            return (installedGeneration, undeliveredRebuilds)
+        }
+        guard let cleared else { return }
+        CaptureLog.recovery.notice(
+            "\(self.label, privacy: .public): generation \(cleared.generation) delivering audio after \(cleared.rebuilds) undelivered rebuilds"
+        )
     }
 
     /// A default device or engine configuration changed. Debounced; resets
@@ -99,14 +135,14 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
     /// has been replaced.
     func routeChanged(generation reported: Int? = nil) {
         guard accepts(reported) else { return }
-        request(resetBackoff: true)
+        request(resetBackoff: true, cause: "route change")
     }
 
     /// The installed session stopped delivering or reported a recoverable fault.
     /// `nil` means whichever session is installed now (the delivery watchdog).
     func sessionInterrupted(generation reported: Int? = nil) {
         let accepted = locked { stateValue == .running && (reported ?? installedGeneration) == installedGeneration }
-        if accepted { request(resetBackoff: false) }
+        if accepted { request(resetBackoff: false, cause: "interruption") }
     }
 
     private func accepts(_ reported: Int?) -> Bool {
@@ -114,17 +150,38 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
         return locked { stateValue == .running && reported == installedGeneration }
     }
 
-    private func request(resetBackoff: Bool) {
-        let changed: Bool = locked {
-            guard stateValue == .running || stateValue == .reconnecting else { return false }
+    private func request(resetBackoff: Bool, cause: String) {
+        let scheduled: (wasRunning: Bool, delay: TimeInterval, undelivered: Int, generation: Int)? = locked {
+            guard stateValue == .running || stateValue == .reconnecting else { return nil }
             generation += 1
-            if resetBackoff { backoff = timing.initialBackoff }
             let wasRunning = stateValue == .running
+            // Only replacing an installed session counts; requests that arrive
+            // while an attempt is pending just move it.
+            if wasRunning { undeliveredRebuilds = delivered ? 0 : undeliveredRebuilds + 1 }
+            var delay = timing.debounce
+            if undeliveredRebuilds >= Self.loopThreshold {
+                delay = max(timing.debounce, loopBackoff)
+                if wasRunning { loopBackoff = min(loopBackoff * 2, timing.maximumBackoff) }
+            }
+            else if resetBackoff {
+                backoff = timing.initialBackoff
+            }
             stateValue = .reconnecting
-            scheduleLocked(after: timing.debounce, generation: generation)
-            return wasRunning
+            scheduleLocked(after: delay, generation: generation)
+            return (wasRunning, delay, undeliveredRebuilds, generation)
         }
-        if changed { onStateChange?(.reconnecting) }
+        guard let scheduled else { return }
+        if scheduled.undelivered >= Self.loopThreshold {
+            CaptureLog.recovery.error(
+                "\(self.label, privacy: .public): \(cause, privacy: .public) after \(scheduled.undelivered) rebuilds without audio; backing off \(scheduled.delay, format: .fixed(precision: 2)) s (generation \(scheduled.generation))"
+            )
+        }
+        else {
+            CaptureLog.recovery.notice(
+                "\(self.label, privacy: .public): \(cause, privacy: .public); rebuilding in \(scheduled.delay, format: .fixed(precision: 2)) s (generation \(scheduled.generation))"
+            )
+        }
+        if scheduled.wasRunning { onStateChange?(.reconnecting) }
     }
 
     private func scheduleLocked(after delay: TimeInterval, generation scheduled: Int) {
@@ -164,12 +221,16 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
                 stateValue = .running
                 backoff = timing.initialBackoff
                 lastError = nil
+                delivered = false
                 return true
             }
             guard installed else {
+                CaptureLog.recovery.notice(
+                    "\(self.label, privacy: .public): attempt \(scheduled) superseded; discarding it")
                 stopSession(session)
                 return
             }
+            CaptureLog.recovery.notice("\(self.label, privacy: .public): attempt \(scheduled) installed")
             onInstalled?(session)
             onStateChange?(.running)
         }
@@ -182,18 +243,25 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
                     return true
                 }
                 if first {
+                    CaptureLog.recovery.error(
+                        "\(self.label, privacy: .public): attempt \(scheduled) failed permanently: \(error.localizedDescription, privacy: .public)"
+                    )
                     onStateChange?(.failed)
                     onPermanentFailure?(error)
                 }
                 return
             }
-            locked {
-                guard scheduled == generation, stateValue == .reconnecting else { return }
+            let delay: TimeInterval? = locked {
+                guard scheduled == generation, stateValue == .reconnecting else { return nil }
                 lastError = error
                 let delay = backoff
                 backoff = min(backoff * 2, timing.maximumBackoff)
                 scheduleLocked(after: delay, generation: scheduled)
+                return delay
             }
+            CaptureLog.recovery.error(
+                "\(self.label, privacy: .public): attempt \(scheduled) failed: \(error.localizedDescription, privacy: .public); retry in \(delay ?? -1, format: .fixed(precision: 2)) s"
+            )
         }
     }
 
@@ -212,6 +280,7 @@ final class CaptureSourceRecovery<Session>: @unchecked Sendable {
         }
         if wasActive { onStateChange?(.stopped) }
         guard inFlight.wait(timeout: deadline) == .success else {
+            CaptureLog.recovery.error("\(self.label, privacy: .public): stop abandoned a blocked attempt")
             // The attempt owns the queue. Queue this teardown behind it so the
             // session is still released when the stuck call returns.
             if let session { attemptQueue.async { self.stopSession(session) } }

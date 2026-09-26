@@ -133,6 +133,10 @@ The meetings library lives in `~/.local/share/com.gdaymeetings.macos/`, and the 
 
 For independent UI checks, use `make start-macos-preview`. `GDAY_SWIFT_DATA_DIR` is only a library-location override for development: it does not enable UI Preview, disable recording/network access, or suppress all credential access (server authentication can still read Keychain). Tests use temporary directories and synthetic data.
 
+## Recording logs
+
+Choose **Help → Export Recording Logs** to save the last hour of recording diagnostics from the running app to `~/Library/Logs/Gday Meetings/` and show the file in Finder. The logs contain device names, formats, and recovery decisions, but no audio. To follow a recording live, or to read logs from an earlier app run, see [Recording diagnostics](docs/AUDIO_DESIGN.md#recording-diagnostics).
+
 ## Human Interface Guidelines
 
 **Liquid Glass is the default design direction for all future UI changes.** Follow [UI_DESIGN.md](docs/UI_DESIGN.md) for appearance, interaction, accessibility, compatibility, and validation requirements. Apple Music's capsule tabs and soft sidebar selection are visual references; use supported native APIs and preserve older-macOS fallbacks. Existing views have not all been migrated yet.
