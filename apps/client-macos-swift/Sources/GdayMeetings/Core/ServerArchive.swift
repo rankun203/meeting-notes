@@ -1,29 +1,70 @@
 import CryptoKit
 import Foundation
 
-private struct ArchiveAudio: Codable {
+struct ArchiveAudio: Codable {
     let filename: String
     let path: String
     let sha256: String
     let size: UInt64
     var url: URL?
 }
-private struct ArchiveCheckpoint: Codable {
+/// `server-archive.json` in the meeting folder. It is written when an archive is
+/// prepared, after each upload, and after the server verifies the archive.
+struct ArchiveCheckpoint: Codable {
     let origin: String
     let externalID: String
     let importKey: String
     let snapshot: Data
     var audio: [ArchiveAudio]
+    /// Set after server verification. Missing in checkpoints written before this
+    /// field existed; those show as incomplete until the next Archive to Server.
+    var verifiedAt: Date?
+}
+
+/// Archive state shown with a meeting. No checkpoint means not archived.
+enum MeetingArchiveStatus: Equatable {
+    case archived(host: String, date: Date?)
+    case incomplete(host: String)
+
+    init(_ checkpoint: ArchiveCheckpoint) {
+        let host = URL(string: checkpoint.origin)?.host() ?? checkpoint.origin
+        self = checkpoint.verifiedAt.map { .archived(host: host, date: $0) } ?? .incomplete(host: host)
+    }
 }
 
 extension MeetingStore {
+    func archiveCheckpointURL(for id: UUID) -> URL {
+        directory(for: id).appendingPathComponent("server-archive.json")
+    }
+    /// Reads the checkpoint again; an unreadable one counts as incomplete only
+    /// when present, so a damaged file still prompts a resume.
+    func refreshArchiveStatus(id: UUID) {
+        let url = archiveCheckpointURL(for: id)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            archiveStatuses[id] = nil
+            return
+        }
+        if let checkpoint = try? JSONDecoder().decode(ArchiveCheckpoint.self, from: Data(contentsOf: url)) {
+            archiveStatuses[id] = MeetingArchiveStatus(checkpoint)
+        }
+        else {
+            archiveStatuses[id] = .incomplete(host: "")
+        }
+    }
+    func refreshArchiveStatuses() {
+        archiveStatuses = [:]
+        for meeting in meetings { refreshArchiveStatus(id: meeting.id) }
+    }
     func archiveToServer(id: UUID) async {
         guard !isBusy, recordingID == nil, libraryWritable, let meeting = meetings.first(where: { $0.id == id }) else {
             return
         }
         isBusy = true
         errorMessage = nil
-        defer { isBusy = false }
+        defer {
+            isBusy = false
+            refreshArchiveStatus(id: id)
+        }
         do {
             let server = GdayServerService.shared
             guard let origin = server.origin,
@@ -36,7 +77,7 @@ extension MeetingStore {
             let folder = directory(for: id)
             try FileManager.default.createDirectory(
                 at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let checkpointURL = folder.appendingPathComponent("server-archive.json")
+            let checkpointURL = archiveCheckpointURL(for: id)
             var checkpoint: ArchiveCheckpoint
             if FileManager.default.fileExists(atPath: checkpointURL.path) {
                 checkpoint = try JSONDecoder().decode(ArchiveCheckpoint.self, from: Data(contentsOf: checkpointURL))
@@ -136,6 +177,8 @@ extension MeetingStore {
                 throw ServiceError(
                     "The server archive could not be verified. Local files have been preserved; retry to verify.")
             }
+            checkpoint.verifiedAt = Date()
+            try Self.saveArchive(checkpoint, to: checkpointURL)
         }
         catch {
             errorMessage =

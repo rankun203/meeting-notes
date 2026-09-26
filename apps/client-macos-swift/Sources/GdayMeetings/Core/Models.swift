@@ -96,9 +96,22 @@ struct AppSettings: Codable, Equatable {
     }
 
 }
+/// `library.json` format contract:
+/// - Increase `currentVersion` for every layout change, including data moved
+///   out of `library.json`, and add the step from the previous version to
+///   `migrations`.
+/// - This build opens versions up to `currentVersion`, migrating older ones
+///   after keeping a backup. It never opens or rewrites a newer version, and it
+///   always saves `currentVersion`, so a save cannot lower the version.
 struct MeetingLibrary: Codable {
+    static let currentVersion = 1
+    typealias Migration = (inout MeetingLibrary) throws -> Void
+    /// Upgrades a library from the key's version to the next one. Empty: no
+    /// released layout precedes version 1.
+    static let migrations: [Int: Migration] = [:]
+
     var contextualChats: [String: [ChatMessage]] = [:]
-    var version = 1
+    var version = MeetingLibrary.currentVersion
     var meetings: [Meeting] = []
     var people: [Person] = []
     var tags: [MeetingTag] = []
@@ -217,6 +230,7 @@ extension MeetingLibrary {
         self.init()
         let values = try decoder.container(keyedBy: CodingKeys.self)
         contextualChats = try values.decodeIfPresent([String: [ChatMessage]].self, forKey: .contextualChats) ?? [:]
+        // Files written before the key existed use the version 1 layout.
         version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
         meetings = try values.decodeIfPresent([Meeting].self, forKey: .meetings) ?? []
         people = try values.decodeIfPresent([Person].self, forKey: .people) ?? []

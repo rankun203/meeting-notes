@@ -10,7 +10,13 @@ final class MeetingStore: ObservableObject {
     @Published var tags: [MeetingTag] = []
     @Published var settings = AppSettings()
     @Published var providerLanguageStates: [ProviderLanguageIdentity: ProviderLanguageState] = [:]
-    var providerLanguageFetchedAt: [ProviderLanguageIdentity: Date] = [:]
+    /// Saved language and model lists. providerLanguageStates holds only loading and failure.
+    lazy var providerLanguageCache = ProviderMetadataCache<ProviderLanguageCatalog>(
+        directory: dataDirectory, fileName: "provider-languages.json",
+        canWrite: { [unowned self] in self.canSave })
+    lazy var providerModelCache = ProviderMetadataCache<[ProviderModel]>(
+        directory: dataDirectory, fileName: "provider-models.json",
+        canWrite: { [unowned self] in self.canSave })
     var providerLanguageTasks: [ProviderLanguageIdentity: Task<ProviderLanguageCatalog, Error>] = [:]
     var providerLanguageLoader: @MainActor (ServiceProvider) async throws -> ProviderLanguageCatalog = {
         try await ProviderLanguageService.catalog(for: $0)
@@ -39,6 +45,10 @@ final class MeetingStore: ObservableObject {
     private var canSave = true
     private var lastSavedLibrary = MeetingLibrary()
     var libraryWritable: Bool { canSave }
+    /// Set when library.json has a newer format version; the library is then read-only.
+    @Published private(set) var newerLibraryVersion: Int?
+    /// Derived from each meeting's server-archive.json; see ServerArchive.swift.
+    @Published var archiveStatuses: [UUID: MeetingArchiveStatus] = [:]
     private let usesKeychain: Bool
     private var savedProviderKeys: [String: String] = [:]
     private var unreadableProviderKeys = Set<String>()
@@ -57,11 +67,11 @@ final class MeetingStore: ObservableObject {
             try FileManager.default.createDirectory(
                 at: self.dataDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let libraryURL = self.dataDirectory.appendingPathComponent("library.json")
+            var migrated = false
             if FileManager.default.fileExists(atPath: libraryURL.path) {
-                let library = try JSONDecoder().decode(MeetingLibrary.self, from: Data(contentsOf: libraryURL))
-                guard library.version == 1 else {
-                    throw MeetingError.message("This library was created by a newer version of Gday Meetings.")
-                }
+                let loaded = try MeetingLibrary.load(from: libraryURL)
+                let library = loaded.library
+                migrated = loaded.migrated
                 meetings = library.meetings
                 people = library.people
                 tags = library.tags
@@ -73,6 +83,8 @@ final class MeetingStore: ObservableObject {
             }
             lastSavedLibrary = MeetingLibrary(
                 contextualChats: contextualChats, meetings: meetings, people: people, tags: tags)
+            if migrated { save() }
+            refreshArchiveStatuses()
             if usesKeychain {
                 for index in settings.serviceProviders.indices {
                     let account = ProviderCredentialPersistence.account(for: settings.serviceProviders[index])
@@ -88,6 +100,12 @@ final class MeetingStore: ObservableObject {
                 }
             }
         }
+        catch let error as NewerLibraryVersionError {
+            // Every write path checks canSave, so the newer library stays untouched.
+            canSave = false
+            newerLibraryVersion = error.version
+            errorMessage = error.localizedDescription
+        }
         catch {
             canSave = false
             errorMessage =
@@ -96,7 +114,10 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult private func save() -> Bool {
         guard canSave else {
-            errorMessage = "Library is read-only because loading failed. Restore library.json before saving changes."
+            errorMessage =
+                newerLibraryVersion != nil
+                ? NewerLibraryVersionError.message
+                : "Library is read-only because loading failed. Restore library.json before saving changes."
             return false
         }
         do {
@@ -125,7 +146,10 @@ final class MeetingStore: ObservableObject {
     }
     @discardableResult func saveSettings() -> Bool {
         guard canSave else {
-            errorMessage = "Restore the local library before changing settings."
+            errorMessage =
+                newerLibraryVersion != nil
+                ? NewerLibraryVersionError.message
+                : "Restore the local library before changing settings."
             return false
         }
         do {

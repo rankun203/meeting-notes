@@ -144,6 +144,8 @@ private struct ServiceProviderPanel: View {
     @ViewState private var showsConnectionInfo = false
     @ViewState private var uploadStatusIcon = "circle.dashed"
     @ViewState private var uploadStatusColor: Color = .secondary
+    @ViewState private var models: [ProviderModel] = []
+    @ViewState private var modelListState = ModelListState.idle
 
     init(
         provider: ServiceProvider, addProvider: @escaping (ServiceProviderKind) -> Void,
@@ -172,7 +174,10 @@ private struct ServiceProviderPanel: View {
                     SecureField("API Key", text: $draft.apiKey)
                         .help("Create an API key in the provider’s account settings.")
                     if draft.kind == .openAICompatible {
-                        TextField("Model", text: $draft.model)
+                        LabeledContent("Model") {
+                            ModelComboBox(text: $draft.model, models: models)
+                        }
+                        modelStatus
                     }
                 }
                 else {
@@ -210,10 +215,12 @@ private struct ServiceProviderPanel: View {
                     .accessibilityLabel("About Connection Checks")
                     .help("About connection checks")
                     .popover(isPresented: $showsConnectionInfo) {
-                        Text("Connection checks do not send recordings or meeting text.")
-                            .font(.callout)
-                            .padding()
-                            .frame(width: 280)
+                        Text(
+                            "Enabled providers are checked when this panel opens, when you save, and when you choose Check Connection. Checks send credentials, not recordings or meeting text."
+                        )
+                        .font(.callout)
+                        .padding()
+                        .frame(width: 280)
                     }
                 }
                 if let saveError {
@@ -249,24 +256,150 @@ private struct ServiceProviderPanel: View {
                     Text(disclosure(capability)).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if draft.kind.capabilities.contains(.transcription) {
+                languagesSection
+            }
             Section {
                 HStack {
                     Button("Save") { saveAndCheck() }
                         .keyboardShortcut("s", modifiers: .command)
                         .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || signingIn)
                     Button("Check Connection") { startCheck() }
-                        .disabled(hasChanges || isChecking || signingIn)
+                        .disabled(hasChanges || isChecking || signingIn || saved?.isEnabled != true)
                     Spacer()
                 }
             }
         }
         .formStyle(.grouped)
+        // Checks send only credentials and start no billable work, so they may run
+        // when the panel opens. startCheck never contacts a disabled provider.
         .task { startCheck() }
         .background(ProviderPanelWindowObserver { if !signingIn { startCheck() } })
+        .task(id: modelListKey) { await refreshModels() }
         .onDisappear {
             checkID = UUID()
             checkTask?.cancel()
             signInTask?.cancel()
+        }
+    }
+
+    private enum ModelListState: Equatable {
+        case idle, loading, loaded
+        case failed(String)
+    }
+
+    /// Changes to these fields restart the model list task.
+    private var modelListKey: String? {
+        draft.kind == .openAICompatible
+            ? [draft.endpoint, draft.apiKey, String(draft.isEnabled)].joined(separator: "\n") : nil
+    }
+
+    @ViewBuilder private var modelStatus: some View {
+        let model = draft.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch modelListState {
+        case .loading:
+            Text("Loading Models…").font(.caption).foregroundStyle(.secondary)
+        case .failed(let message):
+            Label(
+                "Couldn’t load the model list. \(message) Type a model name instead.",
+                systemImage: "exclamationmark.circle"
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        case .idle, .loaded:
+            if !model.isEmpty, !models.isEmpty, !models.contains(where: { $0.id == model }) {
+                Label("\(model) (not listed)", systemImage: "questionmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .help("This provider’s model list does not include this model. It is used as entered.")
+            }
+            else if models.isEmpty,
+                draft.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                Text("Enter the endpoint URL and API key to choose from the provider’s models.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Shows the saved list at once, then refreshes it when policy allows. Typing
+    /// restarts this task, which cancels the pending request and debounce.
+    private func refreshModels() async {
+        guard draft.kind == .openAICompatible else { return }
+        let target = draft
+        let fingerprint = ProviderModelList.fingerprint(target)
+        if let cached = store.providerModelCache.entry(providerID: target.id, fingerprint: fingerprint) {
+            models = cached.value
+            modelListState = .loaded
+        }
+        else {
+            models = []
+            modelListState = .idle
+        }
+        switch ProviderModelListPolicy.plan(draft: target, saved: saved) {
+        case .none: return
+        case .immediate: break
+        case .debounced:
+            do { try await Task.sleep(for: ProviderModelListPolicy.debounce) }
+            catch { return }
+        }
+        modelListState = .loading
+        do {
+            let fetched = try await ProviderModelList.fetch(target)
+            guard !Task.isCancelled else { return }
+            models = fetched
+            modelListState = .loaded
+            store.providerModelCache.store(
+                .init(providerID: target.id, fingerprint: fingerprint, value: fetched, fetchedAt: Date()),
+                keeping: Set(store.settings.serviceProviders.map(\.id)))
+        }
+        catch {
+            guard !Task.isCancelled else { return }
+            modelListState = .failed(error.localizedDescription)
+        }
+    }
+
+    private var languageState: ProviderLanguageState { store.languageState(for: draft.id) }
+
+    /// Lists load only from this button or the language picker. Saving never loads
+    /// them, because RunPod discovery starts a job that can incur charges.
+    private var languagesSection: some View {
+        Section("Transcription Languages") {
+            HStack(alignment: .firstTextBaseline) {
+                Label(languageStatus.text, systemImage: languageStatus.icon)
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                Spacer()
+                Button("Load Languages") {
+                    Task { await store.refreshProviderLanguages(providerID: draft.id) }
+                }
+                .disabled(hasChanges || saved?.supports(.transcription) != true || languageState == .loading)
+            }
+            if let note = ProviderLanguageLoadNote.text(for: draft) {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var languageStatus: (text: String, icon: String) {
+        if hasChanges { return ("Save to load languages.", "pencil.circle") }
+        guard let saved, saved.isEnabled else {
+            return ("Turn on Enable This Provider to load languages.", "circle.slash")
+        }
+        guard saved.supports(.transcription) else {
+            return ("Turn on Transcription to load languages.", "circle.slash")
+        }
+        switch languageState {
+        case .idle: return ("Not Loaded", "circle.dashed")
+        case .loading: return ("Loading Languages…", "clock")
+        case .failed(let message): return (message, "exclamationmark.circle.fill")
+        case .loaded(let catalog, let fetchedAt):
+            let count = catalog.languages.count
+            return (
+                "\(count) \(count == 1 ? "language" : "languages") · Updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened))",
+                "checkmark.circle"
+            )
         }
     }
 
@@ -328,6 +461,14 @@ private struct ServiceProviderPanel: View {
         let token = UUID()
         checkID = token
         guard let provider = saved else { return }
+        guard provider.isEnabled else {
+            // Disabled providers are never contacted.
+            isChecking = false
+            status = "Not checked. This provider is disabled."
+            statusIcon = "circle.slash"
+            statusColor = .secondary
+            return
+        }
         status = "Checking Connection…"
         if provider.kind == .runpod {
             uploadStatus = "Checking Upload Provider…"

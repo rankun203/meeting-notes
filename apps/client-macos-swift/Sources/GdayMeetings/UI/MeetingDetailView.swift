@@ -67,6 +67,7 @@ struct MeetingDetailView: View {
                     .fixedSize()
                 }
             }.font(.callout).foregroundStyle(.secondary)
+            MeetingArchiveStatusView(meetingID: meetingID).font(.callout).foregroundStyle(.secondary)
             associationsMenu.font(.callout).foregroundStyle(.secondary)
             if !meeting.personIDs.isEmpty || !meeting.tagIDs.isEmpty {
                 Text(associationSummary(meeting)).font(.callout).foregroundStyle(.secondary)

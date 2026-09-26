@@ -67,11 +67,11 @@ This is an example response, not a fixed list. Version 1 requires a nonempty arr
 
 The website obtains its list from its configured worker. It returns `transcriptionLanguages: null` with an explanatory error if no worker is configured or discovery fails; other platform capabilities remain available. It must not substitute a built-in list.
 
-RunPod metadata can queue while a worker starts. Poll the returned metadata job ID instead of submitting another job. Discovery is audio-free, but RunPod can still charge for worker execution. The website bounds discovery to 60 seconds and 30 polling attempts, caches success for five minutes and failure for five seconds, and shares an in-flight lookup. Cache identity includes endpoint, authentication, and worker kind. Configuration changes bypass the previous cache. A client may cache a successful catalog for five minutes with the same identity rules; expired data must not silently establish current support.
+RunPod metadata can queue while a worker starts. Poll the returned metadata job ID instead of submitting another job. Discovery is audio-free, but RunPod can still charge for worker execution. The desktop client therefore never discovers languages automatically: it saves each provider's list with its fetch time and asks again only when the person chooses **Load Languages** (in a language picker's information popover or the provider panel), or when **Transcribe** finds no saved list. Showing a picker only reads the saved list. The website bounds discovery to 60 seconds and 30 polling attempts, caches success for five minutes and failure for five seconds, and shares an in-flight lookup. Cache identity includes endpoint, authentication, and worker kind. Configuration changes bypass the previous cache. The desktop client keys its saved list by provider, kind, endpoint, and model. It excludes credentials, because a new key reaches the same worker, and it keeps the list until **Load Languages** replaces it. A saved list can be outdated: submission uses it to reject unsupported languages, and the error suggests loading languages again.
 
 Distinguish these states:
 
-- **Unknown:** the provider has not returned a valid list. Do not invent choices.
+- **Unknown:** the provider has not returned a valid list. Do not invent choices. Offer **Load Languages**, with the RunPod charge note when it applies.
 - **Unavailable:** the request failed or the provider lacks metadata support. Keep the saved meeting language, explain the problem, and offer another check.
 - **Unsupported:** a valid current list excludes the saved code. Preserve the meeting setting, but require a supported choice before submitting a new transcription.
 

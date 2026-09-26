@@ -7,7 +7,7 @@ scope: swift-app-notes
 
 # Markdown notes with images and timeline links
 
-This design covers the Notes tab in the Swift macOS client. The direction and the decisions in [Decisions](#decisions) are accepted. Nothing described here is implemented yet. [Open follow-ups](#open-follow-ups) lists the remaining items.
+This design covers the Notes tab in the Swift macOS client. The direction and the decisions in [Decisions](#decisions) are accepted. Only library format versioning (see [Migration](#migration)) is implemented. [Open follow-ups](#open-follow-ups) lists the remaining items.
 
 ## Goals
 
@@ -19,7 +19,7 @@ This design covers the Notes tab in the Swift macOS client. The direction and th
 ## Current state
 
 - `Meeting.notes` is a plain `String` in `library.json` (`Core/Models.swift`). Every keystroke calls `MeetingStore.updateMeeting`, which rewrites the whole library file.
-- `library.json` has a `version` field, currently 1. `MeetingStore` refuses to open a library with any other version and reports that a newer version of Gday Meetings created it.
+- `library.json` has a `version` field, currently 1 (`MeetingLibrary.currentVersion`). `MeetingLibrary.load` (`Core/LibraryFormat.swift`) opens that version and older ones, and backs up an older library before migrating it. A newer version leaves the library read-only and unchanged, with the message “This library was saved by a newer version of Gday Meetings.”
 - The Notes tab is a SwiftUI `TextEditor` bound to that string (`UI/MeetingDetailView.swift`, `editor(_:binding:)`).
 - Transcript times use `playback.play(meeting:files:at:)`. That method seeks if the meeting is already loaded and loads it otherwise. Notes should use the same call.
 - The meeting folder (`MeetingStore.directory(for:)`) holds audio and `server-archive.json`. Meetings created with **New Meeting Notes** have no folder until audio is added.
@@ -37,7 +37,7 @@ This design covers the Notes tab in the Swift macOS client. The direction and th
 - **Play From Line** uses Command-Return.
 - Time markers use the form `<!-- gday:t=12:34.5 -->`.
 - Pasted and dropped images keep their original file in `assets/`. Resizing writes a smaller display copy next to it.
-- A one-way notes migration is acceptable before version 1.0.0. Version 1.0.0 needs library format versioning (see [Migration](#migration)).
+- A one-way notes migration is acceptable before version 1.0.0 if it keeps a backup. Library format versioning is in place (see [Migration](#migration)).
 - Archiving notes that contain images is not blocked. The text is archived with a warning until the server phase adds image support.
 
 ## Recommendation
@@ -87,12 +87,13 @@ Store notes in the meeting folder:
 
 ### Migration
 
-- At library load, for each meeting whose `notes` is non-empty and whose folder lacks `notes.md`, write `notes.md` and then clear the field. Keep `library.json` at version 1; a missing `notes` key already decodes as empty.
-- **Before 1.0.0:** this one-way migration is acceptable because there is a single user. An older build shows empty notes for migrated meetings.
-- **By 1.0.0**, when the app is distributed to other people:
+- At library load, for each meeting whose `notes` is non-empty and whose folder lacks `notes.md`, write `notes.md` and then clear the field. This is a layout change: increase `MeetingLibrary.currentVersion` to 2 and add the step to `MeetingLibrary.migrations`.
+- **Library format policy** (implemented in `Core/LibraryFormat.swift`; see the contract comment on `MeetingLibrary`):
   - Any change to the library layout, including where notes are stored, increases the `library.json` version.
-  - A build that finds a newer version tells the person to update the app and does not open or rewrite the library. The current check (version must equal 1) already refuses; it needs a clear message and must stay in place for every later version.
-  - A migration either keeps a backup of the files it changes, or leaves the old data readable by the previous release.
+  - A build opens its own version and older ones. Before migrating an older library, it copies `library.json` to `library-v<N>-backup.json`. A step that changes files outside `library.json`, such as writing `notes.md`, must also keep those files recoverable or leave the old data readable.
+  - A build that finds a newer version shows “This library was saved by a newer version of Gday Meetings.” and asks the person to install the latest version. The library stays read-only: no save path writes `library.json` or `settings.json`.
+  - A save always writes the current version, so it cannot lower the version.
+- **Before 1.0.0:** one-way migrations are acceptable because there is a single user. An older build then refuses the migrated library instead of showing empty notes.
 
 ### Time markers
 
@@ -272,6 +273,5 @@ Each phase ends with `make format-macos`, `make lint-macos`, `make test-macos`, 
 
 ## Open follow-ups
 
-1. **Library format versioning before 1.0.0:** replace the version-equals-1 check with a newer-version check and a clear message, bump the version for each layout change, and add backups or a readable fallback to migrations. See [Migration](#migration).
-2. **JSON export and images:** decide in Phase 3 (export and server archive of images) whether JSON export embeds images or refers to an exported assets folder.
-3. **Renderer check:** confirm in Phase 1 (notes with times) and Phase 2 (images in notes) that GitHub, Obsidian, and VS Code preview hide the markers and render the resized image form.
+1. **JSON export and images:** decide in Phase 3 (export and server archive of images) whether JSON export embeds images or refers to an exported assets folder.
+2. **Renderer check:** confirm in Phase 1 (notes with times) and Phase 2 (images in notes) that GitHub, Obsidian, and VS Code preview hide the markers and render the resized image form.

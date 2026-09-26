@@ -35,7 +35,7 @@ Empty responses, missing completion content, and malformed result objects are fa
 
 ## OpenAI-compatible adapter
 
-The configured endpoint is an API base URL. The adapter checks `GET /models` with the configured Bearer API key and submits messages to `POST /chat/completions`. Requests specify the configured model and include only the chosen context and instructions. The adapter extracts the assistant's text from the completion response.
+The configured endpoint is an API base URL. The adapter checks `GET /models` with the configured Bearer API key and submits messages to `POST /chat/completions`. The provider panel reads `data[].id`, and `name` when present, from the same `GET /models` response to fill the **Model** menu. It lists models when the panel opens for an enabled provider, and about 0.8 seconds after the endpoint URL or API key is edited, provided both are present and the URL is valid. It never lists them automatically for a disabled provider that is not being edited. The list is saved per provider and endpoint, shown immediately on the next open, and refreshed in the background. The **Model** field accepts any typed name, because some compatible endpoints omit or restrict `/models`; a saved model missing from the list stays selected and is marked “(not listed)”. Requests specify the configured model and include only the chosen context and instructions. The adapter extracts the assistant's text from the completion response.
 
 Compatibility with this API supports this adapter's language-model operations. It does not imply support for transcription, diarization, meeting indexes, or audio storage. A model-list response confirms access to that route; it does not prove the configured model will accept a completion request.
 

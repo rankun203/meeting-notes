@@ -45,7 +45,7 @@ Future Gday Cloud point quotes are a separate, unimplemented billing flow. They 
 
 ## Connection checks
 
-Every provider implements the same connection-check operation. Check after saving settings and whenever its detail panel opens. Use the saved configuration; discard late results if that configuration or the selected provider changes. A check must not submit inference, upload recordings, or send meeting text.
+Every provider implements the same connection-check operation. Check an enabled provider after saving settings and whenever its detail panel opens. A check must be free metadata that sends only credentials. Never check a disabled provider, even on request. Use the saved configuration; discard late results if that configuration or the selected provider changes. A check must not submit inference, upload recordings, or send meeting text.
 
 Show a status icon with text. Do not communicate status through color alone.
 
@@ -57,7 +57,9 @@ Show a status icon with text. Do not communicate status through color alone.
 | Setup Required | A required address, credential, or setting is missing. |
 | Connection Failed | The request failed or returned an unexpected response. |
 
-Errors identify the field or operation and a recovery action. Distinguish rejected credentials, invalid addresses, unavailable services, and incompatible responses. Reopening the panel checks again; a previous success is not evidence of a current connection. UI Preview uses the same provider checks and can run deliberately started service jobs with test credentials. Its temporary library and in-memory credentials avoid Keychain prompts; opening or saving settings must not upload content.
+Errors identify the field or operation and a recovery action. Distinguish rejected credentials, invalid addresses, unavailable services, and incompatible responses. Reopening an enabled provider's panel checks again; a previous success is not evidence of a current connection.
+
+Requests that are free, send only credentials, and start no work may run automatically for enabled providers: connection checks, model lists, and website language lists. Anything that can be billed or starts provider work, such as a RunPod job, requires an explicit action and a nearby charge note. Disabled providers are never contacted automatically; the only exception is listing models while the person edits that provider's endpoint or key. UI Preview uses the same provider checks and can run deliberately started service jobs with test credentials. Its temporary library and in-memory credentials avoid Keychain prompts; opening or saving settings must not upload content.
 
 ## Shared contract rules
 

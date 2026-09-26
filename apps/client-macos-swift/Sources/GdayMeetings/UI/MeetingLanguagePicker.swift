@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// Language choices come from the selected transcription provider. Retaining the
-/// stored value keeps offline recording independent of service availability.
+/// Language choices come from the selected transcription provider's saved list.
+/// Showing the picker never contacts the provider: RunPod discovery starts a
+/// billable job, so lists load only when the person chooses Load Languages.
+/// Retaining the stored value keeps offline recording independent of service availability.
 struct MeetingLanguagePicker: View {
     @EnvironmentObject private var store: MeetingStore
     var title = "Language"
@@ -11,9 +13,12 @@ struct MeetingLanguagePicker: View {
     @ViewState private var showInformation = false
 
     private var selectedProviderID: UUID? { providerID ?? store.settings.transcriptionProviderID }
+    private var provider: ServiceProvider? {
+        store.settings.serviceProviders.first { $0.id == selectedProviderID }
+    }
     private var state: ProviderLanguageState { store.languageState(for: selectedProviderID) }
     private var languages: [ProviderLanguage] {
-        if case .loaded(let catalog) = state { return catalog.languages }
+        if case .loaded(let catalog, _) = state { return catalog.languages }
         return []
     }
     private var selectedName: String {
@@ -56,9 +61,6 @@ struct MeetingLanguagePicker: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task(id: store.languageIdentity(for: selectedProviderID)) {
-            await store.loadProviderLanguages(providerID: selectedProviderID)
-        }
     }
 
     private var informationSymbol: String {
@@ -82,31 +84,61 @@ struct MeetingLanguagePicker: View {
     }
 
     @ViewBuilder private var status: some View {
-        if selectedProviderID == nil {
+        if let provider {
+            switch state {
+            case .idle:
+                if provider.supports(.transcription) {
+                    Text("Languages for \(provider.name) aren’t loaded.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    loadButton(provider)
+                }
+                else {
+                    Text(
+                        provider.isEnabled
+                            ? "Turn on Transcription for \(provider.name) in Settings → Service Providers to load its languages."
+                            : "\(provider.name) is disabled. Turn it on in Settings → Service Providers to load its languages."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            case .loading:
+                Text("Loading Languages…").font(.caption).foregroundStyle(.secondary)
+            case .failed(let message):
+                Label("Languages Unavailable", systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(message).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                loadButton(provider)
+            case .loaded(_, let fetchedAt):
+                Text("Languages updated \(fetchedAt.formatted(date: .abbreviated, time: .shortened)).")
+                    .font(.caption).foregroundStyle(.secondary)
+                loadButton(provider)
+            }
+        }
+        else {
             Text("Select a transcription provider in Settings to change the language.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        else {
-            switch state {
-            case .idle, .loading:
-                Text("Loading Languages…").font(.caption).foregroundStyle(.secondary)
-            case .failed(let message):
-                HStack(spacing: 6) {
-                    Label("Languages Unavailable", systemImage: "exclamationmark.circle")
-                        .foregroundStyle(.secondary).help(message)
-                        .accessibilityHint(message)
-                    Button("Retry") {
-                        Task {
-                            await store.loadProviderLanguages(providerID: selectedProviderID, force: true)
-                        }
-                    }
-                    .buttonStyle(.link)
-                    .accessibilityLabel("Retry Loading Languages")
-                }.font(.caption)
-            case .loaded:
-                EmptyView()
-            }
+    }
+
+    /// The only place a picker contacts a provider, and only when chosen.
+    @ViewBuilder private func loadButton(_ provider: ServiceProvider) -> some View {
+        Button("Load Languages") {
+            Task { await store.refreshProviderLanguages(providerID: provider.id) }
         }
+        .font(.caption)
+        .disabled(!provider.supports(.transcription))
+        if let note = ProviderLanguageLoadNote.text(for: provider) {
+            Text(note).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Discloses cost where Load Languages appears, so the action is never a surprise.
+enum ProviderLanguageLoadNote {
+    static func text(for provider: ServiceProvider) -> String? {
+        provider.kind == .runpod ? "Loading languages starts a short RunPod job. RunPod charges apply." : nil
     }
 }

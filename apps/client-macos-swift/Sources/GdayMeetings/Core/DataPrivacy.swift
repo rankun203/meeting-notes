@@ -51,16 +51,26 @@ enum PrivacyDataType: String, CaseIterable, Identifiable {
 
 /// What sends data. Cases are in sentence order: automatic first, then actions.
 enum PrivacyTrigger: Int, Comparable {
-    case afterRecording, transcribe, summarizeOrChat, archive, search, authenticate
+    case afterRecording, transcribe, summarizeOrChat, archive, search
+    /// Opening an enabled provider's panel checks it and lists its models; saving and
+    /// Check Connection happen in that panel.
+    case openProvider
+    /// A disabled provider is contacted only to list models while its endpoint or key is edited.
+    case editProvider
+    /// Load Languages. For RunPod this starts a billable job, so it is never automatic.
+    case loadLanguages
     static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
-    /// Completes "when you …". `afterRecording` and `authenticate` are not user actions.
+    /// Completes "when you …". `afterRecording` is not a user action.
     fileprivate var action: String? {
         switch self {
         case .transcribe: "transcribe a meeting"
         case .summarizeOrChat: "generate a summary or send a chat message"
         case .archive: "choose Archive to Server"
         case .search: "search the Server Library"
-        case .afterRecording, .authenticate: nil
+        case .openProvider: "open the provider in Settings"
+        case .editProvider: "edit the provider in Settings"
+        case .loadLanguages: "choose Load Languages"
+        case .afterRecording: nil
         }
     }
 }
@@ -79,10 +89,13 @@ struct PrivacyDestination: Identifiable, Equatable {
     let provider: String
     let host: String
     let triggers: [PrivacyTrigger]
-    var text: String { "Sent to \(provider) (\(host)) \(Self.phrase(triggers))" }
+    /// Credentials accompany requests rather than being the content sent.
+    var authenticates = false
+    var text: String {
+        "Sent to \(provider) (\(host)) \(authenticates ? "to authenticate " : "")\(Self.phrase(triggers))"
+    }
 
     static func phrase(_ triggers: [PrivacyTrigger]) -> String {
-        if triggers == [.authenticate] { return "to authenticate requests" }
         var parts: [String] = []
         if triggers.contains(.afterRecording) { parts.append("after each recording") }
         let actions = triggers.compactMap(\.action)
@@ -90,7 +103,10 @@ struct PrivacyDestination: Identifiable, Equatable {
         return parts.joined(separator: " and ")
     }
     private static func join(_ items: [String]) -> String {
-        guard items.count > 2 else { return items.joined(separator: " or ") }
+        // A comma keeps an action that contains "or" readable as one item.
+        guard items.count > 2 || items.dropLast().contains(where: { $0.contains(" or ") }) else {
+            return items.joined(separator: " or ")
+        }
         return items.dropLast().joined(separator: ", ") + ", or " + items.last!
     }
 }
@@ -128,7 +144,8 @@ struct PrivacyContext {
 /// Derives Settings → Data Privacy from provider settings. Each rule mirrors the
 /// guard that allows the matching request: MeetingIntelligence (summaries, chat),
 /// ProviderTranscription (transcription), ServerArchive (archive), ServerLibraryView
-/// (search), and ServiceProvidersView/ProviderLanguages (authenticated checks).
+/// (search), ServiceProvidersView and ProviderModelListPolicy (checks and model
+/// lists), and ProviderLanguageSelection (Load Languages).
 enum DataPrivacy {
     static func routes(_ context: PrivacyContext) -> [PrivacyRoute] {
         let settings = context.settings
@@ -195,15 +212,27 @@ enum DataPrivacy {
             }
         }
 
-        // Connection checks run when a provider panel opens, even for disabled providers.
-        let authenticated = providers.filter { provider in
-            guard (try? ProviderEndpoint.base(provider.endpoint)) != nil else { return false }
-            return provider.kind == .gdayWebsite ? signedIn(provider) : hasText(provider.apiKey)
+        // Credentials go with every request above, and with free checks and model lists
+        // when an enabled provider's panel opens. Disabled providers are contacted only
+        // to list models while their endpoint or key is edited.
+        var credentialRoutes: [PrivacyRoute] = []
+        for provider in providers {
+            guard (try? ProviderEndpoint.base(provider.endpoint)) != nil,
+                provider.kind == .gdayWebsite ? signedIn(provider) : hasText(provider.apiKey)
+            else { continue }
+            var triggers = Set(routes.filter { $0.receivers.contains { $0.id == provider.id } }.map(\.trigger))
+            if provider.isEnabled {
+                triggers.insert(.openProvider)
+                if provider.supports(.transcription) { triggers.insert(.loadLanguages) }
+            }
+            else if provider.kind == .openAICompatible {
+                triggers.insert(.editProvider)
+            }
+            credentialRoutes += triggers.sorted().map {
+                .init(data: [.credentials], trigger: $0, receivers: [provider])
+            }
         }
-        if !authenticated.isEmpty {
-            routes.append(.init(data: [.credentials], trigger: .authenticate, receivers: authenticated))
-        }
-        return routes
+        return routes + credentialRoutes
     }
 
     static func rows(_ context: PrivacyContext) -> [PrivacyRow] {
@@ -224,7 +253,7 @@ enum DataPrivacy {
                 guard let entry = receivers[id] else { return nil }
                 return PrivacyDestination(
                     id: id, provider: entry.provider.name, host: host(entry.provider.endpoint),
-                    triggers: entry.triggers.sorted())
+                    triggers: entry.triggers.sorted(), authenticates: type == .credentials)
             }
             return PrivacyRow(type: type, destinations: destinations, note: note(type, destinations, context))
         }

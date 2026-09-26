@@ -42,7 +42,19 @@ struct LibraryView: View {
         }.sorted { $0.createdAt > $1.createdAt }
     }
 
-    private var emptyMeetings: some View {
+    @ViewBuilder private var emptyMeetings: some View {
+        if store.newerLibraryVersion != nil {
+            // The library is read-only; recording and import would not be saved.
+            ContentUnavailableView(
+                NewerLibraryVersionError.title, systemImage: "exclamationmark.triangle",
+                description: Text(NewerLibraryVersionError.recovery))
+        }
+        else {
+            meetingsPlaceholder
+        }
+    }
+
+    private var meetingsPlaceholder: some View {
         let title = search.isEmpty ? "No Meetings" : "No Results"
         let description = search.isEmpty ? "Record a meeting or import audio to get started." : "Try another search."
         return ContentUnavailableView {
@@ -127,6 +139,9 @@ struct LibraryView: View {
                                                 if meeting.duration > 0 {
                                                     Text("·")
                                                     Text(playbackTime(meeting.duration)).monospacedDigit()
+                                                }
+                                                if let archive = store.archiveStatuses[meeting.id] {
+                                                    MeetingArchiveListIcon(status: archive)
                                                 }
                                             }.font(.caption).foregroundStyle(.secondary)
                                             if !meeting.summary.isEmpty {
@@ -243,15 +258,16 @@ struct LibraryView: View {
                     }
                     .labelStyle(.titleAndIcon).tint(.red)
                     .help(recordingActive ? "Show the current recording" : "Choose sources and start a recording")
+                    // A read-only library can't save a recording, import, or new notes.
                     .disabled(
-                        store.isStartingRecording || store.isFinalizingRecording
+                        !store.libraryWritable || store.isStartingRecording || store.isFinalizingRecording
                             || (store.isBusy && store.recordingID == nil))
                     Button {
                         MeetingPanels.importAudio(store)
                     } label: {
                         Label("Import", systemImage: "square.and.arrow.down")
                     }
-                    .help("Import an audio or video file").disabled(store.isBusy)
+                    .help("Import an audio or video file").disabled(store.isBusy || !store.libraryWritable)
                     Menu {
                         Button("New Meeting Notes", systemImage: "square.and.pencil") {
                             showMeeting(store.createMeeting(title: "Untitled Meeting"))
@@ -262,7 +278,7 @@ struct LibraryView: View {
                     } label: {
                         Label("Library Actions", systemImage: "ellipsis")
                     }
-                    .help("New notes and library imports").disabled(store.isBusy)
+                    .help("New notes and library imports").disabled(store.isBusy || !store.libraryWritable)
                     if destination == .meetings {
                         HStack(spacing: 4) {
                             Button {

@@ -23,6 +23,7 @@ enum UIPreview {
                     try writeFixture(to: folder.appendingPathComponent(name), source: index)
                 }
                 try store.insertImportedMeeting(meeting)
+                try writeArchiveFixture(store: store, id: meeting.id, verified: title.contains("single"))
             }
             _ = store.addPerson(name: "Preview Person")
             _ = store.addTag(name: "Preview")
@@ -106,6 +107,18 @@ enum UIPreview {
         return settings
     }
 
+    /// Shows the archived and incomplete states. The `.invalid` origin never
+    /// resolves, and Preview cannot sign in, so Archive to Server stays disabled.
+    @MainActor static func writeArchiveFixture(store: MeetingStore, id: UUID, verified: Bool) throws {
+        let checkpoint = ArchiveCheckpoint(
+            origin: "https://meetings.example.invalid", externalID: id.uuidString, importKey: "preview",
+            snapshot: Data("{}".utf8),
+            audio: [ArchiveAudio(filename: "microphone.wav", path: "microphone.wav", sha256: "", size: 0)],
+            verifiedAt: verified ? Date() : nil)
+        try JSONEncoder().encode(checkpoint).write(to: store.archiveCheckpointURL(for: id), options: .atomic)
+        store.refreshArchiveStatus(id: id)
+    }
+
     static func writeFixture(to url: URL, source: Int) throws {
         let rate = 8000.0
         let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
@@ -134,10 +147,13 @@ struct PreviewContainer<Content: View>: View {
     {
         let phase = (time + offset).truncatingRemainder(dividingBy: 7)
         let value = phase < 4 ? abs(sin(time * 5 + offset)) * 0.65 + 0.12 : 0
-        // Simulate a 4-second device reconnect every 20 seconds to show that state.
-        let reconnecting = reconnects && time.truncatingRemainder(dividingBy: 20) >= 16
+        // Simulate a 4-second device switch every 20 seconds to show that state:
+        // 2 seconds without a replacement device, then 2 seconds switching to one.
+        let cycle = time.truncatingRemainder(dividingBy: 20)
+        let reconnecting = reconnects && cycle >= 16
         return RecordingSourceLevel(
-            enabled: true, hasSamples: true, reconnecting: reconnecting, rmsDB: value * 60 - 60)
+            enabled: true, hasSamples: true, reconnecting: reconnecting,
+            switchingTo: reconnecting && cycle >= 18 ? "Preview Headphones" : nil, rmsDB: value * 60 - 60)
     }
     private static func recordingHistory(at time: Double) -> RecordingActivityHistory {
         var history = RecordingActivityHistory()

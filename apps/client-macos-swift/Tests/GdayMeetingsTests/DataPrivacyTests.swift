@@ -55,8 +55,8 @@ struct DataPrivacyTests {
         }
         #expect(
             texts(rows, .credentials) == [
-                "Sent to RunPod (api.runpod.ai) to authenticate requests",
-                "Sent to Filedrop (files.example.com) to authenticate requests",
+                "Sent to RunPod (api.runpod.ai) to authenticate when you transcribe a meeting, open the provider in Settings, or choose Load Languages",
+                "Sent to Filedrop (files.example.com) to authenticate when you transcribe a meeting or open the provider in Settings",
             ])
 
         settings.autoTranscribe = true
@@ -109,7 +109,9 @@ struct DataPrivacyTests {
                 "Sent to Office Website (meet.example.com) when you search the Server Library"
             ])
         #expect(
-            texts(rows, .credentials) == ["Sent to Office Website (meet.example.com) to authenticate requests"])
+            texts(rows, .credentials) == [
+                "Sent to Office Website (meet.example.com) to authenticate when you transcribe a meeting, choose Archive to Server, search the Server Library, open the provider in Settings, or choose Load Languages"
+            ])
         #expect(!row(rows, .settings).leavesMac)
     }
 
@@ -157,6 +159,30 @@ struct DataPrivacyTests {
         let disabled = DataPrivacy.rows(
             PrivacyContext(settings: settings, signedInWebsiteOrigin: "https://meet.example.com"))
         #expect(!row(disabled, .notes).leavesMac)
+    }
+
+    @Test func disabledProvidersSendCredentialsOnlyWhileEditingModels() {
+        var (runpod, filedrop) = runpodAndFiledrop()
+        runpod.isEnabled = false
+        filedrop.isEnabled = false
+        var llm = ServiceProvider(kind: .openAICompatible)
+        llm.name = "OpenRouter"
+        llm.endpoint = "https://openrouter.ai/api/v1"
+        llm.apiKey = "synthetic"
+        llm.model = "openai/gpt-4o"
+        llm.enabledCapabilities = [.summarization]
+        var settings = AppSettings()
+        settings.serviceProviders = [runpod, filedrop, llm]
+        settings.summaryProviderID = llm.id
+        #expect(
+            texts(DataPrivacy.rows(PrivacyContext(settings: settings)), .credentials) == [
+                "Sent to OpenRouter (openrouter.ai) to authenticate when you generate a summary or send a chat message, or open the provider in Settings"
+            ])
+        settings.serviceProviders[2].isEnabled = false
+        #expect(
+            texts(DataPrivacy.rows(PrivacyContext(settings: settings)), .credentials) == [
+                "Sent to OpenRouter (openrouter.ai) to authenticate when you edit the provider in Settings"
+            ])
     }
 
     @Test func pendingAttemptsExcludeSubmittedJobs() {

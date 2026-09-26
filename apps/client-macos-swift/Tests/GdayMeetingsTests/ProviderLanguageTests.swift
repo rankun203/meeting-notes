@@ -26,33 +26,83 @@ import Testing
             let code = selected.id == first.id ? "ja" : "zh"
             return ProviderLanguageCatalog(languages: [.init(code: code, name: code)], source: selected.name)
         }
-        await store.loadProviderLanguages(providerID: first.id)
-        await store.loadProviderLanguages(providerID: second.id)
-        guard case .loaded(let firstList) = store.languageState(for: first.id),
-            case .loaded(let secondList) = store.languageState(for: second.id)
+        await store.refreshProviderLanguages(providerID: first.id)
+        await store.refreshProviderLanguages(providerID: second.id)
+        guard case .loaded(let firstList, _) = store.languageState(for: first.id),
+            case .loaded(let secondList, _) = store.languageState(for: second.id)
         else {
             Issue.record("Expected provider language lists")
             return
         }
         #expect(firstList.languages.map(\.code) == ["ja"])
         #expect(secondList.languages.map(\.code) == ["zh"])
-        await store.loadProviderLanguages(providerID: first.id)
-        #expect(calls == 2)
-        for change in ["endpoint", "model", "key"] {
-            switch change {
-            case "endpoint": first.endpoint += "/changed"
-            case "model": first.model = "new-model"
-            default: first.apiKey = "new-key"
+        // Load Languages is explicit, so it always asks the provider again.
+        await store.refreshProviderLanguages(providerID: first.id)
+        #expect(calls == 3)
+        // A new key reaches the same worker, so the saved list still applies.
+        first.apiKey = "new-key"
+        store.settings.serviceProviders[0] = first
+        guard case .loaded = store.languageState(for: first.id) else {
+            Issue.record("A changed key must keep the saved list")
+            return
+        }
+        for change in ["endpoint", "model"] {
+            if change == "endpoint" {
+                first.endpoint += "/changed"
+            }
+            else {
+                first.model = "new-model"
             }
             store.settings.serviceProviders[0] = first
             #expect(store.languageState(for: first.id) == .idle)
-            await store.loadProviderLanguages(providerID: first.id)
         }
-        #expect(calls == 5)
-        let identity = try #require(store.languageIdentity(for: first.id))
-        store.providerLanguageFetchedAt[identity] = Date().addingTimeInterval(-301)
-        await store.loadProviderLanguages(providerID: first.id)
-        #expect(calls == 6)
+        #expect(calls == 3)
+    }
+
+    @Test func readingLanguagesNeverContactsTheProvider() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let selected = provider("RunPod")
+        let first = MeetingStore(dataDirectory: directory)
+        first.settings.serviceProviders = [selected]
+        var jobs = 0
+        first.providerLanguageLoader = { _ in
+            jobs += 1
+            return ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Worker")
+        }
+        // Without a saved list, pickers show a Load Languages action instead of starting a job.
+        #expect(first.languageState(for: selected.id) == .idle)
+        #expect(jobs == 0)
+        await first.refreshProviderLanguages(providerID: selected.id)
+        #expect(jobs == 1)
+
+        // A later launch reads the saved list; pickers and Transcribe start no job.
+        let second = MeetingStore(dataDirectory: directory)
+        second.settings.serviceProviders = [selected]
+        second.providerLanguageLoader = { _ in
+            Issue.record("A saved list must not start a language job")
+            throw ServiceError("Unexpected request")
+        }
+        guard case .loaded(let catalog, _) = second.languageState(for: selected.id) else {
+            Issue.record("Expected the saved list")
+            return
+        }
+        #expect(catalog.languages.map(\.code) == ["en"])
+        try await second.validateTranscriptionLanguage("en", for: selected)
+        #expect(ProviderLanguageLoadNote.text(for: selected)?.contains("RunPod charges apply") == true)
+    }
+
+    @Test func transcribeLoadsLanguagesOnceWhenNoneAreSaved() async throws {
+        let store = makeStore()
+        let selected = provider("Worker")
+        store.settings.serviceProviders = [selected]
+        var calls = 0
+        store.providerLanguageLoader = { _ in
+            calls += 1
+            return ProviderLanguageCatalog(languages: [.init(code: "en", name: "English")], source: "Worker")
+        }
+        try await store.validateTranscriptionLanguage("en", for: selected)
+        try await store.validateTranscriptionLanguage("en", for: selected)
+        #expect(calls == 1)
     }
 
     @Test func unsupportedLanguageStopsBeforeAudioOrJobSubmission() async throws {
@@ -82,9 +132,9 @@ import Testing
             calls += 1
             throw ServiceError("Worker unavailable")
         }
-        await store.loadProviderLanguages(providerID: selected.id)
+        await store.refreshProviderLanguages(providerID: selected.id)
         #expect(store.languageState(for: selected.id) == .failed("Worker unavailable"))
-        await store.loadProviderLanguages(providerID: selected.id)
+        await store.refreshProviderLanguages(providerID: selected.id)
         #expect(calls == 2)
     }
 

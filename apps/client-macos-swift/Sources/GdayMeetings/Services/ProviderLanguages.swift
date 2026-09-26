@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 struct ProviderLanguage: Codable, Equatable, Identifiable {
@@ -6,27 +5,28 @@ struct ProviderLanguage: Codable, Equatable, Identifiable {
     let name: String
     var id: String { code }
 }
-struct ProviderLanguageCatalog: Equatable {
+struct ProviderLanguageCatalog: Codable, Equatable {
     let languages: [ProviderLanguage]
     let source: String
 }
 enum ProviderLanguageState: Equatable {
+    /// No list has been loaded for the current configuration. Loading needs an explicit action.
     case idle
     case loading
-    case loaded(ProviderLanguageCatalog)
+    case loaded(ProviderLanguageCatalog, fetchedAt: Date)
     case failed(String)
 }
+/// Names the worker or website whose languages a list describes. Credentials and
+/// enablement are excluded: they do not change the list, and the fingerprint is
+/// stored on disk with the cached list.
 struct ProviderLanguageIdentity: Hashable {
     let providerID: UUID
     let fingerprint: String
-    init(provider: ServiceProvider, account: String = "") {
+    init(provider: ServiceProvider) {
         providerID = provider.id
-        let fields = [
-            provider.kind.rawValue, provider.endpoint, provider.model, provider.apiKey, account,
-            String(provider.isEnabled), String(provider.enabledCapabilities.contains(.transcription)),
-        ]
-        fingerprint = SHA256.hash(data: Data(fields.joined(separator: "\n").utf8))
-            .map { String(format: "%02x", $0) }.joined()
+        fingerprint = ProviderMetadataCache<ProviderLanguageCatalog>.fingerprint([
+            provider.kind.rawValue, provider.endpoint.trimmingCharacters(in: .whitespacesAndNewlines), provider.model,
+        ])
     }
 }
 protocol ProviderLanguageListing {

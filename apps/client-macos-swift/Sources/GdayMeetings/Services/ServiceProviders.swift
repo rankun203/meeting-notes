@@ -282,6 +282,8 @@ struct OpenAISummaryProvider: SummarizationProvider {
     static func check(_ provider: ServiceProvider, server suppliedServer: GdayServerService? = nil) async throws
         -> String
     {
+        // Disabled providers are never contacted, even by an explicit check.
+        guard provider.isEnabled else { throw ServiceError("Turn on Enable This Provider to check its connection.") }
         let server = suppliedServer ?? GdayServerService.shared
         let checkTrace = NetworkTrace(provider: provider.name, data: "connection check")
         switch provider.kind {
@@ -297,14 +299,10 @@ struct OpenAISummaryProvider: SummarizationProvider {
             }
             return "Healthy"
         case .openAICompatible:
-            let url = try ProviderEndpoint.base(provider.endpoint).appendingPathComponent("models")
-            let response = try await ServiceHTTP.json(
-                ProviderEndpoint.authorized(url, key: provider.apiKey), trace: checkTrace)
-            guard let models = response["data"] as? [[String: Any]] else {
-                throw ServiceError("This endpoint did not return a model list.")
-            }
+            let models = try ProviderModelList.parse(
+                await ServiceHTTP.json(ProviderModelList.request(provider), trace: checkTrace))
             guard !provider.model.isEmpty else { throw ServiceError("Enter a model name.") }
-            guard models.contains(where: { $0["id"] as? String == provider.model }) else {
+            guard models.contains(where: { $0.id == provider.model }) else {
                 throw ServiceError("The model is not in this provider's model list. Check the model name.")
             }
             return "Healthy"
