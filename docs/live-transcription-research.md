@@ -7,15 +7,56 @@ scope: research
 
 # Live transcription for Gday Meetings
 
-Research date: 2026-09-25, against repository baseline `9b988ca`. Architecture audit: 2026-09-26, against `169ce49`; repository facts below reflect that commit, and external provider research was not repeated. Scope: implementation research, primarily for the native Swift client; no feature implementation or recognition benchmark was performed. Recommendations and numerical acceptance targets below are engineering proposals, not measured results.
+Research date: 2026-09-25, against repository baseline `9b988ca`. Architecture audit: 2026-09-26, against `169ce49`; repository facts below reflect that commit, and external provider research was not repeated. Product decisions: 2026-09-26, recorded in the Recommendation and [Live Transcription providers and controls](#live-transcription-providers-and-controls). Scope: implementation research, primarily for the native Swift client; no feature implementation or recognition benchmark was performed. Recommendations and numerical acceptance targets below are engineering proposals, not measured results.
 
 ## Recommendation
 
-**Good English and Chinese transcription is a minimum product requirement.** Start with an Apple SpeechAnalyzer + SpeechTranscriber spike on supported macOS 26+ devices, but make the default-provider decision conditional on English, Mandarin, and English–Mandarin mixed-speech evaluation. Compare a multilingual WhisperKit model in the same initial evaluation, rather than deferring it solely to older-OS compatibility. Preserve macOS 14.2 as the app minimum and retain recording and post-recording transcription everywhere. Evaluate DictationTranscriber for unsupported hardware/locales on macOS 26+. Keep cloud streaming explicitly selectable.
+**Good English and Chinese transcription is a minimum product requirement.** Live Transcription is a provider capability. The first build ships one provider for it: **This Mac**, built in, using Apple SpeechAnalyzer and SpeechTranscriber on macOS 26 and later. Audio stays on the Mac and there is no account or usage charge, so This Mac runs automatically. The English, Mandarin, and English–Mandarin mixed-speech gates decide which language modes This Mac serves, not whether it ships. Preserve macOS 14.2 as the app minimum and keep recording and after-meeting transcription available everywhere.
 
-Use live text as a durable draft; offer the existing server/WhisperX pipeline afterward for alignment and diarization. Do not silently replace an edited transcript. This gives the native client a useful first release without simultaneously building a streaming server, shipping a model stack, and solving live speaker identification.
+Cloud services and a self-hosted streaming server support Live Transcription only when the user configures one and selects it. They are the likely path for mixed English + Chinese if Apple's single-locale sessions fail the bilingual gate. Optional local Whisper, enabled once in Settings, adds another on-device engine later.
+
+Live text is a durable draft. After-meeting transcription (RunPod or the Gday Meetings website) remains a separate capability for alignment and diarization; it creates a new transcript revision and does not overwrite edits. This gives the native client a useful first release without simultaneously building a streaming server, shipping a model stack, and solving live speaker identification.
 
 Apple explicitly identifies SpeechAnalyzer as technology used by Voice Memos and Notes, and describes SpeechTranscriber as an on-device model for long-form and distant speech. This establishes a strong architectural fit, but does not prove identical application behavior or accuracy on our meeting audio. [Apple WWDC25](https://developer.apple.com/videos/play/wwdc2025/277/)
+
+## Live Transcription providers and controls
+
+**Live Transcription** is a capability that providers declare, like **Transcription** and **Summaries** today (`ProviderCapability` and each provider kind's supported set in [ServiceProviders.swift](../apps/client-macos-swift/Sources/GdayMeetings/Services/ServiceProviders.swift)). Bold names and quoted messages below are proposed interface text, not released behavior.
+
+| Provider | Where audio is processed | When it runs |
+| --- | --- | --- |
+| **This Mac** (built in) | On the Mac, with Apple SpeechAnalyzer and SpeechTranscriber (macOS 26+) | Automatically, unless turned off in Settings or for the current meeting |
+| Local Whisper (optional) | On the Mac | After the user enables it once in Settings, which downloads the model; automatically afterwards |
+| Cloud service, such as OpenAI realtime transcription or Deepgram | Audio is streamed to the service | Only when the user configures the provider and selects it for Live Transcription |
+| Self-hosted streaming server | Audio is streamed to the user's server | Same as a cloud service |
+
+### This Mac
+
+- **Settings → Recording → Show Live Transcript** is on by default. A **Live Transcript** switch in the recording view turns live text off for the current meeting. New Recording gets no new controls.
+- Turning live text off stops recognition for that meeting, not only its display. Turning it back on resumes from that point.
+- When live text can't run, the recording view states the reason and recording continues. Causes include macOS earlier than 26, an unsupported language or device, and a model that is not installed yet. Example messages: "Live transcript requires macOS 26 or later." "Preparing the English speech model…" "Live transcript isn't available for this language on this Mac."
+
+### Model installation
+
+Apple's speech models are system-managed shared assets installed through `AssetInventory` (API names under [Apple SpeechAnalyzer](#apple-speechanalyzer-first-provider)). The app triggers installation itself; setup never needs more than one click.
+
+- **Automatic:** when a recording starts or a meeting's language changes and the model isn't installed, the app requests installation in the background. Recording never waits for it. Live text starts once the model is ready; audio before that point has no live text.
+- **From the This Mac provider panel:** each language shows **Installed**, **Download** (a button, then progress), or **Unavailable**. These map to the `installed`, `supported`, `downloading`, and `unsupported` statuses.
+- **Offline first use:** the recording view states that the model needs an internet connection to download, and recording continues. Example: "Connect to the internet to download the English speech model."
+- Do not show model sizes until they are measured on an installed system.
+
+### Configured providers
+
+A cloud or self-hosted provider is never automatic and never a fallback. The app uses one only when the user selects it for Live Transcription. When the active provider can't serve the meeting's language mode, such as mixed English and Chinese, the recording view states the limitation instead of producing poor text. Example: "This Mac can't transcribe mixed English and Chinese live. To use another provider, select it for Live Transcription in Settings."
+
+### Data privacy and logging
+
+A **Settings → Data Privacy** panel is being built separately. Live transcription adds rows to it:
+
+- **This Mac:** "Live transcription audio stays on this Mac."
+- **A cloud or self-hosted live provider:** "Live transcription audio is streamed to <provider>."
+
+Log every network transmission a live provider makes: destination, data type (such as PCM audio or a control message), and size or audio duration. Never log audio, transcript text, or credentials. These entries must appear in exported logs. Apple model downloads are performed by the system; log the installation request and its result (locale and status), not transfer sizes the app can't observe.
 
 ## What “like Voice Memos” means
 
@@ -65,7 +106,7 @@ Use independently reviewed reference transcripts from English-only, Mandarin-onl
 
 For mixed error rate, specify tokenization as individual Han characters plus English word tokens, and publish normalization rules. Report raw and script-normalized Chinese CER so character conversion does not conceal recognition errors. Score language slices separately, along with omitted spans, unintended translation, and latency around switch points. An overall average must not conceal poor Chinese results behind a larger English sample. Use the same recording and latency gates for all three primary modes.
 
-Select the default only after both language slices pass. If Apple passes monolingual modes but fails mixed speech, route mixed mode to a validated multilingual local engine or an explicitly selected cloud engine. If none passes, label the limitation and keep recording available; post-meeting repair does not satisfy the live bilingual requirement.
+This Mac serves a language mode only after that mode's slices pass. If Apple passes monolingual modes but fails mixed speech, This Mac states the limitation for mixed mode; mixed mode then needs enabled local Whisper that passes, or a configured provider the user selects. If none passes, label the limitation and keep recording available; post-meeting repair does not satisfy the live bilingual requirement.
 
 ## Existing integration points
 
@@ -81,10 +122,10 @@ Findings are from source inspection at `169ce49`, not from running the app.
 | [EchoDetector.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/EchoDetector.swift) | Correlates 20 ms level envelopes of microphone and system audio over 6 seconds at 0–400 ms lags, once per second. Runs only while both sources record and the microphone is unprocessed. Under the automatic policy, a report turns voice processing on; only the live switch turns it off again. | Makes leakage less likely to reach the microphone recognizer, without guaranteeing it. It stops evaluating once processing is on, so it does not measure residual echo. |
 | [RecordingAudioRoute.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/RecordingAudioRoute.swift) | Classifies the default output's terminal type: speakers turn automatic voice processing on; headphones and unknown routes leave it off. Lists input devices for the Microphone menu. | Describes the Mac's default output, not a calling app's own output choice. Expected leakage in a given recording remains uncertain. |
 | [MeetingStore.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingStore.swift) | Owns the recording lifecycle and saves the recording profile, including gaps and route changes, at start and stop. After a successful stop, transcribes only when **Automatically Transcribe Recordings** is on (off by default). `isBusy` and `statusMessage` drive a progress bar that is hidden while recording; failures appear as alerts through `errorMessage`. | Add a separate live-session lifecycle and finalization state. Do not use `isBusy` or `statusMessage` for live text: `isBusy` disables other actions and the bar is hidden during recording. Use alerts only for failures that need action. |
-| [MeetingIntelligence.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingIntelligence.swift) | Resolves the meeting's transcription provider (RunPod with Filedrop, or the Gday Meetings website) and the summary provider. The OpenAI-compatible provider handles summaries only. | Add a separate streaming capability and contract; no current provider streams. |
+| [MeetingIntelligence.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/MeetingIntelligence.swift) | Resolves the meeting's transcription provider (RunPod with Filedrop, or the Gday Meetings website) and the summary provider. The OpenAI-compatible provider handles summaries only. | Add a Live Transcription capability to `ProviderCapability` with its own streaming contract; This Mac is its first provider. No current provider streams. |
 | [ProviderTranscription.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/ProviderTranscription.swift) | Durable provider/upload/job checkpoints; language snapshot validated against the provider's catalog; per-track microphone/system source type; preserves transcript edits and retains conflicting results | Retain retry semantics; extend revision handling before combining with live drafts |
 | [Models.swift](../apps/client-macos-swift/Sources/GdayMeetings/Core/Models.swift) | Segment ID, start/end, speaker, text; one language code per meeting; no word timing, revisions, or finality | Extend storage deliberately rather than treating each partial as a new segment |
-| [RecordingWorkspaceView.swift](../apps/client-macos-swift/Sources/GdayMeetings/UI/RecordingWorkspaceView.swift) | New Recording setup (title, language, sources, Microphone menu) and the live view: reconnect status, source meters, and the **Voice Processing** switch with its notices | Add live text with synthetic preview events; keep recognition state separate from capture reconnect status |
+| [RecordingWorkspaceView.swift](../apps/client-macos-swift/Sources/GdayMeetings/UI/RecordingWorkspaceView.swift) | New Recording setup (title, language, sources, Microphone menu) and the live view: reconnect status, source meters, and the **Voice Processing** switch with its notices | Add live text and the **Live Transcript** switch to the live view only, with synthetic preview events; keep recognition state separate from capture reconnect status |
 | [Worker](../apps/worker-audio-extraction/README.md) | File jobs; WhisperX/faster-whisper, alignment, pyannote diarization | Suitable for post-processing; no current continuous-audio transport |
 
 The current Swift system capture uses Core Audio taps, not ScreenCaptureKit. Replacing capture is unnecessary for this feature. The Rust client can later reuse the event/storage contract, but needs its own provider integration; Swift framework integration is not automatically portable.
@@ -95,20 +136,20 @@ Relative effort includes packaging, lifecycle, and recovery, not just calling an
 
 | Approach | Compatibility and execution | Main benefit | Main cost or limitation | Decision |
 | --- | --- | --- | --- | --- |
-| SpeechAnalyzer + SpeechTranscriber | macOS 26+; runtime device/locale checks; on-device | Native streaming and system-managed assets | Newer OS; must test two simultaneous sources and bilingual quality | First spike; conditional default |
-| DictationTranscriber | macOS 26+; older dictation models on-device | Additional hardware/locale coverage within the new API | Different quality profile; does not backport to macOS 14/15 | Capability fallback to evaluate |
+| SpeechAnalyzer + SpeechTranscriber | macOS 26+; runtime device/locale checks; on-device | Native streaming and system-managed assets | Newer OS; must test two simultaneous sources and bilingual quality | This Mac provider; first build |
+| DictationTranscriber | macOS 26+; older dictation models on-device | Additional hardware/locale coverage within the new API | Different quality profile; does not backport to macOS 14/15 | Evaluate as a This Mac fallback |
 | SFSpeechRecognizer | Available on our older OS baseline; local capability varies | Small native prototype | Short-session guidance, authorization, possible server dependence | Avoid as the primary meeting engine |
-| WhisperKit | Swift/Core ML; Apple-silicon focus | Offline model choice and older-OS coverage | Model acquisition, warmup, resource tuning, evolving package | Preferred optional local alternative |
+| WhisperKit | Swift/Core ML; Apple-silicon focus | Offline model choice and older-OS coverage | Model acquisition, warmup, resource tuning, evolving package | Optional local Whisper, enabled once in Settings |
 | whisper.cpp | C/C++; CPU and accelerated backends | Broad portability, including a potential shared Rust backend | Native build/bindings and streaming policy ownership | Consider if Intel/cross-platform becomes a priority |
-| Hosted streaming ASR | Audio leaves the device; network required | Low local compute; provider-specific language/timing features | Usage charges, credentials, reconnects, service limits | Explicit opt-in alternative |
-| Self-hosted streaming ASR | New persistent streaming service | Infrastructure/data control | Scheduling, warm models, transport, capacity and operations | Later if justified by deployment needs |
+| Hosted streaming ASR | Audio leaves the device; network required | Low local compute; provider-specific language/timing features | Usage charges, credentials, reconnects, service limits | Configured provider; used only when selected |
+| Self-hosted streaming ASR | New persistent streaming service | Infrastructure/data control | Scheduling, warm models, transport, capacity and operations | Configured provider; later if justified by deployment needs |
 | Repeated short file jobs | Reuses much of current batch pipeline | Quick demonstration | Boundary errors, repeated compute, queue latency | Prototype only |
 
-### Apple SpeechAnalyzer: recommended first path
+### Apple SpeechAnalyzer: first provider
 
 Use `SpeechTranscriber.isAvailable` and `supportedLocale(equivalentTo:)`; do not assume that OS version, CPU architecture, or a manually constructed locale string guarantees support. `DictationTranscriber` uses on-device dictation models and does not provide locales that the older recognizer supports only over a network. Both modern transcribers require macOS 26. [SpeechTranscriber](https://developer.apple.com/documentation/speech/speechtranscriber), [DictationTranscriber](https://developer.apple.com/documentation/speech/dictationtranscriber)
 
-Model readiness is a product state. `AssetInventory` manages shared downloads and a bounded set of locale reservations. Obtain an installation request for the configured modules, download/install when needed, and handle unavailable storage, cancellation, offline first use, and previously removed assets. Release obsolete locale reservations when preferences change, rather than repeatedly churning them per audio buffer. [AssetInventory](https://developer.apple.com/documentation/speech/assetinventory)
+Model readiness is a product state. `AssetInventory` manages shared, system-managed downloads and a bounded set of locale reservations. `status(forModules:)` returns `unsupported`, `supported` (downloadable), `downloading`, or `installed`. `assetInstallationRequest(supporting:)` returns an optional `AssetInstallationRequest`, whose `downloadAndInstall()` installs the assets and whose `progress` drives the panel's progress display. `reserve(locale:)`, `release(reservedLocale:)`, `reservedLocales`, and `maximumReservedLocales` manage reservations. Handle unavailable storage, cancellation, offline first use, and previously removed assets. Release obsolete locale reservations when preferences change, rather than repeatedly churning them per audio buffer. These names were checked against the macOS 27 SDK's Speech module interface. [AssetInventory](https://developer.apple.com/documentation/speech/assetinventory)
 
 The analyzer accepts asynchronous PCM input; transcription results arrive separately. Choose a compatible format with `bestAvailableAudioFormat`, convert with a persistent converter, and finish analysis explicitly. Ending an input stream alone does not generally finish the analyzer. One analyzer consumes one input sequence; simultaneous analysis is resource-limited. [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer)
 
@@ -116,7 +157,7 @@ Enable volatile results and audio time-range attributes, or the corresponding ti
 
 Proposed integration sequence:
 
-1. Resolve capabilities and model readiness before the session where possible. Offer recording even if live text cannot start.
+1. At recording start, check locale support and model status. If the model is missing, request installation in the background and start the session once it is installed. Recording never waits for this step.
 2. Create one provider session per enabled source, beginning with a one-source spike, then verify two analyzers under load. Do not override resource limits to force the feature on.
 3. Copy buffers into bounded owned storage. On a worker task, convert to the analyzer format and assign input times from the recording epoch.
 4. Consume provider results into the reducer described below. UI work runs on the main actor; inference does not.
@@ -146,7 +187,7 @@ OpenAI's current guide recommends a transcription session with `gpt-live-transcr
 
 Deepgram offers interim text plus distinct segment-final and speech-end indicators. These represent different boundaries and should map separately into our provider events. Its multichannel API can transcribe channels independently; construct correctly synchronized source channels rather than assuming a stereo system mix already means two speakers. [Endpointing](https://developers.deepgram.com/docs/understand-endpointing-interim-results), [Multichannel](https://developers.deepgram.com/docs/multichannel)
 
-Proposed cloud design: start with one adapter, explicit transmission consent/settings, and either a user's Keychain-held credential or a server-brokered short-lived credential. Never embed an application-wide secret in the app. The server must check meeting ownership and usage limits before brokering or proxying. Use bounded reconnect/backoff, sequence numbers, a confirmed-audio watermark, and gap markers. Replaying uncertain audio can duplicate billing and results; reconcile by source/session/time rather than text alone. Provider retention and residency settings must be checked for the chosen account before describing this mode as private.
+Proposed cloud design: start with one adapter, used only when the user selects it for Live Transcription. Add its Data Privacy row and transmission logging (see [Data privacy and logging](#data-privacy-and-logging)). Use either a user's Keychain-held credential or a server-brokered short-lived credential. Never embed an application-wide secret in the app. The server must check meeting ownership and usage limits before brokering or proxying. Use bounded reconnect/backoff, sequence numbers, a confirmed-audio watermark, and gap markers. Replaying uncertain audio can duplicate billing and results; reconcile by source/session/time rather than text alone. Provider retention and residency settings must be checked for the chosen account before describing this mode as private.
 
 The app's OpenAI-compatible provider handles summaries only. File transcription with a streamed response and ongoing audio ingestion are different protocols; a file endpoint is not a streaming foundation. [File transcription guide](https://developers.openai.com/api/docs/guides/speech-to-text)
 
@@ -201,15 +242,24 @@ The current batch completion code assigns `meeting.transcript` wholesale. Before
 
 | Stage | Deliverable | Exit evidence |
 | --- | --- | --- |
-| 1. Capability and bilingual spike | Apple model readiness, one PCM source, provisional/final reducer, timestamp export; multilingual WhisperKit comparison | English, Mandarin, and mixed-speech quality/latency gates; offline after provisioning; final words preserved at stop |
+The first build is stages 1–3 and ships This Mac as the only Live Transcription provider.
+
+| Stage | Deliverable | Exit evidence |
+| --- | --- | --- |
+| 1. This Mac spike | Live Transcription capability, automatic model installation, one PCM source, provisional/final reducer, timestamp export | English, Mandarin, and mixed-speech quality/latency results that decide which modes This Mac serves; offline after installation; final words preserved at stop |
 | 2. Capture integration | Per-source fan-out in AudioCapture, two sessions, bounded queues, discontinuities for source rebuilds | 60–120 minute capture without ASR-induced recording loss; live text continues through route changes and Voice Processing switches; synchronization and resource measurements |
-| 3. Product behavior | Live workspace, error states, checkpoints, recovery, transcript revision policy | Crash/stop/error scenarios, user edits preserved, synthetic UI Preview validated |
-| 4. Compatibility | macOS 14.2/15 feature gating, DictationTranscriber evaluation, optional WhisperKit spike | Actual oldest-OS launch and architecture matrix; no silently remote fallback |
-| 5. Optional remote mode | One cloud adapter or a separately justified self-hosted service | Account capability, measured latency/cost, reconnect/duplicate tests |
+| 3. Product behavior | Live workspace and **Live Transcript** switch, **Show Live Transcript** setting, This Mac provider panel with per-language model status, unavailable and preparing states, Data Privacy row, checkpoints, recovery, transcript revision policy, macOS 14.2/15 feature gating | Crash/stop/error scenarios, user edits preserved, recording unaffected by missing or downloading models, synthetic UI Preview validated, actual oldest-OS launch and architecture matrix |
+| 4. More on-device coverage | DictationTranscriber evaluation; optional local Whisper, enabled once in Settings | Same quality gates per language mode; no audio leaves the Mac |
+| 5. Configured live providers | One cloud adapter or a separately justified self-hosted service, with Data Privacy rows and transmission logs | Account capability, measured latency/cost, reconnect/duplicate tests, logs contain no audio or text |
 
-Planning estimate for one maintainer: 2–4 days for the Apple spike, then roughly 1–2 weeks for capture/lifecycle/storage/UI hardening, with compatibility or a second provider adding further work. These are rough engineering estimates; re-estimate after the two-source and stop/finalization experiments. Do not commit to all providers in the initial release.
+Planning estimate for one maintainer: 2–4 days for the Apple spike, then roughly 1–2 weeks for capture/lifecycle/storage/UI hardening, with stages 4 and 5 adding further work. These are rough engineering estimates; re-estimate after the two-source and stop/finalization experiments.
 
-Suggested routing: filter providers by the selected language mode and validated quality first, then device/OS readiness. Prefer SpeechTranscriber where it passes those gates; otherwise evaluate local DictationTranscriber, an installed multilingual model, or an explicitly enabled cloud provider. With none qualified, recording and batch transcription remain available. Never interpret “automatic” as permission to upload audio.
+Routing:
+
+1. Use the provider selected for Live Transcription in Settings. This Mac is the default.
+2. Use a cloud or self-hosted provider only when the user selects it; never fall back to one automatically.
+3. On the Mac, use an engine that passes the gates for the meeting's language mode: SpeechTranscriber, or local Whisper once the user enables it.
+4. With none qualified, the recording view states the limitation; recording and after-meeting transcription remain available.
 
 ## Evaluation and operating costs
 
@@ -240,3 +290,8 @@ Apple avoids a separately contracted metered ASR service, but local inference st
 - Check the chosen release's SDK availability and compiler diagnostics during implementation. This documentation change generated no build diagnostics; it does not certify the application warning-free.
 - The current Swift segment schema cannot preserve word timings or alternative transcript revisions. Address that before claiming full Voice Memos-like playback highlighting or safe post-processing.
 - The most consequential first experiment is two-source, long-duration Apple recognition on the lowest supported device for that mode. If it fails the latency/resource gate, prefer an explicit one-source mode or another provider instead of weakening recording reliability.
+- Whether Apple's single-locale sessions pass the mixed English + Chinese gate is unknown. The answer decides whether mixed mode needs a configured provider.
+- Apple speech model sizes are unmeasured; measure them before showing sizes or storage warnings.
+- Locale reservations are bounded by `maximumReservedLocales`. Define which locales to reserve and release when a meeting's language changes or a language is downloaded from the This Mac panel.
+- Decide whether local Whisper appears as its own provider or as an option of This Mac, and which engine wins when both SpeechTranscriber and Whisper pass for a mode.
+- Align Data Privacy row wording and the transmission log format with the separately built Data Privacy panel.
