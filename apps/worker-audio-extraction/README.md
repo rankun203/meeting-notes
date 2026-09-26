@@ -225,7 +225,7 @@ docker buildx build --platform linux/amd64 \
 ```
 
 To cache gated pyannote models during a manual build, export `HF_TOKEN` in your
-shell and add `--secret id=HF_TOKEN,env=HF_TOKEN` to the build command. Otherwise,
+shell and add `--build-arg HF_TOKEN` to the build command. Otherwise,
 set `HF_TOKEN` in the worker runtime environment to download them on first use.
 The GPU Dockerfile selects uv's `cu128` PyTorch backend for both dependency
 resolution and installation, matching the CUDA wheels installed in the base image.
@@ -382,7 +382,7 @@ Each processing step loads different models and consumes VRAM independently. The
 
 ### Troubleshooting
 
-- **"Pyannote model pre-cache skipped"** at build time: the build secret was absent or model caching failed. Set `HF_TOKEN` at runtime so models can download on the first diarization request.
+- **"Pyannote model pre-cache skipped"** at build time: the build argument was absent or model caching failed. Set `HF_TOKEN` at runtime so models can download on the first diarization request.
 - **"Access denied to pyannote/..."**: Accept the model licenses on HuggingFace (see [gated models](#huggingface-gated-models) above).
 - **OOM / CUDA out of memory**: Lower `WHISPER_BATCH_SIZE` (e.g. `-e WHISPER_BATCH_SIZE=8`).
 - **"test_input.json not found, exiting"**: You started the RunPod transport outside RunPod. Set `WORKER_MODE=http` and `WORKER_API_TOKEN` for the local server.

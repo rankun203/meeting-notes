@@ -13,19 +13,26 @@ constraint through PyPI. Docker also warned about the `HF_TOKEN` build argument.
 ## Implemented solution
 
 Set `--torch-backend=cu128` for both uv dependency compilation and installation in
-`Dockerfile.runpod`. Preserve the base image's exact PyTorch constraints. Replace
-the token argument with an optional BuildKit secret and update the manual build
-instructions to build and push GHCR tags in one command.
+`Dockerfile.runpod`. Preserve the base image's exact PyTorch constraints. Update
+the manual build instructions to build and push GHCR tags in one command.
+Initially replaced the token argument with a BuildKit secret, then restored
+`ARG HF_TOKEN` at the user's request. Manual builds use `--build-arg HF_TOKEN`
+with the token exported in the shell.
 
 ## Reasoning
 
 CUDA-specific wheels require the matching PyTorch index. Selecting the backend
 explicitly works without a GPU during the build and leaves CPU builds unchanged.
-Build secrets expose the token only to the model download step.
+The restored build argument preserves the user's requested build interface.
 References: [uv PyTorch integration](https://docs.astral.sh/uv/guides/integration/pytorch/)
 and [Docker build secrets](https://docs.docker.com/build/building/secrets/).
 
 ## Technical debt
+
+The requested `HF_TOKEN` build argument retains Docker's
+`SecretsUsedInArgOrEnv` warning and may expose the token through build metadata.
+It is retained for the requested build interface; a future migration to a
+BuildKit secret would remove this exposure and warning.
 
 The existing GPU build resolves dependencies at build time rather than from a
 GPU-specific lockfile, so later builds may select different transitive versions.

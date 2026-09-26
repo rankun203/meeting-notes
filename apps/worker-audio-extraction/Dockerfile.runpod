@@ -56,8 +56,9 @@ RUN python -c "import whisperx; whisperx.load_align_model('zh', 'cpu')" || true
 #    RunPod's GitHub integration does NOT pass the HF token at build time.
 #    These gated models download on first diarization request at runtime
 #    using the HF_TOKEN env var set in RunPod endpoint settings.
-#    For manual builds, pass --secret id=HF_TOKEN,env=HF_TOKEN to pre-cache.
-RUN --mount=type=secret,id=HF_TOKEN,env=HF_TOKEN python <<'PYEOF' || echo 'Pyannote model pre-cache skipped — will download at runtime'
+#    For manual builds, export HF_TOKEN and pass --build-arg HF_TOKEN to pre-cache.
+ARG HF_TOKEN=""
+RUN python <<'PYEOF' || echo 'Pyannote model pre-cache skipped — will download at runtime'
 import os, sys
 token = os.environ.get('HF_TOKEN') or None
 if not token:
