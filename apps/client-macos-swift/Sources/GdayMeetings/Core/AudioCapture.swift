@@ -37,7 +37,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             microphoneVoiceProcessing: voiceProcessing,
             tracks: [microphoneWriter?.profile, systemProfile].compactMap { $0 })
     }
-    func start(directory: URL, microphoneEnabled: Bool, systemEnabled: Bool, voiceProcessingEnabled: Bool = false)
+    func start(directory: URL, microphoneEnabled: Bool, systemEnabled: Bool, voiceProcessingEnabled: Bool? = nil)
         async throws -> [String]
     {
         guard microphoneEnabled || systemEnabled else {
@@ -52,6 +52,9 @@ final class AudioCapture: NSObject, @unchecked Sendable {
             let cancellationGeneration = await RecordingPermissions.currentCancellationGeneration
             try await RecordingPermissions.request(microphone: microphoneEnabled)
             try await RecordingPermissions.checkCancellation(since: cancellationGeneration)
+            let useVoiceProcessing =
+                microphoneEnabled
+                && (voiceProcessingEnabled ?? RecordingAudioRoute.defaultVoiceProcessing())
             if systemEnabled {
                 let capture = SystemAudioCapture(queue: queue)
                 systemCapture = capture
@@ -81,7 +84,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                 // Enable only while stopped. Both hardware I/O nodes participate; never feed
                 // captured system audio or microphone monitoring back to the speakers.
                 // https://developer.apple.com/videos/play/wwdc2019/510/
-                if voiceProcessingEnabled {
+                if useVoiceProcessing {
                     do { try input.setVoiceProcessingEnabled(true) }
                     catch {
                         let cause = error as NSError
@@ -92,7 +95,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                     voiceProcessing = input.isVoiceProcessingEnabled
                     guard voiceProcessing else {
                         throw MeetingError.message(
-                            "Apple voice processing is unavailable on this audio route. Disable it in Settings or choose another device."
+                            "Apple voice processing is unavailable on this audio route. Turn off Microphone Voice Processing in New Recording or choose another device."
                         )
                     }
                     // Other applications count as other audio. Minimum reduces but does not
@@ -170,7 +173,7 @@ final class AudioCapture: NSObject, @unchecked Sendable {
                     let negotiatedOutput = engine.outputNode.inputFormat(forBus: 0)
                     guard negotiatedInput == format, negotiatedOutput == format else {
                         throw MeetingError.message(
-                            "Apple voice processing did not accept the mono client format. Input: \(negotiatedInput); output: \(negotiatedOutput). The unprocessed recording option remains available."
+                            "Apple voice processing did not accept the mono client format. Input: \(negotiatedInput); output: \(negotiatedOutput). Turn off Microphone Voice Processing in New Recording and try again."
                         )
                     }
                 }

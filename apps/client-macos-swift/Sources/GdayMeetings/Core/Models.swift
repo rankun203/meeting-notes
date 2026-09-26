@@ -74,13 +74,12 @@ struct AppSettings: Codable, Equatable {
     var autoTranscribe = false
     var captureSystemAudio = true
     var captureMicrophone = true
-    var microphoneVoiceProcessing = false
     var recordingFormat: RecordingFormat = .opus
     var summarizationPrompt =
         "Summarize this meeting with decisions, key points, and action items. Do not invent information."
     enum CodingKeys: String, CodingKey {
         case llmBaseURL, llmModel, transcriptionBaseURL, transcriptionModel, autoTranscribe, captureSystemAudio,
-            captureMicrophone, microphoneVoiceProcessing, recordingFormat, summarizationPrompt
+            captureMicrophone, recordingFormat, summarizationPrompt
     }
 
 }
@@ -189,7 +188,6 @@ extension AppSettings {
         autoTranscribe = try values.decodeIfPresent(Bool.self, forKey: .autoTranscribe) ?? false
         captureSystemAudio = try values.decodeIfPresent(Bool.self, forKey: .captureSystemAudio) ?? true
         captureMicrophone = try values.decodeIfPresent(Bool.self, forKey: .captureMicrophone) ?? true
-        microphoneVoiceProcessing = try values.decodeIfPresent(Bool.self, forKey: .microphoneVoiceProcessing) ?? false
         recordingFormat = try values.decodeIfPresent(RecordingFormat.self, forKey: .recordingFormat) ?? .opus
         summarizationPrompt =
             try values.decodeIfPresent(String.self, forKey: .summarizationPrompt)

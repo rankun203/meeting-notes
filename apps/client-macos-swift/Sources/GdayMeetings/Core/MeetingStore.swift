@@ -219,7 +219,7 @@ final class MeetingStore: ObservableObject {
     }
     func audioURL(for meeting: Meeting) -> URL? { audioURLs(for: meeting).first }
 
-    func startRecording(title: String? = nil) async {
+    func startRecording(title: String? = nil, voiceProcessingEnabled: Bool? = nil) async {
         guard !UIPreview.enabled else {
             errorMessage = "Recording is disabled in UI Preview."
             return
@@ -261,7 +261,7 @@ final class MeetingStore: ObservableObject {
             }
             let files = try await capture.start(
                 directory: directory(for: meeting.id), microphoneEnabled: settings.captureMicrophone,
-                systemEnabled: settings.captureSystemAudio, voiceProcessingEnabled: settings.microphoneVoiceProcessing)
+                systemEnabled: settings.captureSystemAudio, voiceProcessingEnabled: voiceProcessingEnabled)
             var recorded = meeting
             recorded.audioFiles = files
             recorded.recordingProfile = capture.profile
@@ -275,7 +275,7 @@ final class MeetingStore: ObservableObject {
             recordingStartedAt = Date()
             captureHealth = [
                 settings.captureMicrophone
-                    ? (settings.microphoneVoiceProcessing
+                    ? (capture.profile.microphoneVoiceProcessing
                         ? "Microphone: Apple voice processing" : "Microphone: unprocessed") : nil,
                 settings.captureSystemAudio ? "System audio: separate track" : nil,
             ].compactMap { $0 }.joined(separator: " · ")

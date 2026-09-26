@@ -11,6 +11,7 @@ struct RecordingSetupView: View {
     @ViewState private var microphone = true
     @ViewState private var systemAudio = true
     @ViewState private var voiceProcessing = false
+    @ViewState private var voiceProcessingOverride: Bool?
     @ViewState private var format = RecordingFormat.opus
     @ViewState private var showOptions = false
     @ViewState private var startupError: String?
@@ -46,7 +47,8 @@ struct RecordingSetupView: View {
         .onAppear {
             microphone = store.settings.captureMicrophone
             systemAudio = store.settings.captureSystemAudio
-            voiceProcessing = store.settings.microphoneVoiceProcessing
+            voiceProcessing = RecordingAudioRoute.defaultVoiceProcessing()
+            voiceProcessingOverride = nil
             format = store.settings.recordingFormat
         }
     }
@@ -88,9 +90,18 @@ struct RecordingSetupView: View {
             }
             DisclosureGroup("Recording options", isExpanded: $showOptions) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Microphone voice processing", isOn: $voiceProcessing).disabled(!microphone)
+                    Toggle(
+                        "Microphone Voice Processing",
+                        isOn: Binding(
+                            get: { voiceProcessing },
+                            set: {
+                                voiceProcessing = $0
+                                voiceProcessingOverride = $0
+                            }
+                        )
+                    ).disabled(!microphone)
                     Text(
-                        "Apple speech processing can reduce background noise and may change other apps’ volume. Headphones help prevent speaker audio entering your microphone."
+                        "Enabled by default when speakers are detected. Reduces echo and background noise, and may lower other apps’ volume. Applies to this recording only."
                     )
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Picker("Save audio as", selection: $format) {
@@ -142,7 +153,6 @@ struct RecordingSetupView: View {
                     let previousError = store.errorMessage
                     store.settings.captureMicrophone = microphone
                     store.settings.captureSystemAudio = systemAudio
-                    store.settings.microphoneVoiceProcessing = voiceProcessing
                     store.settings.recordingFormat = format
                     store.saveSettings()
                     if let error = store.errorMessage, error != previousError {
@@ -151,7 +161,7 @@ struct RecordingSetupView: View {
                         return
                     }
                     Task {
-                        await store.startRecording(title: title)
+                        await store.startRecording(title: title, voiceProcessingEnabled: voiceProcessingOverride)
                         if let id = store.recordingID {
                             onStarted(id)
                             dismiss()

@@ -33,20 +33,6 @@ struct SettingsView: View {
                         "When needed, macOS requests access to the audio sources you enable when recording starts. System Audio records other apps’ audio without sharing or recording your screen."
                     ).font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Microphone Processing") {
-                    // Apple voice processing provides noise suppression and gain control;
-                    // its ducking can affect unrelated apps, so this is an explicit choice.
-                    // https://developer.apple.com/videos/play/wwdc2023/10235/
-                    Toggle("Microphone voice processing", isOn: setting(\.microphoneVoiceProcessing))
-                        .disabled(!store.settings.captureMicrophone || audioSettingsLocked)
-                    Text(
-                        "Apple noise suppression and gain control. May reduce other apps’ volume; echo removal depends on the audio route. Headphones give the most reliable separation."
-                    ).font(.caption).foregroundStyle(.secondary)
-                    if audioSettingsLocked {
-                        Text("Audio source and processing changes are available after recording stops.").font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
                 Section("Recording Format") {
                     Picker("Save audio as", selection: setting(\.recordingFormat)) {
                         Text("Opus (Recommended)").tag(RecordingFormat.opus)
