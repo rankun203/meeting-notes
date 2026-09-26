@@ -78,18 +78,19 @@ struct RecordingSetupView: View {
             MeetingLanguagePicker(selection: $language)
                 .disabled(store.isStartingRecording)
             VStack(spacing: 0) {
-                sourceToggle(
-                    "Microphone", subtitle: "Record your voice and nearby sounds.", symbol: "mic.fill",
-                    value: $microphone
+                RecordingSourceRow(
+                    name: "Microphone", subtitle: "Record your voice and nearby sounds.", symbol: "mic.fill",
+                    isOn: $microphone
                 ) {
                     microphoneDevicePicker
                 }
                 Divider().padding(.leading, 44)
-                sourceToggle(
-                    "System Audio", subtitle: "Record sound from other apps.", symbol: "speaker.wave.2.fill",
-                    value: $systemAudio)
+                RecordingSourceRow(
+                    name: "System Audio", subtitle: "Record sound from other apps.", symbol: "speaker.wave.2.fill",
+                    isOn: $systemAudio)
             }
             .padding(.horizontal, 14).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            .disabled(store.isStartingRecording)
             if !microphone && !systemAudio {
                 Label("Choose at least one audio source.", systemImage: "info.circle")
                     .font(.callout).foregroundStyle(.secondary)
@@ -193,7 +194,7 @@ struct RecordingSetupView: View {
                 Text(item.title).tag(item.uid)
             }
         }
-        .labelsHidden().pickerStyle(.menu).controlSize(.small).fixedSize()
+        .recordingSourceDetailMenu()
         .disabled(!microphone)
     }
 
@@ -216,25 +217,46 @@ struct RecordingSetupView: View {
         }
         return items
     }
+}
 
-    private func sourceToggle(_ name: String, subtitle: String, symbol: String, value: Binding<Bool>) -> some View {
-        sourceToggle(name, subtitle: subtitle, symbol: symbol, value: value) { EmptyView() }
-    }
+/// One audio source in New Recording: symbol, name, explanation, optional detail
+/// control (such as the microphone menu), and an on/off switch.
+struct RecordingSourceRow<Detail: View>: View {
+    var name: String
+    var subtitle: String
+    var symbol: String
+    @Binding var isOn: Bool
+    @ViewBuilder var detail: Detail
 
-    private func sourceToggle<Detail: View>(
-        _ name: String, subtitle: String, symbol: String, value: Binding<Bool>, @ViewBuilder detail: () -> Detail
-    ) -> some View {
+    var body: some View {
         HStack(spacing: 13) {
-            Image(systemName: symbol).font(.title3).foregroundStyle(value.wrappedValue ? Color.accentColor : .secondary)
+            Image(systemName: symbol).font(.title3).foregroundStyle(isOn ? Color.accentColor : .secondary)
                 .frame(width: 24)
+            // The text column takes all width left of the switch. With a Spacer
+            // beside it, the stack split that width and wrapped the explanation.
             VStack(alignment: .leading, spacing: 3) {
                 Text(name).fontWeight(.medium)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                detail()
+                detail
             }
-            Spacer()
-            Toggle(name, isOn: value).labelsHidden().toggleStyle(.switch)
-        }.padding(.vertical, 14).disabled(store.isStartingRecording)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle(name, isOn: $isOn).labelsHidden().toggleStyle(.switch)
+        }.padding(.vertical, 14)
+    }
+}
+
+extension RecordingSourceRow where Detail == EmptyView {
+    init(name: String, subtitle: String, symbol: String, isOn: Binding<Bool>) {
+        self.init(name: name, subtitle: subtitle, symbol: symbol, isOn: isOn) { EmptyView() }
+    }
+}
+
+extension View {
+    /// Pop-up menu styling for a control shown under a source row's explanation.
+    /// A fixed maximum width keeps the row stable when the selected title changes;
+    /// long device names truncate in the button but remain complete in the menu.
+    func recordingSourceDetailMenu() -> some View {
+        labelsHidden().pickerStyle(.menu).controlSize(.small).frame(maxWidth: 280, alignment: .leading)
     }
 }
 
